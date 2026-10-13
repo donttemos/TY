@@ -1,0 +1,142 @@
+# @file CI 主流水线：构建 + 单测（SQLite）+ 三库集成矩阵 + 静态检查
+# @description 任一数据库失败即阻断合并（PRD-002 FR-07）。SQLite 矩阵每次 PR 跑；
+#   MySQL/PG 矩阵用 service 容器并行。集成测试经 TEST_DATABASE_URL 切库（同一套用例）。
+# @author donttemo
+# @created 2026-10-12
+# @modified 2026-10-13 donttemo 纳入 @fw/auth（构建 + 覆盖率门禁）并新增 M3 鉴权端到端冒烟步骤
+# @modified 2026-10-13 donttemo 纳入 @fw/cache（构建 + 覆盖率门禁）并新增 M4 缓存层端到端冒烟步骤
+# @module ci
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  # Prisma 遥测关闭，减少 CI 噪音
+  PRISMA_TELEMETRY_DISABLED: '1'
+
+jobs:
+  # ---------- 基础门禁：构建 + 单测（SQLite）+ 静态检查 ----------
+  base:
+    name: 构建 / 单测(SQLite) / 静态检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # 构建（含 prisma generate——切换 provider 后必须重新生成，防缓存旧 client 假绿）
+      - name: 构建全部包
+        run: |
+          pnpm --filter @fw/db exec prisma generate --schema prisma/test-schema.prisma
+          for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli; do
+            pnpm --filter $pkg run build
+          done
+          pnpm --filter example-api run build
+
+      # 单测（SQLite 内存库，秒级反馈；turbo 管道在 Windows 沙箱不可用，CI 用 Linux 可恢复）
+      - name: 单元测试（SQLite）
+        run: |
+          for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache; do
+            pnpm --filter $pkg run test:coverage
+          done
+
+      # M3 端到端冒烟：迁移 + 种子 + 起服务 + TC-AUTH 断言（PRD-003 AC）
+      - name: M3 鉴权端到端冒烟（SQLite）
+        working-directory: apps/example-api
+        run: |
+          cp .env.example .env
+          pnpm exec prisma migrate deploy --schema prisma/schema.prisma
+          pnpm exec tsx prisma/seed.ts
+          node dist/main.js & echo $! > /tmp/fw-api.pid
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3000/health > /dev/null && break
+            sleep 1
+          done
+          node scripts/smoke-auth.mjs
+          kill "$(cat /tmp/fw-api.pid)"
+
+      # M4 缓存层端到端冒烟：memory 驱动全能力 + redis 降级 + 配置守卫（PRD-004 AC）
+      # 脚本自带服务生命周期（端口 3100），复用上一步已迁移/播种的 SQLite 库
+      - name: M4 缓存层端到端冒烟（SQLite）
+        working-directory: apps/example-api
+        run: node scripts/smoke-cache.mjs
+
+      # 静态检查：文件头门禁 + 原生 SQL 白名单门禁
+      - name: 文件头门禁
+        run: pnpm run check:headers
+      - name: 方言白名单门禁（TC-ORM-005）
+        run: node scripts/check-no-raw-sql.mjs
+
+  # ---------- 三库集成矩阵（TC-ORM-001：同一套用例三库各跑一遍） ----------
+  integration:
+    name: 集成测试 / ${{ matrix.db }}
+    runs-on: ubuntu-latest
+    needs: base
+    strategy:
+      fail-fast: false # 三库独立出报告，不互相掩盖
+      matrix:
+        include:
+          - db: sqlite
+            url: 'file:./prisma/test-int.db'
+          - db: mysql
+            url: 'mysql://root:root@127.0.0.1:3306/fw_test'
+          - db: postgres
+            url: 'postgresql://postgres:postgres@127.0.0.1:5432/fw_test'
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: fw_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fw_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -h 127.0.0.1 -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # 按矩阵生成对应 provider 的 client 与迁移（切换 provider 必须重新 generate，ADR-0002 约束 1）
+      - name: 生成 ${{ matrix.db }} client
+        run: |
+          cd packages/db
+          # schema provider 与 url 按矩阵替换（业务项目改 .env 即可，此处为框架测试 schema）
+          sed -i "s|provider = \"sqlite\"|provider = \"${{ matrix.db == 'postgres' && 'postgresql' || matrix.db }}\"|" prisma/test-schema.prisma
+          sed -i "s|url      = env(\"TEST_DATABASE_URL\")|url      = env(\"TEST_DATABASE_URL\")|" prisma/test-schema.prisma
+          pnpm exec prisma migrate deploy --schema prisma/test-schema.prisma
+          pnpm exec prisma generate --schema prisma/test-schema.prisma
+
+      - name: 集成测试 / ${{ matrix.db }}
+        env:
+          TEST_DATABASE_URL: ${{ matrix.url }}
+        run: pnpm --filter @fw/db exec vitest run src/__tests__/prisma-repository.integration.test.ts

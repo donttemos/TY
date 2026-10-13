@@ -1,0 +1,18 @@
+/*
+ * @file @fw/core 编译配置
+ * @description 继承仓库严格模式基线，仅输出 dist 产物
+ * @author donttemo
+ * @created 2026-10-09
+ * @since v0.1.0
+ */
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
+  },
+  "include": ["src"],
+  "exclude": ["src/__tests__", "dist"]
+}

@@ -1,0 +1,45 @@
+{
+  "name": "@fw/cache",
+  "version": "0.1.0",
+  "description": "缓存层：统一 CacheService、memory/redis 多驱动、@Cacheable、标签失效、三防护、分布式锁与降级（PRD-004）",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@fw/config": "workspace:*",
+    "@fw/core": "workspace:*",
+    "@fw/logger": "workspace:*",
+    "@nestjs/common": "^10.4.15"
+  },
+  "peerDependencies": {
+    "ioredis": "^5.4.1"
+  },
+  "peerDependenciesMeta": {
+    "ioredis": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^10.4.15",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^2.1.9",
+    "ioredis": "^5.4.1",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

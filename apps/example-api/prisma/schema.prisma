@@ -1,0 +1,185 @@
+/*
+ * @file example-api 数据模型
+ * @description M2 验收载体模型：遵循 @fw/db 通用约定（BaseEntity 六字段 + UUID 主键）。
+ *   切换数据库只改 datasource 两行（provider/url），业务代码零改动（TC-ORM-008）。
+ * @author donttemo
+ * @created 2026-10-12
+ * @module example-api
+ */
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // 切换点：sqlite / postgresql / mysql
+  provider = "sqlite"
+  url      = env("DB_URL")
+}
+
+/// 演示条目（M2 通用约定字段全集）
+model DemoItem {
+  id        String   @id @default(uuid())
+  title     String
+  done      Boolean  @default(false)
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String   @default("system")
+  updatedBy String   @default("system")
+}
+
+// ---------- M3 鉴权与权限（字段与 docs/30-data-dictionary.md §3.1~3.13 对齐） ----------
+// 主键统一 UUID 字符串（与 M2 DemoItem 的 @fw/db BaseEntity 约定一致，数据字典中的 bigint 为逻辑描述）
+
+/// 用户（PRD-003 FR-01）
+model User {
+  id           String    @id @default(uuid())
+  tenantId     BigInt    @default(0) @map("tenant_id")
+  username     String    @unique
+  phone        String?   @unique
+  email        String?   @unique
+  passwordHash String    @map("password_hash")
+  nickname     String?
+  avatar       String?
+  status       Int       @default(1)
+  lastLoginAt  DateTime? @map("last_login_at")
+  lastLoginIp  String?   @map("last_login_ip")
+  deletedAt    DateTime? @map("deleted_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  createdBy    String    @default("system") @map("created_by")
+  updatedBy    String    @default("system") @map("updated_by")
+
+  @@index([tenantId], map: "idx_users_tenant")
+  @@index([status], map: "idx_users_status")
+  @@map("users")
+}
+
+/// 角色（PRD-003 FR-04/FR-10）
+model Role {
+  id         String   @id @default(uuid())
+  tenantId   BigInt   @default(0) @map("tenant_id")
+  code       String
+  name       String
+  remark     String?
+  isSystem   Int      @default(0) @map("is_system")
+  dataScope  String   @default("self") @map("data_scope")
+  sort       Int      @default(0)
+  deletedAt  DateTime? @map("deleted_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  createdBy  String   @default("system") @map("created_by")
+  updatedBy  String   @default("system") @map("updated_by")
+
+  @@unique([tenantId, code], map: "uk_roles_tenant_code")
+  @@index([tenantId], map: "idx_roles_tenant")
+  @@map("roles")
+}
+
+/// 权限点（PRD-003 FR-04：编码 `资源:操作`，类型 menu/button/api）
+model Permission {
+  id         String   @id @default(uuid())
+  code       String   @unique
+  name       String
+  type       String   @default("api")
+  module     String?
+  sort       Int      @default(0)
+  deletedAt  DateTime? @map("deleted_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  createdBy  String   @default("system") @map("created_by")
+  updatedBy  String   @default("system") @map("updated_by")
+
+  @@index([type], map: "idx_permissions_type")
+  @@index([module], map: "idx_permissions_module")
+  @@map("permissions")
+}
+
+/// 用户-角色关联（无审计字段，故不经 Repository<T>）
+model UserRole {
+  userId String @map("user_id")
+  roleId String @map("role_id")
+
+  @@id([userId, roleId])
+  @@index([roleId], map: "idx_ur_role")
+  @@index([userId], map: "idx_ur_user")
+  @@map("user_role")
+}
+
+/// 角色-权限关联（无审计字段，故不经 Repository<T>）
+model RolePermission {
+  roleId       String @map("role_id")
+  permissionId String @map("permission_id")
+
+  @@id([roleId, permissionId])
+  @@map("role_permission")
+}
+
+/// 菜单（PRD-003 FR-09：供后台动态路由）
+model Menu {
+  id             String   @id @default(uuid())
+  parentId       String   @default("0") @map("parent_id")
+  name           String
+  path           String?
+  component      String?
+  icon           String?
+  permissionCode String?  @map("permission_code")
+  visible        Int      @default(1)
+  sort           Int      @default(0)
+  deletedAt      DateTime? @map("deleted_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  createdBy      String   @default("system") @map("created_by")
+  updatedBy      String   @default("system") @map("updated_by")
+
+  @@index([parentId], map: "idx_menus_parent")
+  @@index([permissionCode], map: "idx_menus_perm")
+  @@map("menus")
+}
+
+/// 刷新令牌（PRD-003 FR-02/FR-03：只存哈希 + 轮换族）
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  familyId  String    @map("family_id")
+  expireAt  DateTime  @map("expire_at")
+  revokedAt DateTime? @map("revoked_at")
+  loginIp   String?   @map("login_ip")
+  userAgent String?   @map("user_agent")
+  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdBy String    @default("system") @map("created_by")
+  updatedBy String    @default("system") @map("updated_by")
+
+  @@index([userId], map: "idx_rt_user")
+  @@index([familyId], map: "idx_rt_family")
+  @@index([expireAt], map: "idx_rt_expire")
+  @@map("refresh_tokens")
+}
+
+/// 审计日志（PRD-003 FR-08：仅创建，不更新不删除）
+model AuditLog {
+  id          String   @id @default(uuid())
+  tenantId    BigInt   @default(0) @map("tenant_id")
+  userId      String?  @map("user_id")
+  module      String
+  action      String
+  targetType  String?  @map("target_type")
+  targetId    String?  @map("target_id")
+  beforeValue Json?    @map("before_value")
+  afterValue  Json?    @map("after_value")
+  ip          String?
+  userAgent   String?  @map("user_agent")
+  traceId     String?  @map("trace_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId], map: "idx_audit_tenant")
+  @@index([userId], map: "idx_audit_user")
+  @@index([action], map: "idx_audit_action")
+  @@index([targetType, targetId], map: "idx_audit_target")
+  @@index([traceId], map: "idx_audit_trace")
+  @@index([createdAt], map: "idx_audit_created")
+  @@map("audit_logs")
+}

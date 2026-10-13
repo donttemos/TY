@@ -1,0 +1,28 @@
+// @file 测试专用 schema（不随业务发布）
+// @description @fw/db 单测/集成测试的固定模型：覆盖 BaseEntity 全部约定字段
+//   （id/deletedAt/createdAt/updatedAt/createdBy/updatedBy）+ 唯一约束（upsert 测试用）。
+//   client 生成到 prisma/test-client，避免与业务项目 schema 产物冲突。
+// @author donttemo
+// @created 2026-10-12
+// @module @fw/db
+generator client {
+  provider = "prisma-client-js"
+  output   = "../prisma/test-client"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("TEST_DATABASE_URL")
+}
+
+model TestUser {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  phone     String?
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String   @default("system")
+  updatedBy String   @default("system")
+}

@@ -1,0 +1,17 @@
+/*
+ * @file 全局样式入口
+ * @description Element Plus 基础样式与暗色变量 + 程序化组件（message / message-box / notification）样式 +
+ *   设计令牌；组件级样式由 unplugin-vue-components 按需引入（el-*.css），此处只放全局必需项。
+ * @author donttemo
+ * @created 2026-10-13
+ * @module admin-web/styles
+ */
+
+@import 'element-plus/theme-chalk/base.css';
+@import 'element-plus/theme-chalk/dark/css-vars.css';
+/* 程序化调用的组件不会走模板解析器，样式需显式引入 */
+@import 'element-plus/theme-chalk/el-message.css';
+@import 'element-plus/theme-chalk/el-message-box.css';
+@import 'element-plus/theme-chalk/el-notification.css';
+@import 'element-plus/theme-chalk/el-loading.css';
+@import './variables.css';

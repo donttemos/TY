@@ -1,0 +1,38 @@
+{
+  "name": "@fw/db",
+  "version": "0.1.0",
+  "description": "数据库抽象层：统一 Repository 接口、多驱动适配、迁移与观测（PRD-002）",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "prisma"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@fw/config": "workspace:*",
+    "@fw/core": "workspace:*",
+    "@fw/logger": "workspace:*",
+    "@nestjs/common": "^10.4.15",
+    "@prisma/client": "^6.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^2.1.9",
+    "prisma": "^6.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

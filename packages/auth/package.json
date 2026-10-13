@@ -1,0 +1,43 @@
+{
+  "name": "@fw/auth",
+  "version": "0.1.0",
+  "description": "鉴权与权限：双 token 轮换、RBAC 守卫、多认证策略、审计日志与登录加固（PRD-003）",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@fw/config": "workspace:*",
+    "@fw/core": "workspace:*",
+    "@fw/db": "workspace:*",
+    "@fw/logger": "workspace:*",
+    "@nestjs/common": "^10.4.15",
+    "@nestjs/core": "^10.4.15",
+    "@node-rs/argon2": "^2.0.2",
+    "bcryptjs": "^2.4.3",
+    "jose": "^5.9.6",
+    "rxjs": "^7.8.1"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^10.4.15",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^2.1.9",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

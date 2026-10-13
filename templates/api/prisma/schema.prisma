@@ -1,0 +1,33 @@
+/*
+ * @file 模板项目数据模型（示例）
+ * @description 演示 @fw/db 通用约定：BaseEntity 六字段（id/deletedAt/createdAt/updatedAt/createdBy/updatedBy）
+ *   + UUID 主键（白名单：禁自增主键）。新业务按此范式加模型，然后 fw db:migrate 应用。
+ * @author donttemo
+ * @created 2026-10-12
+ * @module __APP_NAME__
+ */
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // 切换数据库只改这两行：provider = "postgresql" | "mysql" | "sqlite"
+  provider = "sqlite"
+  url      = env("DB_URL")
+}
+
+/// 示例业务模型：字典项（M3 起扩展角色/权限/菜单）
+model Dict {
+  id        String   @id @default(uuid())
+  /// 字典编码（唯一）
+  code      String   @unique
+  /// 字典标签
+  label     String
+  /// 排序
+  sort      Int      @default(0)
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String   @default("system")
+  updatedBy String   @default("system")
+}

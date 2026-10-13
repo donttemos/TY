@@ -1,0 +1,38 @@
+# @file pnpm workspace 配置
+# @description 定义 monorepo 的包边界：packages 框架包、apps 应用、templates 项目模板
+# @author donttemo
+# @created 2026-10-09
+
+packages:
+  - "packages/*"
+  - "apps/*"
+
+# 允许执行安装脚本的依赖（pnpm 11 起 onlyBuiltDependencies 写在 workspace 文件里）
+onlyBuiltDependencies:
+  - esbuild
+  - "@nestjs/core"
+  - "@prisma/client"
+  - "@prisma/engines"
+  - prisma
+  - vue-demi
+allowBuilds:
+  '@nestjs/core': true
+  '@prisma/client': true
+  '@prisma/engines': true
+  esbuild: true
+  prisma: true
+  vue-demi: false
+
+# 依赖漏洞修复（pnpm 11 起 overrides 写在 workspace 文件里，package.json 的 pnpm 字段已不再读取）
+# 说明：仅覆盖「确实存在补丁版本」的项，逐项验证构建 / 单测 / 端到端冒烟后采纳。
+#   multer@<2.4.0 → 2.4.0：DoS 类漏洞，位于 @nestjs/platform-express 生产依赖路径
+#   qs@<6.16.0 → 6.16.0：3 条 DoS/解析绕过，位于 body-parser → qs
+#   body-parser@<1.20.6 → 1.20.6：非法请求导致 DoS
+#   deepmerge-ts@<8.0.0 → 8.0.0：递归对象合并栈耗尽，仅 prisma CLI 配置解析路径使用（不在应用运行时）
+# 未覆盖（受 NestJS 10 约束，待 M6 随 NestJS 11 升级解决）：@nestjs/core <=11.1.17、file-type（需 ESM-only 的 21.x）
+# 未覆盖（无可用补丁 / dev 工具链大版本）：braces（registry 最新即 3.0.3）、vitest(2→3)、tinypool(1→2)、happy-dom(15→20)、vite(5→6)
+overrides:
+  multer@<2.4.0: 2.4.0
+  qs@<6.16.0: 6.16.0
+  body-parser@<1.20.6: 1.20.6
+  deepmerge-ts@<8.0.0: 8.0.0

@@ -1,0 +1,27 @@
+{
+  "name": "@fw/cli",
+  "version": "0.1.0",
+  "description": "脚手架与工程命令：fw new / dev / build / check",
+  "type": "module",
+  "bin": {
+    "fw": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@fw/config": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^2.1.9",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

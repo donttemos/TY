@@ -1,0 +1,127 @@
+/*
+ * @file 全局样式变量（设计令牌）
+ * @description docs/25-ui-prototype.md §2 设计令牌落地：覆盖 Element Plus 主题变量（--el-*），
+ *   自有语义令牌（--fw-*）按浅色 / 暗色两套取值；禁止在组件内写死颜色，换皮肤只改本文件。
+ *   暗色模式由 html.dark 切换（Element Plus dark/css-vars.css 已处理组件暗色）。
+ * @author donttemo
+ * @created 2026-10-13
+ * @module admin-web/styles
+ */
+
+:root {
+  /* 布局层级（原型 §2.2） */
+  --fw-sidebar-width: 200px;
+  --fw-sidebar-collapsed-width: 64px;
+  --fw-navbar-height: 56px;
+  --fw-tags-height: 34px;
+  --fw-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+
+  /* 语义色（原型 §2.1 浅色） */
+  --fw-text-1: #1f2329;
+  --fw-text-2: #4e5969;
+  --fw-text-3: #86909c;
+  --fw-bg: #f5f7fa;
+  --fw-surface: #ffffff;
+  --fw-border: #e5e6eb;
+
+  /* Element Plus 主题令牌覆盖（主色由 store 动态写入 --el-color-primary） */
+  --el-color-primary: #2f6bff;
+  --el-color-success: #18a058;
+  --el-color-warning: #f0a020;
+  --el-color-danger: #d93026;
+  --el-color-info: #4098fc;
+  --el-border-radius-small: 4px;
+  --el-border-radius-base: 8px;
+  --el-font-size-extra-small: 12px;
+}
+
+/* 暗色令牌（原型 §2.1 暗色列） */
+html.dark {
+  --fw-text-1: #e5e6eb;
+  --fw-text-2: #a9aeb8;
+  --fw-text-3: #7a7f8a;
+  --fw-bg: #17171a;
+  --fw-surface: #232324;
+  --fw-border: #2e2e30;
+  --fw-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+/* 紧凑模式：压缩控件与表格行高（原型 FR-02） */
+html.compact {
+  --el-component-size: 28px;
+  --el-component-size-small: 24px;
+}
+
+html.compact .el-table th.el-table__cell,
+html.compact .el-table td.el-table__cell {
+  padding: 4px 0;
+}
+
+/* 布局基础 */
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fw-text-1);
+  background: var(--fw-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* 页面容器（卡片式留白：原型 §2.2 页面留白 16） */
+.fw-page {
+  padding: 16px;
+}
+
+.fw-card {
+  background: var(--fw-surface);
+  border: 1px solid var(--fw-border);
+  border-radius: 8px;
+  box-shadow: var(--fw-card-shadow);
+  padding: 16px;
+}
+
+.fw-card + .fw-card {
+  margin-top: 16px;
+}
+
+.fw-flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.fw-text-secondary {
+  color: var(--fw-text-2);
+}
+
+.fw-text-weak {
+  color: var(--fw-text-3);
+}
+
+/* 表格操作列间距 */
+.fw-table-actions .el-button + .el-button {
+  margin-left: 8px;
+}
+
+/* 滚动条（暗色适配） */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--fw-border);
+  border-radius: 4px;
+}

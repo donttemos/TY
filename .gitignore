@@ -1,0 +1,29 @@
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+coverage/
+.turbo/
+*.tsbuildinfo
+
+# 环境变量（示例文件除外）
+.env
+.env.*
+!.env.example
+
+# 日志与本地数据
+*.log
+*.sqlite
+*.db
+
+# IDE 与系统文件
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Prisma 生成产物（prisma generate 的输出，含平台相关二进制，CI 会重新生成）
+packages/db/prisma/test-client/
+
+# 本地工具数据（AI 会话状态与项目记忆，不入版本库）
+.workbuddy/

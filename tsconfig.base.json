@@ -1,0 +1,25 @@
+/*
+ * @file TypeScript 严格模式基线配置
+ * @description 全部框架包与应用继承本基线；strict 全开、禁用 any、模块解析走 NodeNext；包间引用只允许走 dist 产物，保证对外 API 与发布形态一致。
+ * @author donttemo
+ * @created 2026-10-09
+ * @since v0.1.0
+ */
+{
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "isolatedModules": true,
+    "noEmit": false
+  }
+}

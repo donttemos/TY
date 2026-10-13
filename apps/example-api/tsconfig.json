@@ -1,0 +1,18 @@
+/*
+ * @file example-api 编译配置
+ * @description 继承仓库严格模式基线，输出 dist 后由 node 直接运行
+ * @author donttemo
+ * @created 2026-10-09
+ * @since v0.1.0
+ */
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.spec.ts", "dist"]
+}
