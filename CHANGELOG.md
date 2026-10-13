@@ -24,6 +24,7 @@
 - 新增建表脚本 `packages/db/scripts/matrix-db-setup.mjs`（npm: `matrix:setup`）：`prisma migrate diff --from-empty --to-schema-datamodel --script` 生成方言 SQL → `prisma db execute --file` 应用，跨平台，不依赖 mysql/psql 客户端。
 - 新增共享断言套件 `src/__tests__/repository-suite.ts`（`defineRepositorySuite()`）与矩阵测试 `prisma-repository.matrix.test.ts`：**sqlite / mysql / postgres 三个驱动共用同一份 11 项断言**；`DB_DRIVER` 未设置时整文件跳过，保证离线单测与覆盖率门禁不被远端依赖阻塞。
 - 实测结论：三库 11/11 全绿；`packages/db/src` 业务源码（`prisma-repository.ts` 等）**零改动**，符合 ADR-0007。
+- **修复 CI 矩阵潜伏缺陷**：`.github/workflows/ci.yml` 的 `integration` job 原用 `sed` 改 provider 后再 `prisma migrate deploy`，而 `prisma/migrations/` 是 **SQLite 方言** SQL，在 MySQL/PG 上无法执行（该 job 从未触发过 Actions，缺陷一直潜伏）；改为方言 schema 变体生成客户端 + `migrate diff` 产出方言 DDL 建表，测试改用共用断言套件。两条腿已按 CI 命令顺序本地复跑，各 11/11。
 - `vitest.config.ts` 增设 `testTimeout` / `hookTimeout` = 60s（远端矩阵单用例含批量造数，默认 5s 不足）。
 
 **`@fw/cache` 真实 Redis 驱动联调**

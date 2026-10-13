@@ -183,6 +183,7 @@ fw:dev:__tag__:demo:user:188             type=set     pttl=86384927
 | M3 冒烟 | **25/25** |
 | M4 冒烟（默认） | **12/12**（阶段 D 未设置 `SMOKE_REDIS_URL` 时跳过） |
 | M4 冒烟（真实 Redis） | **18/18** |
+| CI 矩阵两条腿（按 `.github/workflows/ci.yml` 的原命令顺序本地复跑） | mysql **11/11**、postgres **11/11**；CI YAML 结构性校验通过（jobs/matrix/services/step 均解析正常） |
 
 ## 6. 本轮发现与修复
 
@@ -192,6 +193,7 @@ fw:dev:__tag__:demo:user:188             type=set     pttl=86384927
 | D-02 | 受限宿主下同步 `spawn(cmd.exe)` 返回 `EBUSY`，建表脚本不可用 | 沙箱禁止同步 spawn | 建表脚本改**异步** `execFile` |
 | D-03 | `prisma db execute --stdin` 在该宿主下被管道注入拦截（进程被 SIGTERM） | stdin 管道不可用 | 改用 `--file <临时文件>` |
 | D-04 | 生成产物 `matrix-client-*` 可能误入版本库 | — | `.gitignore` 增补 `matrix-client-mysql/`、`matrix-client-postgresql/`、`.tmp-dbtest/` |
+| D-05 | **CI 三库矩阵 job 对 MySQL/PG 两条腿必然失败**：原实现用 `sed` 把 provider 改成 `mysql`/`postgresql` 后直接 `prisma migrate deploy`，但 `prisma/migrations/` 下是 **SQLite 方言的迁移 SQL**，在 MySQL/PG 上无法执行 | 从未触发过 Actions（R-01/R-02），缺陷一直潜伏 | 改为方言 schema 变体生成客户端 + `migrate diff` 产出方言 DDL 建表（`matrix-db-setup.mjs`），测试改用共用断言套件；**两条腿已按 CI 原命令顺序在本地复跑，各 11/11** |
 
 顺带发现（非缺陷，记录备查）：MySQL 服务端 `lower_case_table_names` 生效，`CREATE TABLE \`TestUser\`` 落库后表名显示为 `testuser`；
 Prisma 引用一致，不影响查询，但**自写原生 SQL 时需注意大小写归一**（已在方言白名单逃逸口条款下）。
@@ -200,11 +202,11 @@ Prisma 引用一致，不影响查询，但**自写原生 SQL 时需注意大小
 
 | 编号 | 遗留项 | 说明 / 闭环路径 |
 |---|---|---|
-| T-01 | 矩阵**未接入 CI** | 本地已可一键复现；需在 `.github/workflows/ci.yml` 增 job，用 Secret 注入 `DB_URL`，按 `DB_DRIVER` 跑两次 |
-| T-02 | `mysql` / `postgres` 两种驱动**并发矩阵**未做 | 当前为串行两次运行，CI 中可并行 |
+| T-01 | **CI 矩阵未在真实 GitHub Actions 执行**（仓库无远程，`.github/workflows/ci.yml` 的两个 job 均只做了本地等价复跑与 YAML 结构性校验） | 需先配远程并推送；推送后以真实 Actions 结果为准 |
+| T-02 | 本地复跑为**串行**两次（CI 侧已由 `strategy.matrix` 并行，含 `mysql:8` / `postgres:15` service 容器） | 无需额外动作，CI 触发后自然覆盖 |
 | T-03 | **Redis Cluster** 未对真实集群实跑（本轮为 standalone 8.10.2） | `redis-cluster` 驱动仍由 fake 客户端验证命令序列；M8 演练时补真实集群 |
 | T-04 | 矩阵**只覆盖 `TestUser` 单模型** | `jsonContains` 三库分支未纳入矩阵（需 schema 加 JSON 字段）；建议 M6 生成器落地后随业务模型补齐 |
-| T-05 | 测试库为**共享实例明文凭证** | 已在 `92-test-databases.md` 标注；生产严禁复用；建议改走 `.env.test` / CI Secret |
+| T-05 | 测试库为**共享实例明文凭证** | 已在 `92-test-databases.md` 标注；生产严禁复用；CI 侧走 service 容器而非该远程实例，本地建议走 `.env.test` |
 
 ## 8. 结论
 
@@ -213,5 +215,5 @@ Prisma 引用一致，不影响查询，但**自写原生 SQL 时需注意大小
   切换改动量收敛为 `provider` + `url` 两行。
 - 缓存层 `redis` 驱动对接真实实例可用，且以「零降级 + `/ready cache=ok` + 键空间独立核验」三重证据排除「静默降级假绿」。
 - 验收总纲遗留的 **R-01（三库矩阵与数据库切换演练）**、**R-07（真实 Redis 未实跑）** 在本轮完成实测闭环
-  （R-07 仅 Redis **standalone** 部分闭环，Cluster 仍留待 M8，见 §7 T-03）；
-  新增遗留 T-01（接 CI）为工程化收尾项，不影响 0.1.0 代码层判定。
+  （R-07 仅 Redis **standalone** 部分闭环，Cluster 仍留待 M8，见 §7 T-03）。
+- 顺带修复 **CI 三库矩阵对方言不兼容的潜伏缺陷**（§6 D-05）：原实现对 MySQL/PG 必然失败，现已改为方言 schema + `migrate diff` 建表，两条腿本地复跑通过；唯待真实 Actions 执行（T-01）。
