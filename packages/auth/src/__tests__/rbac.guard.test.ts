@@ -11,7 +11,9 @@ import { Reflector } from '@nestjs/core';
 import { SignJWT } from 'jose';
 import { describe, expect, it } from 'vitest';
 import { BizError, ErrorCode } from '@fw/core';
-import { JWT_ISSUER, META_PERMISSIONS, META_PUBLIC, META_STRATEGY, PERM } from '../constants.js';
+import { getRequestContext, runWithRequestContext } from '@fw/logger';
+import { JWT_ISSUER, META_IGNORE_TENANT, META_PERMISSIONS, META_PUBLIC, META_STRATEGY, PERM } from '../constants.js';
+import { IgnoreTenant } from '../index.js';
 import { RbacGuard } from '../rbac.guard.js';
 import { ApiKeyStrategy, JwtStrategy, StrategyRegistry } from '../strategies.js';
 import { TEST_SECRET, createHarness, fakeContext, makeRequest } from './test-helpers.js';
@@ -37,7 +39,7 @@ describe('RbacGuard', () => {
       new JwtStrategy(h.tokens, h.blacklist),
       new ApiKeyStrategy(h.options.apiKeys),
     ]);
-    return new RbacGuard(new Reflector(), registry, h.permissions, h.store, h.options);
+    return new RbacGuard(new Reflector(), registry, h.permissions, h.store, h.options, h.audit);
   }
 
   it('TC-AUTH-003：无令牌访问受保护接口返回 3001', async () => {
@@ -63,6 +65,48 @@ describe('RbacGuard', () => {
     expect(request.user?.permissions).toContain(PERM.USER_READ);
     expect(request.user?.dataScope).toBe('all');
     expect(request.user?.jti).toBe(access.jti);
+  });
+
+  it('TC-TNT-001/002：请求租户必须与用户归属一致，缺失归属 fail-closed', async () => {
+    const h = createHarness();
+    const seeded = await h.seed();
+    const access = await h.tokens.signAccess({ id: seeded.normal.id, username: 'alice', roles: ['user'] });
+    const guard = buildGuard(h);
+    const attempt = () => runWithRequestContext({ traceId: 'tenant-auth', spanId: '', tenantId: '17' }, () =>
+      guard.canActivate(fakeContext(makeRequest({ authorization: `Bearer ${access.token}` }), handler, controller)));
+
+    await expect(attempt()).rejects.toMatchObject({ code: ErrorCode.TENANT_INVALID });
+    await h.store.updateUser(seeded.normal.id, { tenantId: '18' });
+    await expect(attempt()).rejects.toMatchObject({ code: ErrorCode.TENANT_INVALID });
+    await h.store.updateUser(seeded.normal.id, { tenantId: '17' });
+    await expect(attempt()).resolves.toBe(true);
+    const verified = await runWithRequestContext({ traceId: 'verified', spanId: '', tenantId: '17' }, async () => {
+      await guard.canActivate(fakeContext(makeRequest({ authorization: `Bearer ${access.token}` }), handler, controller));
+      return getRequestContext()?.tenantVerified;
+    });
+    expect(verified).toBe(true);
+  });
+
+  it('@IgnoreTenant requires an explicit permission and audits the bypass', async () => {
+    const h = createHarness();
+    const seeded = await h.seed();
+    const access = await h.tokens.signAccess({ id: seeded.normal.id, username: 'alice', roles: ['user'] });
+    const guard = buildGuard(h);
+    const maintenance = (): void => undefined;
+    IgnoreTenant()(maintenance as never, 'handler' as never, { value: maintenance } as never);
+    expect(Reflect.getMetadata(META_IGNORE_TENANT, maintenance)).toBe(true);
+    const attempt = () => runWithRequestContext({ traceId: 'maintenance', spanId: '' }, async () => {
+      await guard.canActivate(fakeContext(makeRequest({ authorization: `Bearer ${access.token}` }), maintenance, controller));
+      return getRequestContext()?.ignoreTenant;
+    });
+    await expect(attempt()).rejects.toMatchObject({ code: ErrorCode.FORBIDDEN });
+    const role = await h.store.listRolesByUserId(seeded.normal.id);
+    const permission = h.store.seedPermission({ code: 'system:tenant:ignore', name: '跨租户维护', type: 'api', module: 'system' });
+    await h.store.grantRolePermissions(role[0].id, [permission.id]);
+    await h.permissions.invalidateUser(seeded.normal.id);
+    await expect(attempt()).resolves.toBe(true);
+    const audit = await h.store.pageAuditLogs({ page: 1, pageSize: 10, targetType: 'tenant_bypass' });
+    expect(audit.items).toMatchObject([{ userId: seeded.normal.id, action: 'grant', targetType: 'tenant_bypass' }]);
   });
 
   it('TC-AUTH-004：缺少所需权限码返回 3002（在业务处理器之前拦截）', async () => {

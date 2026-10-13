@@ -144,6 +144,16 @@ describe('@fw/logger · AsyncLocalStorage traceId 贯通（TC-CORE-003）', () =
     expect(record.traceId).toBe(traceId);
   });
 
+  it('租户作用域内的结构化日志带 tenantId，离开后不串租户', () => {
+    const cap = captureLogs();
+    runWithRequestContext({ traceId: 'trace-a', spanId: '', tenantId: '17' }, () => {
+      Logger.for('ctx').info('tenant request');
+    });
+    Logger.for('ctx').info('outside');
+    expect(parse(cap.lines[0]).tenantId).toBe('17');
+    expect(parse(cap.lines[1]).tenantId).toBeUndefined();
+  });
+
   it('作用域外日志 traceId 为空串', () => {
     const cap = captureLogs();
     Logger.for('ctx').info('no trace');

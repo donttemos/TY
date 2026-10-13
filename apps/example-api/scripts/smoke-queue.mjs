@@ -10,10 +10,14 @@
  *   D. bullmq 驱动 + 真实 Redis（需 SMOKE_REDIS_URL，未设置则跳过）：与 memory 行为一致的入队/重试/死信，
  *      且 CACHE_DRIVER=redis 时不再输出「进程内 cron 互斥」告警（证明分布式守卫生效）；
  *   E. 配置切换语义：MQ_DRIVER=bullmq 缺 MQ_URL 与 CACHE_URL 时启动即失败并给出明确提示（AC-001）。
+ *   F. 失速恢复演练（需 SMOKE_REDIS_URL，未设置则跳过）：真实 Redis 上在途任务执行中强杀消费进程
+ *      （SIGKILL），重启后由失速检测搬回等待区并完成，任务不丢失（TC-JOB-008）；
+ *      同时验证 MQ_STALLED_MS 生效与 M3 遗留④（auth.refresh-cleanup）注册与手动触发。
  *   说明：TC-JOB-002「三实例共享存储时 cron 只跑一次」由 @fw/queue 单测覆盖（scheduler.test.ts 用三个
  *   调度器共享同一守卫存储）；HTTP 层无法在同一进程内制造多副本。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-13 donttemo 新增阶段 F 失速恢复演练（TC-JOB-008）与 auth.refresh-cleanup 断言（M3 遗留④）
  * @module example-api
  */
 
@@ -251,6 +255,24 @@ async function phaseMemory() {
       `[acquired=${ticked.body.data?.results?.[0]?.acquired} runs=${cronsAfter?.runs}]`,
     );
 
+    // M3 遗留④：refresh 过期记录定时清理（auth.refresh-cleanup）
+    const refreshCron = crons.items?.find((c) => c.name === 'auth.refresh-cleanup');
+    check(
+      'M3 遗留④ auth.refresh-cleanup 定时任务已注册（0 3 * * *，加分布式锁）',
+      refreshCron?.expression === '0 3 * * *' && refreshCron?.lock === true,
+      `[expression=${refreshCron?.expression} lock=${refreshCron?.lock}]`,
+    );
+    await post('/api/v1/demo-queue/cron-tick?name=auth.refresh-cleanup');
+    const refreshSnap = await waitUntil(async () => {
+      const snap = (await call('/api/v1/auth-maintenance/refresh-cleanup')).body.data;
+      return snap?.runs >= 1 ? snap : null;
+    }, 'auth.refresh-cleanup 手动触发执行');
+    check(
+      'M3 遗留④ 手动触发清理执行成功且无错误（清理条数可见）',
+      refreshSnap.lastError === null && typeof refreshSnap.lastRemoved === 'number' && refreshSnap.lastCutoff !== null,
+      `[removed=${refreshSnap.lastRemoved} cutoff=${refreshSnap.lastCutoff}]`,
+    );
+
     // 暂停 / 恢复
     await post('/api/v1/demo-queue/reset');
     await post('/api/v1/demo-queue/pause');
@@ -441,12 +463,54 @@ async function phaseConfigGuard() {
   await stopServer(server);
 }
 
+/** 阶段 F：失速恢复演练（TC-JOB-008，bullmq + 真实 Redis；需 SMOKE_REDIS_URL） */
+async function phaseStallRecovery() {
+  const url = process.env.SMOKE_REDIS_URL;
+  if (!url) {
+    console.log('\n=== 阶段 F：失速恢复演练（未设置 SMOKE_REDIS_URL，跳过）===');
+    return;
+  }
+  console.log('\n=== 阶段 F：失速恢复演练（TC-JOB-008：真实 Redis 上强杀在途消费进程）===');
+  // 独立前缀避免与其他阶段/历史残留串队列；MQ_STALLED_MS=1s 让失速检测尽快发现
+  // （锁本身随消费进程死亡需等 lockDuration（默认 30s）过期，恢复窗口约 31~35s）
+  const env = { MQ_DRIVER: 'bullmq', MQ_URL: url, MQ_PREFIX: `fw:stall:${Date.now()}`, MQ_STALLED_MS: '1000' };
+  const serverA = await startServer(env);
+  try {
+    await post('/api/v1/demo-queue/reset');
+    await post('/api/v1/demo-queue/slow?count=1&ms=8000&tag=stall');
+    // 等任务被消费进程 A 取走并进入 handler 在途 sleep
+    await sleep(1500);
+    serverA.child.kill('SIGKILL');
+    await new Promise((resolve) => serverA.child.on('exit', resolve));
+    check('TC-JOB-008 在途任务执行中被 SIGKILL 强杀（任务留在 Redis，锁随进程死亡）', true, '');
+
+    const serverB = await startServer(env);
+    try {
+      const done = await waitUntil(async () => {
+        const entry = await ledger('demo.slow');
+        return entry.count >= 1 ? entry : null;
+      }, '失速任务被新消费进程恢复执行', 90000);
+      const dead = (await call('/api/v1/demo-queue/dead-letters')).body.data;
+      check(
+        'TC-JOB-008 失速任务不丢失：搬回等待区后由新进程完成（attempt=2，无死信）',
+        done.lastExtra?.tag === 'stall-0' && done.lastExtra?.attempt === 2 && dead.total === 0,
+        `[attempt=${done.lastExtra?.attempt} tag=${done.lastExtra?.tag} dead=${dead.total}]`,
+      );
+    } finally {
+      await stopServer(serverB);
+    }
+  } finally {
+    await stopServer(serverA);
+  }
+}
+
 /** 主流程 */
 async function main() {
   await phaseMemory();
   await phaseConcurrency();
   await phaseRateLimit();
   await phaseBullmq();
+  await phaseStallRecovery();
   await phaseConfigGuard();
 
   const passed = results.filter((r) => r.ok).length;

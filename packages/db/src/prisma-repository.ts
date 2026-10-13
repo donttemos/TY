@@ -10,6 +10,7 @@
  */
 
 import { getRequestContext } from '@fw/logger';
+import { BizError, ErrorCode } from '@fw/core';
 import type {
   BaseEntity,
   CursorQuery,
@@ -34,6 +35,12 @@ const LIST_MAX = 1000;
 
 /** 单页条数上限 */
 const PAGE_SIZE_MAX = 100;
+const MAX_TENANT_ID = 9223372036854775807n;
+
+export interface PrismaRepositoryOptions {
+  /** Enable shared-table tenant enforcement for a model with tenantId. */
+  tenantScoped?: boolean;
+}
 
 /**
  * 基于 Prisma 的 Repository 实现
@@ -59,6 +66,7 @@ export class PrismaRepository<T extends BaseEntity> implements Repository<T> {
   constructor(
     private readonly client: PrismaClientLike,
     private readonly modelName: string,
+    private readonly options: PrismaRepositoryOptions = {},
   ) {
     this.delegate = client[modelName] as ModelDelegate;
   }
@@ -75,9 +83,20 @@ export class PrismaRepository<T extends BaseEntity> implements Repository<T> {
     return { deletedAt: null };
   }
 
+  private tenantWhere(): Record<string, bigint> {
+    if (!this.options.tenantScoped) return {};
+    const context = getRequestContext();
+    if (context?.ignoreTenant === true) return {};
+    const tenantId = context?.tenantId;
+    if (!context?.tenantVerified || !tenantId || !/^[1-9][0-9]*$/.test(tenantId) || BigInt(tenantId) > MAX_TENANT_ID) {
+      throw new BizError(ErrorCode.TENANT_INVALID, '缺失有效租户上下文');
+    }
+    return { tenantId: BigInt(tenantId) };
+  }
+
   /** 组装 where：调用方条件 + deletedAt IS NULL */
   private withSoftDelete(where?: Where<T>): Record<string, unknown> {
-    return { ...(where ?? {}), ...this.notDeleted() };
+    return { ...(where ?? {}), ...this.notDeleted(), ...this.tenantWhere() };
   }
 
   /** 排序追加主键 tie-breaker，保证分页稳定（TC-ORM-002） */
@@ -89,7 +108,7 @@ export class PrismaRepository<T extends BaseEntity> implements Repository<T> {
   // ---------- 读 ----------
 
   async findById(id: ID): Promise<T | null> {
-    const row = await this.delegate.findUnique({ where: { id, ...this.notDeleted() } });
+    const row = await this.delegate.findUnique({ where: { id, ...this.notDeleted(), ...this.tenantWhere() } });
     return row as T | null;
   }
 
@@ -160,29 +179,31 @@ export class PrismaRepository<T extends BaseEntity> implements Repository<T> {
   // ---------- 写 ----------
 
   async create(data: Partial<T>): Promise<T> {
+    const tenant = this.tenantWhere();
     const row = await this.delegate.create({
-      data: { ...data, createdBy: this.operator(), updatedBy: this.operator() },
+      data: { ...data, ...tenant, createdBy: this.operator(), updatedBy: this.operator() },
     });
     return row as T;
   }
 
   async update(id: ID, patch: Partial<T>): Promise<T> {
+    const tenant = this.tenantWhere();
     const row = await this.delegate.update({
-      where: { id },
-      data: { ...patch, updatedBy: this.operator() },
+      where: { id, ...tenant },
+      data: { ...patch, ...tenant, updatedBy: this.operator() },
     });
     return row as T;
   }
 
   async softDelete(id: ID): Promise<void> {
     await this.delegate.update({
-      where: { id },
+      where: { id, ...this.tenantWhere() },
       data: { deletedAt: new Date(), updatedBy: this.operator() },
     });
   }
 
   async hardDelete(id: ID): Promise<void> {
-    await this.delegate.delete({ where: { id } });
+    await this.delegate.delete({ where: { id, ...this.tenantWhere() } });
   }
 
   async count(where?: Where<T>): Promise<number> {
@@ -218,10 +239,11 @@ export class PrismaRepository<T extends BaseEntity> implements Repository<T> {
    * 由 Prisma client 自动映射，业务层零差异调用
    */
   async upsert(where: Record<string, unknown>, create: Partial<T>, update: Partial<T>): Promise<T> {
+    const tenant = this.tenantWhere();
     const row = await this.delegate.upsert({
-      where,
-      create: { ...create, createdBy: this.operator(), updatedBy: this.operator() },
-      update: { ...update, updatedBy: this.operator() },
+      where: { ...where, ...tenant },
+      create: { ...create, ...tenant, createdBy: this.operator(), updatedBy: this.operator() },
+      update: { ...update, ...tenant, updatedBy: this.operator() },
     });
     return row as T;
   }
@@ -244,6 +266,10 @@ export class PrismaRepository<T extends BaseEntity> implements Repository<T> {
     field: string,
     value: unknown,
   ): Promise<T[]> {
+    if (this.options.tenantScoped) {
+      this.tenantWhere();
+      throw new BizError(ErrorCode.TENANT_INVALID, '租户模型暂不支持原生 JSON 查询');
+    }
     this.assertIdent(this.tableName());
     this.assertIdent(field);
     if (driver === 'sqlite') {

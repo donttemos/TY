@@ -54,7 +54,7 @@
 | `/system/menus` | 菜单管理 | `menu:read` | 动态 | M5 |
 | `/system/dict` | 字典管理 | `dict:read` | 动态 | M5 |
 | `/system/audit` | 审计日志 | `audit:read` | 动态 | M5 |
-| `/system/jobs` | 队列与任务 | `job:read` | 动态 | M7 |
+| `/system/queue` | 队列管理 | `system:queue:list` | 动态 | M7 |
 | `/system/tenants` | 租户管理 | `tenant:read` | 动态 | M8 |
 | `/<model>` | 生成器产出列表页（如 `/orders`） | `<model>:read` | 生成时注册 | M6 |
 
@@ -162,7 +162,7 @@
 
 ### 5.6 队列与任务（M7）
 
-列表：任务名、状态标签（pending/running/success/failed）、尝试次数、计划时间、操作（详情/重放/暂停）。顶部指标条：积压量、成功率、平均耗时。失败任务展开看 `last_error`，支持批量重放。
+顶部概览展示驱动、积压量、执行中、死信数、成功率和平均耗时。队列明细、死信、定时任务分三个标签页；死信支持详情、单条重放和清理，队列支持暂停/恢复与清空等待任务，cron 支持手动触发。查看使用 `system:queue:list`，变更使用 `system:queue:manage`。
 
 ### 5.7 生成器产出页面（M6）
 

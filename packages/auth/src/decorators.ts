@@ -10,13 +10,16 @@
  */
 
 import { SetMetadata, createParamDecorator, type ExecutionContext } from '@nestjs/common';
-import { META_AUDIT, META_PERMISSIONS, META_PUBLIC, META_STRATEGY } from './constants.js';
+import { META_AUDIT, META_IGNORE_TENANT, META_PERMISSIONS, META_PUBLIC, META_STRATEGY } from './constants.js';
 import type { AuditAction, AuthStrategyName, RequestUser } from './types.js';
 
 /**
  * 放行无需登录的接口（登录、注册、刷新、健康检查）
  */
 export const Public = (): MethodDecorator & ClassDecorator => SetMetadata(META_PUBLIC, true);
+
+/** 跨租户维护路由：仍需显式授予 system:tenant:ignore 权限，并记录告警。 */
+export const IgnoreTenant = (): MethodDecorator & ClassDecorator => SetMetadata(META_IGNORE_TENANT, true);
 
 /**
  * 声明接口所需权限码（全部命中才通过；与 permissions.code 同源）

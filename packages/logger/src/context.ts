@@ -17,6 +17,12 @@ export interface RequestContext {
   spanId: string;
   /** 当前登录用户 ID（M3 起由鉴权层写入） */
   userId?: string;
+  /** 当前租户 ID；仅已认证请求可将候选值用于租户化数据访问 */
+  tenantId?: string;
+  /** Set only after the authenticated identity is matched to tenantId. */
+  tenantVerified?: boolean;
+  /** 已授权的跨租户维护路由；由鉴权守卫写入 */
+  ignoreTenant?: boolean;
 }
 
 /** 全局异步上下文存储（进程单例） */

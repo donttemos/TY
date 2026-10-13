@@ -137,7 +137,7 @@ AUTH_API_KEYS=<key>:<主体名>:<权限码,权限码>          # 多条用 | 分
 - `apikey` / `session` / `oauth2` 策略仅有单测证据，example-api 未挂对应路由；端到端仅覆盖 `jwt`（M5 接入后台模板时一并补）。
 - `dataScope` 的 `org` / `org_below` 待 M8；`roles.data_scope` 字段与解析分支已就位。
 - 权限缓存为进程内实现，多实例部署前需接 M4 Redis（否则角色变更后在其它实例上有最多 60s 延迟）。
-- refresh 过期记录清理（`purgeExpiredRefreshTokens`）已有实现但未接定时任务，待 M7。
+- refresh 过期记录清理（`purgeExpiredRefreshTokens`）已有实现但未接定时任务；M7 已提供 cron 能力，具体清理任务移至 M8 backlog。
 
 ## 11. 变更记录
 
@@ -145,4 +145,5 @@ AUTH_API_KEYS=<key>:<主体名>:<权限码,权限码>          # 多条用 | 分
 |---|---|---|
 | 2026-10-09 | 初稿 | 需求与 AC 定义 |
 | 2026-10-13 | 实现完成 | 状态转「已实现」；补配置项清单、待定问题结论、§10 验收记录；AC 全量勾选并附验证方式 |
+| 2026-10-13 | M7 后续说明 | refresh 过期记录清理任务移至 M8；M7 仅提供 cron 能力 |
 

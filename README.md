@@ -2,7 +2,7 @@
 
 > 一套「框架之上的框架」：用它在 1 天内搭出任意业务系统的可运行骨架，小到内部工具站、大到多租户 SaaS，规模升级时业务代码零重写。
 >
-> **当前状态：v0.1.0 已发布（M1 核心骨架 + M2 数据库抽象层 + M3 鉴权与权限 + M4 缓存层）**；M5 管理后台前端（PRD-005）、M6 CRUD 代码生成器（PRD-006）与 M7 队列与定时任务（PRD-007）已完成实现与验证（构建 / 单测 / 端到端冒烟），未发版。发布验收记录见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
+> **当前状态：v0.1.0 已发布（M1 核心骨架 + M2 数据库抽象层 + M3 鉴权与权限 + M4 缓存层）**；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；M7 队列与定时任务（PRD-007）已完成实现及现有测试门禁，真实进程重启恢复验收待补，未发版。发布验收记录见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
 
 ## 设计原则
 
@@ -99,7 +99,7 @@ fw gen crud order
 | 缓存 | `@fw/cache`（统一 CacheService + memory/redis/cluster 驱动 + 三防护 + 标签失效 + 分布式锁 + 降级与指标） | M4 | ✅ 已完成 |
 | 管理后台模板 | `apps/admin-web`（Vue3 + Vite + Element Plus：登录、动态路由、按钮级权限、用户/角色/菜单/字典/审计页、`<CrudTable>` 标准组件；mock 全链路冒烟 40/40、单测 29） | M5 | ✅ 已完成（未发版） |
 | CRUD 代码生成器 | `@fw/cli gen`（schema 解析 + 类型映射 + 模板引擎 + 后端/前端/seed 生成 + dry-run/diff/回滚；模板外置 `templates/codegen/`；单测 116 / 覆盖率 94.7%） | M6 | ✅ 已完成（未发版） |
-| 队列与定时任务 | `@fw/queue`（统一 Job 抽象 + memory/bullmq 双驱动 + `@JobHandler`/`@Cron` 自动扫描 + 重试退避 + 死信重放 + 幂等 + 令牌桶限速 + cron 分布式锁 + 优雅停机 + 队列管理页；单测 135 / 覆盖率 93.1%、example-api 冒烟 27/27 含真实 Redis 的 bullmq 全链路） | M7 | ✅ 已完成（未发版） |
+| 队列与定时任务 | `@fw/queue`（统一 Job 抽象 + memory/bullmq 双驱动 + `@JobHandler`/`@Cron` 自动扫描 + 重试退避 + 死信重放 + 幂等 + 令牌桶限速 + cron 分布式锁 + 优雅停机 + 队列管理页；单测 135 / 覆盖率 93.1%、example-api 冒烟 27/27 含真实 Redis 的 bullmq 全链路） | M7 | 已实现（重启验收待补，未发版） |
 | 多租户与规模化 | 租户上下文 + transport + OTel + Helm | M8 | 未开工 |
 
 ## 文档索引
@@ -113,7 +113,7 @@ fw gen crud order
 | [ER 图与数据字典](./docs/30-data-dictionary.md) | 建模约定、权限/系统/租户三域 ER 图、15 张表字段字典 |
 | [API 文档](./docs/40-api-spec.md) | 通用约定、错误码、10 类接口清单、限流与幂等、版本策略 |
 | [部署与运维手册](./docs/60-deployment-ops.md) | 三档部署、配置清单、备份恢复、监控告警、故障 Runbook、升级回滚 |
-| [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（当前为文档阶段，未发布代码版本） |
+| [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.1.0 已发布，M5–M7 尚未发版） |
 | [ADR 架构决策记录](./docs/adr/README.md) | 12 条决策：NestJS / Prisma（已定稿）/ monorepo / 缓存 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 |
 | [编码 Git PR 规范](./docs/70-engineering-standards.md) | 编码规范、**中文注释规范（文件头含作者与日期）**、反模式清单、分支与提交约定、PR 与评审规则 |
 | [项目计划与任务板](./docs/80-project-plan.md) | 15 周甘特、M1–M8 WBS（40+ 任务）、任务板列与标签、当前快照 |
@@ -139,7 +139,7 @@ fw gen crud order
 | M4 | 缓存层 | [004](./docs/prd/prd-004-cache-layer.md) | ✅ 已完成 |
 | M5 | 管理后台模板 | [005](./docs/prd/prd-005-admin-template.md) | ✅ 已完成（未发版） |
 | M6 | 代码生成器 | [006](./docs/prd/prd-006-code-generator.md) | ✅ 已完成（未发版） |
-| M7 | 队列与定时任务 | [007](./docs/prd/prd-007-queue-scheduler.md) | ✅ 已完成（未发版） |
+| M7 | 队列与定时任务 | [007](./docs/prd/prd-007-queue-scheduler.md) | 已实现（重启验收待补，未发版） |
 | M8 | 多租户与规模化 | [008](./docs/prd/prd-008-multitenancy-scale.md) | 草案 |
 
 ## 开发规范

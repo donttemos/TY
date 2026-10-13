@@ -17,6 +17,7 @@ datasource db {
 
 model TestUser {
   id        String   @id @default(uuid())
+  tenantId  BigInt   @default(0)
   email     String   @unique
   name      String
   phone     String?
@@ -25,4 +26,6 @@ model TestUser {
   updatedAt DateTime @updatedAt
   createdBy String   @default("system")
   updatedBy String   @default("system")
+
+  @@index([tenantId, id])
 }

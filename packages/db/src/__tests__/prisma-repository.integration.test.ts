@@ -50,12 +50,14 @@ async function migrateDeployWithRetry(): Promise<void> {
 beforeAll(async () => {
   // 保证表结构最新（幂等）
   fs.rmSync(DB_FILE, { force: true });
+  // Prisma 6 migrate deploy 在 Windows 上要求 SQLite 文件已存在；db push 可建库但不验证迁移。
+  fs.closeSync(fs.openSync(DB_FILE, 'w'));
   await migrateDeployWithRetry();
   prisma = new PrismaClient({ datasources: { db: { url: DB_URL } } });
 });
 
 afterAll(async () => {
-  await prisma.$disconnect();
+  if (prisma) await prisma.$disconnect();
   fs.rmSync(DB_FILE, { force: true });
 });
 

@@ -63,10 +63,18 @@
 | | `AUTH_PASSWORD_POLICY` | 否 | medium | 密码强度策略：`low` / `medium` / `high` |
 | | `AUTH_ALLOW_REGISTER` | 否 | false | 是否开放自助注册（默认关闭，「默认安全」） |
 | | `AUTH_API_KEYS` | 否 | 空 | 开放接口 API Key，格式 `<key>:<主体名>:<权限码,权限码>`；多条用 `|` 分隔。**权限码本身含冒号，按前两段切分** |
-| 队列 | `MQ_DRIVER` | 是 | memory | `memory` / `bullmq`（`kafka` 为 M8 预留位） |
-| | `MQ_CONCURRENCY` | 否 | 10 | 消费并发 |
-| | `MQ_MAX_ATTEMPTS` | 否 | 3 | 最大重试次数（退避 1s/5s/30s） |
-| | `MQ_CRON_ENABLED` | 否 | true | 是否启用定时调度 |
+| 队列 | `MQ_DRIVER` | 否 | memory | `memory` / `bullmq`；`kafka` 尚未实现 |
+| | `MQ_URL` | 条件 | — | bullmq 的 Redis 连接串；留空回退 `CACHE_URL`，两者皆空则启动失败 |
+| | `MQ_PREFIX` | 否 | `fw:<APP_ENV>` | 队列键前缀，部署间须隔离 |
+| | `MQ_CONCURRENCY` | 否 | 10 | 每队列消费并发 |
+| | `MQ_MAX_ATTEMPTS` | 否 | 4 | 最大执行次数，含首次（即最多重试 3 次） |
+| | `MQ_BACKOFF` | 否 | `1000,5000,30000` | 重试退避序列，单位毫秒 |
+| | `MQ_JOB_TIMEOUT` | 否 | 60 | 单任务执行超时，单位秒 |
+| | `MQ_CRON_ENABLED` | 否 | true | 是否启用定时调度；多实例须配 Redis 分布式锁 |
+| | `MQ_RATE_LIMIT` | 否 | 0 | 每队列每秒处理上限；0 为不限速 |
+| | `MQ_DEAD_LETTER_MAX` | 否 | 1000 | 死信保留上限 |
+| | `MQ_SHUTDOWN_TIMEOUT` | 否 | 30 | 等待在途任务的停机超时，单位秒 |
+| | `MQ_STALLED_MS` | 否 | 30000 | bullmq 失速检测间隔，单位毫秒；0 表示用 bullmq 默认值。消费进程被强杀后，在途任务最长等这么久被搬回等待区重试 |
 | 日志 | `LOG_LEVEL` | 否 | info | 级别 |
 | | `LOG_FORMAT` | 否 | json | 容器环境固定 json |
 | 追踪 | `OTEL_ENABLED` | 否 | false | M8 起支持 |
@@ -79,6 +87,8 @@
 **密钥管理**：生产禁止把密钥写进镜像或仓库；用 K8s Secret / 环境变量注入 / 密钥管理服务，定期轮换并保留 `*_PREV` 过渡值。
 
 **管理后台托管**：`apps/admin-web` 生产构建（`pnpm --filter admin-web build`）产出纯静态 `dist/`，无 Node 依赖；Nginx 需配置 SPA history 回退（`try_files $uri $uri/ /index.html`），API 请求经 `VITE_API_BASE_URL` 直连后端或由 Nginx 反代 `/api/`。
+
+**队列持久性**：`memory` 驱动的待执行任务不跨进程重启保留，仅用于可丢失任务；需要重启后恢复任务时选 `bullmq`，并为 Redis 配置持久化。多实例 cron 锁依赖 `CACHE_DRIVER=redis` 及可用的 `CACHE_URL`。
 
 ## 4. 小档部署（单机 Docker）
 
@@ -159,7 +169,7 @@ helm upgrade --install myapp fw/app \
 |---|---|
 | 启动 | 容器入口执行 `pnpm db:migrate`（由迁移锁保证单实例执行）后启动应用 |
 | 停止 | 发 `SIGTERM`；应用停止接收新请求，等待在途请求完成（默认 10s）后退出 |
-| 强制退出 | 超时未完成则强制退出，日志告警；未完成任务重新入队 |
+| 强制退出 | 超时后记录告警；memory 在进程退出后不保留重新入队的任务，bullmq 由 Redis 持久化与失速检测恢复 |
 | 禁止 | 直接 `kill -9`，会导致在途请求丢失与任务状态不一致 |
 
 ## 8. 数据与备份

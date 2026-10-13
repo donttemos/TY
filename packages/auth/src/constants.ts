@@ -14,9 +14,11 @@ export const META_PUBLIC = 'fw:auth:public';
 export const META_PERMISSIONS = 'fw:auth:permissions';
 export const META_STRATEGY = 'fw:auth:strategy';
 export const META_AUDIT = 'fw:audit:meta';
+export const META_IGNORE_TENANT = 'fw:ignore-tenant';
 
 /** 内置权限码（PRD-003 §3.2 / §3.3 / §3.4） */
 export const PERM = {
+  TENANT_IGNORE: 'system:tenant:ignore',
   /** 登出 */
   AUTH_LOGOUT: 'auth:logout',
   /** 当前用户资料 */

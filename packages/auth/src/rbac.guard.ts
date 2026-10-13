@@ -14,12 +14,13 @@
 import { Inject, Injectable, type CanActivate, type ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { BizError, ErrorCode } from '@fw/core';
-import { Logger, patchRequestContext } from '@fw/logger';
+import { getRequestContext, Logger, patchRequestContext } from '@fw/logger';
 import type { AuthStore } from './auth-store.js';
-import { META_PERMISSIONS, META_PUBLIC, META_STRATEGY } from './constants.js';
+import { META_IGNORE_TENANT, META_PERMISSIONS, META_PUBLIC, META_STRATEGY, PERM } from './constants.js';
 // 注意：以下三个依赖必须「值导入」——仅在类型位置引用时 emitDecoratorMetadata 只能发出
 // Function / Object，Nest 无法解析构造函数依赖（启动期直接 DI 失败）。
 import { PermissionService } from './permission.service.js';
+import { AuditService } from './audit.service.js';
 import { StrategyRegistry, type AuthRequest, type AuthStrategy, type StrategyIdentity } from './strategies.js';
 import { AUTH_OPTIONS, AUTH_STORE, AUTH_STRATEGY_REGISTRY } from './tokens.js';
 import type { AuthOptions, AuthStrategyName, RequestUser } from './types.js';
@@ -52,6 +53,7 @@ export class RbacGuard implements CanActivate {
     private readonly permissions: PermissionService,
     @Inject(AUTH_STORE) private readonly store: AuthStore,
     @Inject(AUTH_OPTIONS) private readonly options: AuthOptions,
+    private readonly audit: AuditService,
   ) {}
 
   /**
@@ -70,6 +72,7 @@ export class RbacGuard implements CanActivate {
       this.reflector.getAllAndOverride<boolean>(META_PUBLIC, targets) === true ||
       this.isPublicPath(request.url ?? '');
     const required = this.reflector.getAllAndOverride<string[]>(META_PERMISSIONS, targets) ?? [];
+    const ignoreTenant = this.reflector.getAllAndOverride<boolean>(META_IGNORE_TENANT, targets) === true;
     const strategyName =
       this.reflector.getAllAndOverride<AuthStrategyName>(META_STRATEGY, targets) ?? this.options.strategy;
 
@@ -90,6 +93,15 @@ export class RbacGuard implements CanActivate {
 
     // 2) 组装请求用户（用户身份需回源校验状态并加载权限）
     const user = identity.kind === 'user' ? await this.buildUser(identity) : this.buildService(identity);
+    const tenantId = getRequestContext()?.tenantId;
+    if (tenantId && user.tenantId !== tenantId && !ignoreTenant) {
+      throw new BizError(ErrorCode.TENANT_INVALID, '用户不属于当前租户');
+    }
+    if (ignoreTenant) {
+      if (isPublic || !hasAllPermissions(user.permissions, [PERM.TENANT_IGNORE])) {
+        throw new BizError(ErrorCode.FORBIDDEN, '缺少跨租户维护权限');
+      }
+    }
 
     // 3) 授权：接口所需权限码全部命中（TC-AUTH-004 越权返回 3002）
     if (!isPublic && required.length > 0 && !hasAllPermissions(user.permissions, required)) {
@@ -104,9 +116,23 @@ export class RbacGuard implements CanActivate {
       throw new BizError(ErrorCode.FORBIDDEN, '无操作权限');
     }
 
+    if (ignoreTenant) {
+      await this.audit.recordSync({
+        userId: user.id,
+        module: 'tenant',
+        action: 'grant',
+        targetType: 'tenant_bypass',
+        targetId: tenantId ?? null,
+        after: { url: request.url, method: request.method },
+        ip: request.ip ?? null,
+      });
+      patchRequestContext({ ignoreTenant: true });
+      logger.warn('跨租户访问豁免', { userId: user.id, tenantId: tenantId ?? null, url: request.url });
+    }
+
     // 4) 写请求对象与日志上下文（审计与数据权限据此取操作人）
     request.user = user;
-    patchRequestContext({ userId: user.id });
+    patchRequestContext({ userId: user.id, tenantVerified: Boolean(tenantId && user.tenantId === tenantId) });
     return true;
   }
 
@@ -141,6 +167,7 @@ export class RbacGuard implements CanActivate {
     const context = await this.permissions.getUserContext(user.id);
     return {
       id: user.id,
+      tenantId: user.tenantId,
       username: user.username,
       roles: context.roles,
       permissions: context.permissions,

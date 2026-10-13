@@ -51,7 +51,7 @@ export interface JobOptions {
   runAt?: Date;
   /** 幂等键：同一 key 在窗口期内只执行一次（成功后才置位，失败仍可重试） */
   idempotencyKey?: string;
-  /** 幂等窗口（秒），默认 `MQ_IDEMPOTENCY_TTL`（3600） */
+  /** 幂等窗口（秒），默认 3600；当前无对应的 `MQ_*` 环境变量 */
   idempotencyTtlSeconds?: number;
   /** 任务执行超时（秒），默认 `MQ_JOB_TIMEOUT`（60） */
   timeoutSeconds?: number;

@@ -262,8 +262,9 @@ export class AuthModule {
           permissions: PermissionService,
           store: AuthStore,
           config: AuthOptions,
-        ) => new RbacGuard(reflector, registry, permissions, store, config),
-        inject: [Reflector, AUTH_STRATEGY_REGISTRY, PermissionService, AUTH_STORE, AUTH_OPTIONS],
+          audit: AuditService,
+        ) => new RbacGuard(reflector, registry, permissions, store, config, audit),
+        inject: [Reflector, AUTH_STRATEGY_REGISTRY, PermissionService, AUTH_STORE, AUTH_OPTIONS, AuditService],
       });
     }
     if (options.auditInterceptor !== false) {

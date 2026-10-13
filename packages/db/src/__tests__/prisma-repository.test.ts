@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { runWithRequestContext } from '@fw/logger';
 import { PrismaRepository } from '../prisma-repository.js';
 import type { BaseEntity, PageQuery } from '../repository.interface.js';
 import type { ModelDelegate, PrismaClientLike } from '../types.js';
@@ -16,6 +17,7 @@ import type { ModelDelegate, PrismaClientLike } from '../types.js';
 interface TestUser extends BaseEntity {
   email: string;
   name: string;
+  tenantId: bigint;
 }
 
 /** 记录调用的 fake delegate */
@@ -60,7 +62,7 @@ function makeDelegate(rows: Record<string, unknown>[] = []) {
   return { delegate, calls };
 }
 
-function makeRepo(rows: Record<string, unknown>[] = []) {
+function makeRepo(rows: Record<string, unknown>[] = [], tenantScoped = false) {
   const { delegate, calls } = makeDelegate(rows);
   const client = {
     testUser: delegate,
@@ -71,9 +73,110 @@ function makeRepo(rows: Record<string, unknown>[] = []) {
     $on: vi.fn(),
     $extends: vi.fn(function (this: unknown) { return this; }),
   } as unknown as PrismaClientLike;
-  const repo = new PrismaRepository<TestUser>(client, 'testUser');
+  const repo = new PrismaRepository<TestUser>(client, 'testUser', { tenantScoped });
   return { repo, calls, client };
 }
+
+const inTenant = <T>(tenantId: string, fn: () => T): T =>
+  runWithRequestContext({ traceId: 'tenant-test', spanId: '', tenantId, tenantVerified: true }, fn);
+
+describe('@fw/db · shared tenant isolation (TC-TNT-001/002/003)', () => {
+  it('rejects every tenant-scoped operation before reaching the delegate without context', async () => {
+    const { repo, calls } = makeRepo([], true);
+    for (const operation of [
+      () => repo.findById('u-1'),
+      () => repo.findOne({}),
+      () => repo.list(),
+      () => repo.page({ page: 1, pageSize: 10 }),
+      () => repo.pageByCursor({ pageSize: 10 }),
+      () => repo.count(),
+      () => repo.create({ email: 'a@b.c' }),
+      () => repo.update('u-1', {}),
+      () => repo.softDelete('u-1'),
+      () => repo.hardDelete('u-1'),
+      () => repo.upsert({ email: 'a@b.c' }, { email: 'a@b.c' }, {}),
+      () => repo.jsonContains('postgresql', 'tags', {}),
+    ]) {
+      await expect(operation()).rejects.toMatchObject({ code: 4001 });
+    }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects an unverified tenant header even when it contains a valid ID', async () => {
+    const { repo, calls } = makeRepo([], true);
+    await runWithRequestContext({ traceId: 'public', spanId: '', tenantId: '17' }, async () => {
+      await expect(repo.list()).rejects.toMatchObject({ code: 4001 });
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('enforces tenantId for reads, pagination, counts and writes despite caller overrides', async () => {
+    const { repo, calls } = makeRepo([], true);
+    await inTenant('17', async () => {
+      await repo.findById('other-id');
+      await repo.findOne({ tenantId: '18' });
+      await repo.list({ tenantId: '18' });
+      await repo.page({ page: 1, pageSize: 10, where: { tenantId: '18' } });
+      await repo.pageByCursor({ pageSize: 10, cursor: 'cursor', where: { tenantId: '18' } });
+      await repo.count({ tenantId: '18' });
+      await repo.create({ tenantId: '18', email: 'a@b.c' });
+      await repo.update('other-id', { tenantId: '18', name: 'changed' });
+      await repo.softDelete('other-id');
+      await repo.hardDelete('other-id');
+    });
+    for (const call of calls.slice(0, 7).filter((call) => call.method !== 'create')) {
+      expect((call.args as { where: { tenantId: bigint } }).where.tenantId).toBe(17n);
+    }
+    expect(calls.find((call) => call.method === 'create')?.args).toMatchObject({ data: { tenantId: 17n } });
+    for (const call of calls.slice(7).filter((call) => call.method !== 'create')) {
+      expect((call.args as { where: { tenantId: bigint } }).where.tenantId).toBe(17n);
+    }
+    expect(calls.find((call) => call.method === 'update')?.args).toMatchObject({ data: { tenantId: 17n } });
+  });
+
+  it('rejects raw JSON querying until tenant-aware SQL is available', async () => {
+    const { repo, client } = makeRepo([], true);
+    await inTenant('17', async () => {
+      await expect(repo.jsonContains('postgresql', 'tags', {})).rejects.toMatchObject({ code: 4001 });
+    });
+    expect(client.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it('authorized maintenance bypass omits tenant predicates while preserving soft delete', async () => {
+    const { repo, calls } = makeRepo([], true);
+    await runWithRequestContext({ traceId: 'maintenance', spanId: '', ignoreTenant: true }, async () => {
+      await repo.list();
+      await repo.create({ email: 'maintenance@local' });
+    });
+    expect(calls[0].args).toMatchObject({ where: { deletedAt: null } });
+    expect((calls[0].args as { where: object }).where).not.toHaveProperty('tenantId');
+    expect((calls[1].args as { data: object }).data).not.toHaveProperty('tenantId');
+  });
+
+  it('upsert scopes unique lookup and both write branches to the current tenant', async () => {
+    const { repo, calls } = makeRepo([], true);
+    await inTenant('17', () => repo.upsert(
+      { email: 'same@local', tenantId: 18n },
+      { email: 'same@local', tenantId: 18n },
+      { name: 'changed', tenantId: 18n },
+    ));
+    expect(calls[0].args).toMatchObject({
+      where: { email: 'same@local', tenantId: 17n },
+      create: { tenantId: 17n },
+      update: { tenantId: 17n },
+    });
+  });
+
+  it('rejects invalid and out-of-range tenant identifiers before querying', async () => {
+    const { repo, calls } = makeRepo([], true);
+    for (const tenantId of ['0', '017', '9223372036854775808']) {
+      await inTenant(tenantId, async () => {
+        await expect(repo.list()).rejects.toMatchObject({ code: 4001 });
+      });
+    }
+    expect(calls).toHaveLength(0);
+  });
+});
 
 describe('@fw/db · 查询强制软删过滤（TC-ORM-004）', () => {
   it('findById 追加 deletedAt IS NULL', async () => {

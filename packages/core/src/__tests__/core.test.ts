@@ -13,6 +13,7 @@ import path from 'node:path';
 import os from 'node:os';
 import type { Server } from 'node:http';
 import { EventEmitter } from 'node:events';
+import { getRequestContext } from '@fw/logger';
 import request from 'supertest';
 import { BadRequestException, Controller, Get, Module, INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
@@ -94,6 +95,10 @@ class TestController {
   badRequest(): never {
     // Nest 默认把校验错误转成 BadRequestException 且 message 为字符串数组
     throw new BadRequestException(['username must be 3-32 chars']);
+  }
+  @Get('tenant')
+  tenant(): { tenantId?: string } {
+    return { tenantId: getRequestContext()?.tenantId };
   }
 }
 
@@ -228,6 +233,13 @@ describe('@fw/core · traceId 透传', () => {
       .set('X-Trace-Id', 'x');
     expect(res2.headers['x-trace-id']).not.toBe('x');
     expect(res2.body.traceId).toBe(res2.headers['x-trace-id']);
+  });
+
+  it('X-Tenant-Id 写入请求异步上下文，无效值不注入', async () => {
+    const valid = await request(app.getHttpServer()).get('/api/v1/test/tenant').set('X-Tenant-Id', '17');
+    expect(valid.body.data).toEqual({ tenantId: '17' });
+    const invalid = await request(app.getHttpServer()).get('/api/v1/test/tenant').set('X-Tenant-Id', '0 or 1=1');
+    expect(invalid.body.data).toEqual({});
   });
 });
 

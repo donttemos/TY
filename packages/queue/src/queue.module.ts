@@ -55,6 +55,8 @@ export interface QueueEnvLike {
   MQ_RATE_LIMIT?: number;
   MQ_DEAD_LETTER_MAX?: number;
   MQ_SHUTDOWN_TIMEOUT?: number;
+  /** bullmq 失速检测间隔（毫秒；0 表示用 bullmq 默认 30s） */
+  MQ_STALLED_MS?: number;
   /** bullmq 缺 MQ_URL 时的回退来源 */
   CACHE_URL?: string;
 }
@@ -70,6 +72,7 @@ const DEFAULTS = {
   rateLimit: 0,
   deadLetterMax: 1000,
   shutdownTimeout: 30,
+  stalledInterval: 30_000,
 };
 
 /**
@@ -95,6 +98,8 @@ export function buildQueueOptions(env: QueueEnvLike, overrides: Partial<QueueRun
     rateLimit: overrides.rateLimit ?? env.MQ_RATE_LIMIT ?? DEFAULTS.rateLimit,
     deadLetterMax: overrides.deadLetterMax ?? env.MQ_DEAD_LETTER_MAX ?? DEFAULTS.deadLetterMax,
     shutdownTimeoutMs: overrides.shutdownTimeoutMs ?? Math.round((env.MQ_SHUTDOWN_TIMEOUT ?? DEFAULTS.shutdownTimeout) * 1000),
+    stalledIntervalMs:
+      overrides.stalledIntervalMs ?? (env.MQ_STALLED_MS !== undefined ? Math.max(0, Math.round(env.MQ_STALLED_MS)) : DEFAULTS.stalledInterval),
   };
 }
 
@@ -226,6 +231,7 @@ export class QueueModule {
               concurrency: runtime.concurrency,
               rateLimit: runtime.rateLimit,
               deadLetterMax: runtime.deadLetterMax,
+              stalledIntervalMs: runtime.stalledIntervalMs,
             });
           }
           if (runtime.driver !== 'memory') {

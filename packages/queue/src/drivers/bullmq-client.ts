@@ -69,6 +69,8 @@ export interface BullWorkerLike {
   on(event: 'failed', handler: (job: BullJobLike, error: Error) => void): unknown;
   /** 消费器自身异常事件 */
   on(event: 'error', handler: (error: Error) => void): unknown;
+  /** 失速事件：任务锁丢失被搬回等待区（消费进程被强杀后由其他副本恢复） */
+  on(event: 'stalled', handler: (jobIds: string[]) => void): unknown;
   /** 其他事件 */
   on(event: string, handler: (...args: unknown[]) => void): unknown;
   /** 关闭消费（force=true 立即关闭，在途任务交由失速检测恢复） */

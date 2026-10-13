@@ -7,6 +7,7 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo 接入 CacheService 适配器（M3 遗留项②：权限缓存换 Redis）
+ * @modified 2026-10-13 donttemo 接入 AuthMaintenanceJobs（M3 遗留项④：refresh 过期记录定时清理）
  * @module example-api/auth
  */
 
@@ -14,7 +15,9 @@ import { Module } from '@nestjs/common';
 import { AuthModule } from '@fw/auth';
 import { AuditController } from './audit.controller.js';
 import { AuthController } from './auth.controller.js';
+import { AuthMaintenanceJobs } from './auth-maintenance.js';
 import { CacheBackedAuthCache } from './cache-backed-auth-cache.js';
+import { MaintenanceController } from './maintenance.controller.js';
 import { PrismaAuthStore } from './prisma-auth-store.js';
 import { RbacController } from './rbac.controller.js';
 import { UsersController } from './users.controller.js';
@@ -24,6 +27,7 @@ import { UsersController } from './users.controller.js';
  */
 @Module({
   imports: [AuthModule.forRoot({ store: PrismaAuthStore, cache: CacheBackedAuthCache })],
-  controllers: [AuthController, UsersController, RbacController, AuditController],
+  controllers: [AuthController, UsersController, RbacController, AuditController, MaintenanceController],
+  providers: [AuthMaintenanceJobs],
 })
 export class AppAuthModule {}

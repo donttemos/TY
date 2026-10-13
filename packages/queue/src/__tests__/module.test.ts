@@ -33,6 +33,7 @@ describe('buildQueueOptions', () => {
     expect(opts.rateLimit).toBe(0);
     expect(opts.deadLetterMax).toBe(1000);
     expect(opts.shutdownTimeoutMs).toBe(30_000);
+    expect(opts.stalledIntervalMs).toBe(30_000);
   });
 
   it('bullmq 缺 MQ_URL 时回退 CACHE_URL；前缀缺省为 fw:<APP_ENV>', () => {
@@ -54,6 +55,7 @@ describe('buildQueueOptions', () => {
       MQ_CONCURRENCY: 3,
       MQ_CRON_ENABLED: false,
       MQ_RATE_LIMIT: 50,
+      MQ_STALLED_MS: 2500,
     };
     const opts = buildQueueOptions(env);
     expect(opts.url).toBe('redis://mq:6380/1');
@@ -64,6 +66,7 @@ describe('buildQueueOptions', () => {
     expect(opts.concurrency).toBe(3);
     expect(opts.cronEnabled).toBe(false);
     expect(opts.rateLimit).toBe(50);
+    expect(opts.stalledIntervalMs).toBe(2_500);
   });
 
   it('overrides 优先级最高', () => {

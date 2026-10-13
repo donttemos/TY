@@ -31,6 +31,8 @@ export type UserStatus = 0 | 1;
 /** 用户（存储层结构，含口令哈希，禁止直接返回给前端） */
 export interface AuthUser {
   id: ID;
+  /** 租户归属；旧单租户应用可不设置 */
+  tenantId?: string;
   username: string;
   phone: string | null;
   email: string | null;
@@ -134,6 +136,7 @@ export interface CreateUserInput {
 export interface RequestUser {
   /** 主体 ID：登录用户为用户 ID；API Key / 服务账号为 `apikey:<主体名>` */
   id: ID;
+  tenantId?: string;
   /** 账号名（服务账号为主体名） */
   username: string;
   /** 角色编码列表（服务账号为空数组） */

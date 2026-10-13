@@ -2,7 +2,7 @@
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
-> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）、M6 CRUD 代码生成器（PRD-006）与 M7 队列与定时任务（PRD-007）已完成实现与验证，未发版；运行时已升级 NestJS 11 / Express 5，dev 工具链升至 vitest 4 / vite 8，**`pnpm audit` 生产与 dev 全量零漏洞**。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
+> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；M7 队列与定时任务（PRD-007）已完成实现及现有测试门禁，真实进程重启恢复验收待补，未发版；运行时已升级 NestJS 11 / Express 5，dev 工具链升至 vitest 4 / vite 8，**`pnpm audit` 生产与 dev 全量零漏洞**。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
 
 ## 版本与变更规则
 
@@ -28,9 +28,9 @@
   - **优雅停机**：先停调度再等在途任务，超时后 memory 未完成任务重新入队 / bullmq 交由失速检测恢复。
   - **可观测**：`/metrics/queue` Prometheus 文本（入队/成功/失败/死信/幂等跳过/超时/cron 触发与抢锁失败/成功率/平均耗时/积压 gauge）+ 队列就绪探针（`/ready` 的 `queue` 检查项）。
   - **管理面**：`/api/v1/admin/queue/*`（状态 / 指标 / 处理器 / cron 快照与手动触发 / 死信列表·重放·清理 / 暂停·恢复·清空），查看需 `system:queue:list`、变更需 `system:queue:manage`。
-- **配置**：新增 10 个 `MQ_*` 环境变量（driver / url / prefix / concurrency / max-attempts / backoff / job-timeout / cron-enabled / rate-limit / dead-letter-max / shutdown-timeout）；bullmq 缺 `MQ_URL` 时回退 `CACHE_URL`，两者皆缺时启动即失败（AC-001 配置守卫）。
+- **配置**：新增 11 个 `MQ_*` 环境变量（driver / url / prefix / concurrency / max-attempts / backoff / job-timeout / cron-enabled / rate-limit / dead-letter-max / shutdown-timeout）；bullmq 缺 `MQ_URL` 时回退 `CACHE_URL`，两者皆缺时启动即失败（AC-001 配置守卫）。
 - **example-api 接入**：`demo-queue` 模块（echo / flaky / permanent / slow / idempotent 五类任务 + 每 5 秒与每日两条 cron）+ `scripts/smoke-queue.mjs`（五阶段冒烟：memory 全能力、并发上限、令牌桶限速、bullmq 真实 Redis、配置守卫）。
-- **admin-web 队列管理页**（`/system/queue`）：积压总览卡 + 队列明细 + 死信列表（重放/清理/详情抽屉）+ 定时任务快照（手动触发），mock `/queue/*` 端点与权限点同步补齐；C-06 契约新增 §3.8。
+- **admin-web 队列管理页**（`/system/queue`）：积压总览卡 + 队列明细 + 死信列表（重放/清理/详情抽屉）+ 定时任务快照（手动触发），mock `/admin/queue/*` 端点与权限点同步补齐；C-06 契约新增 §3.8。
 
 ### M7 验证（2026-10-13，全量实跑）
 
@@ -38,6 +38,7 @@
 - `apps/example-api` 队列冒烟 **27/27**：memory 18 + 并发 1 + 限速 1 + **bullmq 真实 Redis 7**（echo/flaky 退避/permanent 死信/分布式守卫无告警/`/ready queue=ok`）+ 配置守卫 1；未设置 `SMOKE_REDIS_URL` 时 bullmq 阶段按设计跳过。
 - `apps/admin-web`：vue-tsc 通过、单测 **29/29**、mock 全链路冒烟 **57/57**（新增队列管理 17 项断言，含 `system:queue:*` 双向越权拦截）、bundle gzip **311.5 kB**（门禁 ≤ 600 kB）。
 - CI 已纳入 M7：构建与覆盖率循环新增 `@fw/queue`，新增「M7 队列端到端冒烟（SQLite）」步骤。
+- 待补验收：真实 Redis 上的进程终止与重启恢复演练。memory 驱动不保证跨进程保留任务。
 
 ### Changed（dev 工具链大版本升级，2026-10-13）
 
@@ -228,7 +229,7 @@
 
 - `apikey` / `session` / `oauth2` 策略仅有单测证据，example-api 未挂对应路由；端到端仅覆盖 `jwt`（M5 补）。
 - 权限缓存为进程内实现，多实例部署前需接 M4 Redis（否则角色变更在其它实例上最多 60s 延迟）。
-- `dataScope` 的 `org` / `org_below` 与 refresh 过期记录定时清理分别在 M8 / M7 落地。
+- `dataScope` 的 `org` / `org_below` 与 refresh 过期记录定时清理均移至 M8；M7 仅提供 cron 能力。
 
 ### Added（M2 数据库抽象层，2026-10-12）
 

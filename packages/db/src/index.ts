@@ -23,6 +23,7 @@ export type {
   Where,
 } from './repository.interface.js';
 export { PrismaRepository } from './prisma-repository.js';
+export type { PrismaRepositoryOptions } from './prisma-repository.js';
 export { DbModule, DB_CLIENT, type DbModuleOptions, type DbReadinessProbe } from './db.module.js';
 export {
   DEFAULT_SLOW_QUERY_MS,

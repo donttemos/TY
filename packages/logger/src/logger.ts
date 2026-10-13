@@ -6,7 +6,7 @@
  * @module logger
  * @since v0.1.0
  */
-import { getSpanId, getTraceId } from './context.js';
+import { getRequestContext, getSpanId, getTraceId } from './context.js';
 import { redactText, redactValue } from './redact.js';
 
 /** 日志级别，数值越大优先级越高 */
@@ -67,6 +67,7 @@ export interface LogRecord {
   level: LogLevel;
   traceId: string;
   spanId: string;
+  tenantId?: string;
   module: string;
   msg: string;
   ctx?: unknown;
@@ -130,6 +131,7 @@ export class Logger {
       level,
       traceId: getTraceId(),
       spanId: getSpanId(),
+      ...(getRequestContext()?.tenantId ? { tenantId: getRequestContext()?.tenantId } : {}),
       module: this.moduleName,
       msg: redactText(msg),
     };

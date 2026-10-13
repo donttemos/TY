@@ -20,6 +20,10 @@ export function traceMiddleware(req: Request, res: Response, next: NextFunction)
   const upstream = Array.isArray(header) ? header[0] : header;
   // 上游提供的 traceId 复用（跨服务链路贯通），否则服务端生成
   const traceId = upstream && /^[0-9a-f-]{8,64}$/i.test(upstream) ? upstream : generateTraceId();
+  const tenantHeader = req.headers['x-tenant-id'];
+  const tenantId = typeof tenantHeader === 'string' && /^[1-9][0-9]*$/.test(tenantHeader)
+    ? tenantHeader
+    : undefined;
   res.setHeader('X-Trace-Id', traceId);
-  runWithRequestContext({ traceId, spanId: '' }, next);
+  runWithRequestContext({ traceId, spanId: '', ...(tenantId ? { tenantId } : {}) }, next);
 }

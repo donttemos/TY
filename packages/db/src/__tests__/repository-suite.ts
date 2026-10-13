@@ -11,6 +11,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { PrismaRepository } from '../prisma-repository.js';
+import { runWithRequestContext } from '@fw/logger';
 import type { BaseEntity } from '../repository.interface.js';
 import type { PrismaClientLike } from '../types.js';
 
@@ -18,6 +19,7 @@ import type { PrismaClientLike } from '../types.js';
 export interface TestUserEntity extends BaseEntity {
   email: string;
   name: string;
+  tenantId: bigint;
 }
 
 /** 测试中直接使用的委托子集（三库生成的 client 结构完全一致） */
@@ -190,6 +192,30 @@ export function defineRepositorySuite(options: RepositorySuiteOptions): void {
       const second = await r.upsert({ email: 'up@test.local' }, { email: 'up@test.local', name: '不应' }, { name: '改' });
       expect(second.name).toBe('改');
       expect(await r.count()).toBe(1);
+    });
+  });
+
+  describe(`${tag} · shared tenant isolation（TC-TNT-001/002/003）`, () => {
+    it('A can neither read nor mutate B by ID; missing context cannot query', async () => {
+      const scoped = new PrismaRepository<TestUserEntity>(
+        getClient() as unknown as PrismaClientLike, 'testUser', { tenantScoped: true },
+      );
+      const inTenant = <T>(tenantId: string, fn: () => T): T =>
+        runWithRequestContext({ traceId: 'tenant-integration', spanId: '', tenantId, tenantVerified: true }, fn);
+      const b = await inTenant('18', () => scoped.create({ email: 'b@tenant.local', name: 'B' }));
+      await inTenant('17', async () => {
+        const a = await scoped.create({ email: 'a@tenant.local', name: 'A', tenantId: 18n });
+        expect(a.tenantId).toBe(17n);
+        expect(await scoped.findById(b.id)).toBeNull();
+        expect(await scoped.findOne({ email: b.email })).toBeNull();
+        expect((await scoped.list()).map((row) => row.id)).toEqual([a.id]);
+        expect((await scoped.page({ page: 1, pageSize: 10 })).total).toBe(1);
+        expect(await scoped.count()).toBe(1);
+        await expect(scoped.update(b.id, { name: 'hijacked' })).rejects.toThrow();
+        await expect(scoped.hardDelete(b.id)).rejects.toThrow();
+      });
+      expect((await getClient().testUser.findUnique({ where: { id: b.id } }))?.name).toBe('B');
+      await expect(scoped.list()).rejects.toMatchObject({ code: 4001 });
     });
   });
 }

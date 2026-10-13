@@ -73,11 +73,11 @@ export type {
 // ---------- 守卫与装饰器 ----------
 export { RbacGuard } from './rbac.guard.js';
 export type { GuardRequest } from './rbac.guard.js';
-export { Audit, AuthStrategy as AuthStrategyDecorator, CurrentUser, Permissions, Public } from './decorators.js';
+export { Audit, AuthStrategy as AuthStrategyDecorator, CurrentUser, IgnoreTenant, Permissions, Public } from './decorators.js';
 export type { AuditMeta } from './decorators.js';
 
 // ---------- 常量与类型 ----------
-export { PERM, ROLE, MASKED, SENSITIVE_FIELDS, META_AUDIT, META_PERMISSIONS, META_PUBLIC, META_STRATEGY, DEFAULT_PUBLIC_PATHS } from './constants.js';
+export { PERM, ROLE, MASKED, SENSITIVE_FIELDS, META_AUDIT, META_IGNORE_TENANT, META_PERMISSIONS, META_PUBLIC, META_STRATEGY, DEFAULT_PUBLIC_PATHS } from './constants.js';
 export type { PermissionCode } from './constants.js';
 export type {
   AuditAction,

@@ -12,8 +12,8 @@
 | [PRD-004](./prd-004-cache-layer.md) | M4 | 缓存层 | M1 | P1 | 已实现 |
 | [PRD-005](./prd-005-admin-template.md) | M5 | 管理后台模板 | M3 | P0 | 草案 |
 | [PRD-006](./prd-006-code-generator.md) | M6 | CRUD 代码生成器 | M2, M5 | P1 | 已实现（未发版） |
-| [PRD-007](./prd-007-queue-scheduler.md) | M7 | 队列与定时任务 | M1, M4 | P2 | 草案 |
-| [PRD-008](./prd-008-multitenancy-scale.md) | M8 | 多租户与规模化演进 | M2–M4 | P2 | 草案 |
+| [PRD-007](./prd-007-queue-scheduler.md) | M7 | 队列与定时任务 | M1, M4 | P2 | 已实现（重启验收待补，未发版） |
+| [PRD-008](./prd-008-multitenancy-scale.md) | M8 | 多租户与规模化演进 | M2–M4、M7 | P2 | 已定稿 |
 
 ## 待规划 PRD（尚未排期）
 

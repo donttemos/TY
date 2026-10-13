@@ -231,7 +231,7 @@ describe('数据权限与免认证路径', () => {
   it('探针与指标路径免认证（前缀匹配，忽略查询串）', async () => {
     const h = createHarness();
     await h.seed();
-    const guard = new RbacGuard(new Reflector(), h.registry, h.permissions, h.store, h.options);
+    const guard = new RbacGuard(new Reflector(), h.registry, h.permissions, h.store, h.options, h.audit);
     for (const url of ['/health', '/ready', '/metrics', '/health?verbose=1', '/ready/db']) {
       await expect(guard.canActivate(fakeContext(makeRequest({}, '10.0.0.1'), undefined, undefined, url))).resolves.toBe(true);
     }

@@ -140,6 +140,7 @@ describe('AuthModule.forRoot', () => {
       moduleRef.get(PermissionService),
       store,
       moduleRef.get(AUTH_OPTIONS),
+      moduleRef.get(AuditService),
     );
 
     const adminRole = store.seedRole({ code: 'admin', name: 'admin', dataScope: 'all', isSystem: true });

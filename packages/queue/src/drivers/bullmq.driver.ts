@@ -38,6 +38,8 @@ export interface BullmqDriverOptions {
   rateLimit: number;
   /** 死信（failed 集合）保留上限 */
   deadLetterMax: number;
+  /** 失速检测间隔（毫秒；缺省/0 = 用 bullmq 默认 30s） */
+  stalledIntervalMs?: number;
   /**
    * 自定义 bullmq 模块（测试注入结构桩；缺省走 `import('bullmq')`）。
    * 用于在不依赖真实 Redis 的前提下验证驱动适配层（选项映射、事件回调、统计口径）。
@@ -319,6 +321,8 @@ export class BullmqQueueDriver implements QueueDriverPort {
         prefix: this.options.prefix,
         concurrency: this.options.concurrency,
         ...(this.options.rateLimit > 0 ? { limiter: { max: this.options.rateLimit, duration: 1000 } } : {}),
+        // 失速检测：消费进程被强杀后，在途任务最长等 stalledInterval 被搬回等待区并重试
+        ...(this.options.stalledIntervalMs && this.options.stalledIntervalMs > 0 ? { stalledInterval: this.options.stalledIntervalMs } : {}),
         settings: {
           // 与 memory 驱动共用同一套退避语义：序列随任务下发，第 n 次重试等待第 n 项
           backoffStrategy: (attemptsMade: number, _type?: string, _err?: Error, job?: { data?: unknown }): number =>
@@ -326,6 +330,9 @@ export class BullmqQueueDriver implements QueueDriverPort {
         },
       },
     );
+    worker.on('stalled', (jobIds: string[]) => {
+      logger.warn('检测到失速任务，已搬回等待区重试', { queue: name, jobIds });
+    });
     worker.on('failed', (job: BullJobLike, error: Error) => {
       const attempts = job.opts.attempts ?? 1;
       if (job.attemptsMade >= attempts) {
@@ -337,6 +344,9 @@ export class BullmqQueueDriver implements QueueDriverPort {
     });
     this.workers.set(name, worker);
     logger.debug('队列消费器已就绪', { queue: name, concurrency: this.options.concurrency });
+    if (process.env.MQ_DEBUG_WORKER === '1') {
+      logger.info('[debug] bullmq worker 选项', { queue: name, opts: JSON.stringify((worker as { opts?: unknown }).opts) });
+    }
   }
 
   /** 任务执行：把 bullmq 任务还原为框架任务记录并交给执行器 */
