@@ -19,7 +19,9 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "matrix:setup": "node scripts/matrix-db-setup.mjs",
+    "matrix:generate": "prisma generate --schema prisma/test-schema.mysql.prisma && prisma generate --schema prisma/test-schema.postgresql.prisma"
   },
   "dependencies": {
     "@fw/config": "workspace:*",

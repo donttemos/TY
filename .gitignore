@@ -24,6 +24,11 @@ Thumbs.db
 
 # Prisma 生成产物（prisma generate 的输出，含平台相关二进制，CI 会重新生成）
 packages/db/prisma/test-client/
+# 三库一致性矩阵的 prisma generate 输出（T-M2-07，由 packages/db/scripts/matrix-db-setup.mjs 配套生成）
+packages/db/prisma/matrix-client-*/
+
+# 三库矩阵/联通性探测的临时脚本与产物（本地一次性，不入版本库）
+.tmp-dbtest/
 
 # 本地工具数据（AI 会话状态与项目记忆，不入版本库）
 .workbuddy/

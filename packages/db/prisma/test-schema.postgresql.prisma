@@ -1,0 +1,29 @@
+// @file 三库矩阵专用 schema — PostgreSQL 变体（不随业务发布）
+// @description 与 test-schema.prisma 模型定义逐字段一致，仅 datasource.provider 与 client 输出目录不同。
+//   用于 T-M2-07「三库一致性矩阵」：切换数据库只改 provider + url（ADR-0002/ADR-0007），
+//   业务代码（PrismaRepository）diff = 0。
+//   client 生成到 prisma/matrix-client-postgresql，避免与 sqlite 测试产物冲突。
+// @author donttemo
+// @created 2026-10-13
+// @module @fw/db
+generator client {
+  provider = "prisma-client-js"
+  output   = "../prisma/matrix-client-postgresql"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model TestUser {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String
+  phone     String?
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String   @default("system")
+  updatedBy String   @default("system")
+}

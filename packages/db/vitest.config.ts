@@ -10,6 +10,10 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['src/**/__tests__/**/*.test.ts'],
+    // 远端三库矩阵（MySQL/PostgreSQL）单用例含批量造数与多次网络往返，
+    // 默认 5s 无法覆盖；本地 SQLite 用例远低于该阈值，放宽不影响离线反馈速度。
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary'],

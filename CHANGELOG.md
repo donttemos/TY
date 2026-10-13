@@ -16,6 +16,25 @@
 
 （M5 管理后台模板进行中，暂无对外可见变更）
 
+### Added（数据库联通性与三库切换实测，2026-10-13）
+
+**`@fw/db` 三库一致性矩阵（T-M2-07，可执行化）**
+
+- 新增方言 schema 变体 `prisma/test-schema.mysql.prisma` / `prisma/test-schema.postgresql.prisma`：与 SQLite 版**模型段逐字节一致**（MD5 相同），仅 `provider` + `url` + client 输出目录不同——把 ADR-0002「切换只改 datasource 两行」变成可 `diff` 的事实。
+- 新增建表脚本 `packages/db/scripts/matrix-db-setup.mjs`（npm: `matrix:setup`）：`prisma migrate diff --from-empty --to-schema-datamodel --script` 生成方言 SQL → `prisma db execute --file` 应用，跨平台，不依赖 mysql/psql 客户端。
+- 新增共享断言套件 `src/__tests__/repository-suite.ts`（`defineRepositorySuite()`）与矩阵测试 `prisma-repository.matrix.test.ts`：**sqlite / mysql / postgres 三个驱动共用同一份 11 项断言**；`DB_DRIVER` 未设置时整文件跳过，保证离线单测与覆盖率门禁不被远端依赖阻塞。
+- 实测结论：三库 11/11 全绿；`packages/db/src` 业务源码（`prisma-repository.ts` 等）**零改动**，符合 ADR-0007。
+- `vitest.config.ts` 增设 `testTimeout` / `hookTimeout` = 60s（远端矩阵单用例含批量造数，默认 5s 不足）。
+
+**`@fw/cache` 真实 Redis 驱动联调**
+
+- `apps/example-api/scripts/smoke-cache.mjs` 新增**阶段 D**（`SMOKE_REDIS_URL` 门控）：真实实例的读写 / `@Cacheable` 命中 / 标签失效 / 分布式锁 / 指标，并以「零降级 + `/ready cache=ok`」排除静默降级假绿。带真实 Redis 时 M4 冒烟 **18/18**。
+
+**文档**
+
+- 新增 [`docs/93-db-connectivity-switch-test.md`](./docs/93-db-connectivity-switch-test.md)：连通/鉴权实测（含 PG SCRAM-SHA-256 完整握手）、三库矩阵结果、键空间独立核验、发现与修复、遗留 T-01~T-05。
+- 验收总纲遗留 **R-04（三库矩阵）**、**R-06（Redis 集成）** 完成实测闭环。
+
 ## [0.1.0] - 2026-10-13
 
 > 首个可运行版本。含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层。
