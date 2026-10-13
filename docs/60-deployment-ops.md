@@ -82,6 +82,13 @@
 | | `TENANT_JWT_CLAIM` | 否 | `tenantId` | JWT claim 来源的字段名（取 access token 载荷） |
 | | `TENANT_CACHE_TTL` | 否 | 60 | `tenants` 表查询结果的内存缓存 TTL，单位秒；租户停用/换库等管理操作最多延迟一个 TTL 生效 |
 | | `TENANT_DB_KEY` | 否 | 空 | dedicated 租户独立库连接串的加密密钥（64 位十六进制或 base64）；缺省用内置开发密钥并打印告警，**生产必须显式配置**。种子写入与运行解密须用同一密钥，轮换密钥需重写 `db_url_enc` |
+| 传输 | `TRANSPORT_DRIVER` | 否 | in-process | `in-process`（进程内直连，单体零依赖）/ `redis`（跨进程 RPC）；`tcp`/`kafka` 尚未实现，非法取值启动即失败 |
+| | `TRANSPORT_URL` | 条件 | — | redis 驱动的 Redis 连接串；留空回退 `CACHE_URL`，两者皆空则启动失败 |
+| | `TRANSPORT_PREFIX` | 否 | `fw:<APP_ENV>` | 传输键前缀，部署间须隔离（防多环境串消息） |
+| | `TRANSPORT_TIMEOUT_MS` | 否 | 5000 | 单次传输调用超时（毫秒，100~600000）；超时即失败不等满 |
+| | `TRANSPORT_ROLE` | 否 | both | 本进程角色：`caller` 只发起调用 / `handler` 只处理请求 / `both` 两者兼顾；微服务拆分后按进程职责裁剪 |
+| | `TRANSPORT_INSTANCE_ID` | 否 | `host-<pid>` | 实例标识（诊断用：跨进程区分处理方） |
+| | `TRANSPORT_SHUTDOWN_TIMEOUT` | 否 | 10 | 传输优雅停机等待在途请求的超时（秒） |
 | 日志 | `LOG_LEVEL` | 否 | info | 级别 |
 | | `LOG_FORMAT` | 否 | json | 容器环境固定 json |
 | 追踪 | `OTEL_ENABLED` | 否 | false | M8 起支持 |
@@ -104,6 +111,14 @@
 - 路由层按进程内 LRU + 空闲淘汰管理独立库连接（默认上限 32、空闲 10 分钟），实例重启后按请求懒建连；
 - 新增 dedicated 租户流程：建同 schema 空库 → 写 `tenants` 行（密文连接串）→ 建账号（`tenant_id` = 新租户）→ 验证 `TENANT_CACHE_TTL` 内生效；
 - 停用 / 回收租户：`status=0` 立即 fail-closed（403/4001），独立库数据按合同约定归档后再下线。
+
+**传输层角色裁剪（M8 T-M8-05）**：`in-process` 驱动为单体默认，进程内直连零外部依赖，不涉及跨机语义。拆分为多进程 / 多实例时切 `redis` 驱动并按进程职责设 `TRANSPORT_ROLE`：
+
+- `handler` / `both`：消费 `<前缀>:req:<address>` 并注册本地 `@TransportHandler`，只应部署在承载对应服务的进程；`caller` 只发起调用不起消费循环，避免重复竞争；
+- redis 驱动要求 `TRANSPORT_URL`（缺省回退 `CACHE_URL`）**启动期即可达**——连接串缺失或不可达时进程启动即失败（fail-fast），不会带病进入服务中；
+- 调用方超时（`TRANSPORT_TIMEOUT_MS`，默认 30000）到达即失败返回 503/9002，处理方执行上限取信封内调用方超时，两侧语义对等；`TRANSPORT_SHUTDOWN_TIMEOUT` 控制停机时在途请求的宽限；
+- redis 驱动复用缓存集群时建议独立 `TRANSPORT_PREFIX` 隔离键空间；对消息可靠性有要求时按缓存章节为 Redis 配置持久化；
+- `ioredis` 为 optional peer 依赖，仅 `redis` 驱动按需安装（`pnpm add ioredis`）。
 
 ## 4. 小档部署（单机 Docker）
 

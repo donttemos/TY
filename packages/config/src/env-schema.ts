@@ -8,6 +8,7 @@
  * @modified 2026-10-13 donttemo M7 新增 10 个 MQ_* 键（连接/前缀/并发/尝试/退避/超时/cron/限速/死信上限/停机等待）
  * @modified 2026-10-13 donttemo M8 新增 6 个 TENANT_* 键（总开关/解析顺序/请求头名/基准域名/JWT claim/缓存TTL）
  * @modified 2026-10-14 donttemo M8 T-M8-02 新增 TENANT_DB_KEY（dedicated 租户独立库连接串加密密钥）
+ * @modified 2026-10-14 donttemo M8 T-M8-05 新增 7 个 TRANSPORT_* 键（驱动/连接/前缀/超时/角色/实例标识/停机等待）
  * @modified 2026-10-13 donttemo 新增 MQ_STALLED_MS（bullmq 失速检测间隔，TC-JOB-008 演练可调）
  * @module config
  * @since v0.1.0
@@ -28,6 +29,10 @@ export const AUTH_STRATEGY_VALUES = ['jwt', 'session', 'oauth2', 'apikey'] as co
 export const AUTH_PASSWORD_POLICY_VALUES = ['low', 'medium', 'high'] as const;
 /** 队列驱动可选值（M7 起生效；`kafka` 仅预留驱动端口，M8 落地，故暂不入枚举——非法取值启动即失败） */
 export const MQ_DRIVER_VALUES = ['memory', 'bullmq'] as const;
+/** 传输驱动可选值（M8 起生效，PRD-008 FR-06；`tcp` / `kafka` 仅预留驱动端口，暂不入枚举——非法取值启动即失败） */
+export const TRANSPORT_DRIVER_VALUES = ['in-process', 'redis'] as const;
+/** 传输角色可选值（M8 起生效）：caller 只调用 / handler 只处理 / both 两者兼顾 */
+export const TRANSPORT_ROLE_VALUES = ['caller', 'handler', 'both'] as const;
 /** 租户识别来源可选值（M8 起生效，PRD-008 FR-01 三级回退） */
 export const TENANT_SOURCE_VALUES = ['subdomain', 'header', 'jwt'] as const;
 
@@ -160,6 +165,20 @@ export const envSchema = z.object({
    * 缺省时用内置开发密钥（仅限本地开发，生产必须显式配置）。
    */
   TENANT_DB_KEY: optionalString().describe('dedicated 租户独立库连接串加密密钥（TENANT_DB_KEY，64 位十六进制）'),
+  /** 传输驱动（M8 T-M8-05，PRD-008 FR-06）：in-process 单体直连 / redis 跨进程 RPC；tcp / kafka 预留 */
+  TRANSPORT_DRIVER: z.enum(TRANSPORT_DRIVER_VALUES).default('in-process').describe('传输驱动'),
+  /** 传输 Redis 连接串（redis 驱动必填；留空时回退 CACHE_URL，两者都为空则启动失败） */
+  TRANSPORT_URL: optionalUrl().describe('传输 Redis 连接串（redis 驱动）'),
+  /** 传输 key 前缀；留空时自动使用 `fw:<APP_ENV>`（避免多应用/多环境串数据） */
+  TRANSPORT_PREFIX: z.string().default('').describe('传输 key 前缀'),
+  /** 单次传输调用超时（毫秒）：超时抛错不等满（BLPOP 按秒粒度循环等待保证精度） */
+  TRANSPORT_TIMEOUT_MS: z.coerce.number().int().min(100).max(600000).default(5000).describe('单次传输调用超时（毫秒）'),
+  /** 本进程传输角色：caller 只发起调用 / handler 只处理请求 / both 两者兼顾（默认） */
+  TRANSPORT_ROLE: z.enum(TRANSPORT_ROLE_VALUES).default('both').describe('本进程传输角色'),
+  /** 传输实例标识（诊断用：跨进程区分处理方）；缺省 `host-<pid>` */
+  TRANSPORT_INSTANCE_ID: optionalString().describe('传输实例标识（TRANSPORT_INSTANCE_ID）'),
+  /** 传输优雅停机等待在途请求的超时（秒） */
+  TRANSPORT_SHUTDOWN_TIMEOUT: z.coerce.number().int().min(1).max(300).default(10).describe('传输优雅停机等待超时（秒）'),
 });
 
 /** 校验后的环境变量类型 */
@@ -174,5 +193,7 @@ export const ENUM_OPTIONS: Record<string, readonly string[]> = {
   AUTH_STRATEGY: AUTH_STRATEGY_VALUES,
   AUTH_PASSWORD_POLICY: AUTH_PASSWORD_POLICY_VALUES,
   MQ_DRIVER: MQ_DRIVER_VALUES,
+  TRANSPORT_DRIVER: TRANSPORT_DRIVER_VALUES,
+  TRANSPORT_ROLE: TRANSPORT_ROLE_VALUES,
   TENANT_ORDER: TENANT_SOURCE_VALUES,
 };

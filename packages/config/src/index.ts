@@ -15,6 +15,8 @@ export {
   CACHE_DRIVER_VALUES,
   AUTH_STRATEGY_VALUES,
   MQ_DRIVER_VALUES,
+  TRANSPORT_DRIVER_VALUES,
+  TRANSPORT_ROLE_VALUES,
 } from './env-schema.js';
 export { ConfigValidationError, translateIssues } from './config-error.js';
 export type { ConfigIssue } from './config-error.js';

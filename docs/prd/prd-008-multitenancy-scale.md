@@ -7,6 +7,8 @@
 > 变更记录：2026-10-14 donttemo 实现进展——T-M8-01（三级回退解析 / fail-closed / 上下文透传，冒烟阶段 A+B）与 T-M8-02（`@fw/db` TenantDataSource：dedicated 独立库懒创建 + LRU/空闲淘汰 + Repository 按上下文选路，冒烟阶段 C 11 项）已完成；FR-01/FR-02/FR-03 已落地，FR-04~11 进行中。§7 AC 待里程碑收尾（T-M8-08）按门禁统一勾选。
 >
 > 变更记录：2026-10-14 donttemo T-M8-04 落地——FR-04/FR-05 完成：`@fw/auth` 新增 `DataScopeOrgPort` 端口与四档解析（`resolveDataScopeFilter` / `assertWithinDataScope`，fail-closed 收敛 self + `pendingScopes`），`departments` + `user_department` 两表与迁移落地，用户/角色分配/状态/审计四链路按档过滤（部门集合仅服务端注入，禁客户端传参），详情越权 403/3002 先于存在性查询；种子建五部门树 + 三角色 + 7 示范账号；TC-TNT-004 冒烟阶段 D 19 项断言全绿（四档精确集合 / 三类越权 / 审计收敛）。剩余 FR-06~11 进行中，§7 AC 仍待 T-M8-08 统一勾选。
+>
+> 变更记录：2026-10-14 donttemo T-M8-05 落地——FR-06 完成：新框架包 `@fw/transport` 以双驱动端口模式（沿用 M7 `@fw/queue` 先例）提供微服务调用语义，`TransportModule.forRoot()` 按 `TRANSPORT_DRIVER` 装配 **in-process**（进程内直连，单体零依赖）或 **redis**（跨进程 RPC：LPUSH 信封 + BLPOP 应答 + BRPOP 1s 轮询消费 + EXPIRE 60s 兜底）双驱动，**切换只改配置，调用方代码 diff = 0**；`TransportService` 只依赖端口并承载统计埋点与启停编排；错误经 serialize/deserialize 对等传播（BizError 按 ERROR_CODE_META 重建），处理方执行上限取信封内调用方超时；`TRANSPORT_ROLE`（caller/handler/both）按进程职责裁剪拓扑；`@TransportHandler` 声明式注册 + `createTransportProxy` 客户端代理（黑名单防生命周期钩子误触发）；配置 7 键（redis 缺连接串回退 CACHE_URL、两者皆缺启动即失败，tcp/kafka 仅预留不入枚举）。TC-TNT-005 冒烟 17/17 全绿（in-process 5 项 + redis 单进程 5 项 + redis 双进程跨进程 3 项 + 超时 fail-fast 3 项 + 配置守卫 1 项），单测 78/78、覆盖率 95.09/93.82/94.33/90.54。剩余 FR-07~11 进行中，§7 AC 仍待 T-M8-08 统一勾选。
 
 ## 1. 背景与目标
 

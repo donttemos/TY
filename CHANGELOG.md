@@ -2,7 +2,7 @@
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
-> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；M7 队列与定时任务（PRD-007）已完成实现与全量验收（含真实 Redis 失速恢复演练 TC-JOB-008，见 docs/94-queue-stall-drill.md），未发版；**M8 多租户与规模化演进（PRD-008）进行中：T-M8-01 租户上下文 / T-M8-02 dedicated 独立库路由 / T-M8-04 组织架构与数据权限四档已完成（冒烟 48/48）**；运行时已升级 NestJS 11 / Express 5，dev 工具链升至 vitest 4 / vite 8，**`pnpm audit` 生产与 dev 全量零漏洞**。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
+> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；M7 队列与定时任务（PRD-007）已完成实现与全量验收（含真实 Redis 失速恢复演练 TC-JOB-008，见 docs/94-queue-stall-drill.md），未发版；**M8 多租户与规模化演进（PRD-008）进行中：T-M8-01 租户上下文 / T-M8-02 dedicated 独立库路由 / T-M8-04 组织架构与数据权限四档 / T-M8-05 transport 切换已完成（冒烟 48/48 + 17/17）**；运行时已升级 NestJS 11 / Express 5，dev 工具链升至 vitest 4 / vite 8，**`pnpm audit` 生产与 dev 全量零漏洞**。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
 
 ## 版本与变更规则
 
@@ -16,7 +16,7 @@
 
 ### Added（M8 多租户与规模化演进，2026-10-14）
 
-> PRD-008 进行中：T-M8-01（租户上下文与 shared 隔离）、T-M8-02（dedicated 独立库路由）与 T-M8-04（组织架构与数据权限四档）已完成实现与验证，未发版。
+> PRD-008 进行中：T-M8-01（租户上下文与 shared 隔离）、T-M8-02（dedicated 独立库路由）、T-M8-04（组织架构与数据权限四档）与 T-M8-05（transport 切换）已完成实现与验证，未发版。
 
 - **`@fw/tenant`（新框架包）**：三级回退租户解析（子域名 → 请求头 `X-Tenant-Id` → JWT claim，顺序与各级开关可配，PRD-008 §9 定稿）+ TTL 缓存 + fail-closed（缺失/不存在/停用/过期租户 → 403/4001 `TENANT_INVALID`）。
   - **上下文透传**：解析结果经 `@fw/logger` AsyncLocalStorage 传递（`tenantId` / `tenantIsolation` / `tenantDbUrl`），日志自动携带 `tenantId`；dedicated 连接串仅进程内传递，禁入日志/审计。
@@ -31,12 +31,22 @@
   - **DI 适配**：`PrismaAuthStore` 同时实现 `AuthStore` + `DataScopeOrgPort`，经 `DATA_SCOPE_ORG` 令牌工厂适配（启动期方法存在性 fail-fast 校验）。
   - **example-api 种子**：hq → rd → {rd-fe, rd-be}、hq → mkt 五部门树 + `dept_leader`（org_below）/ `dept_member`（org）/ `self_updater`（self）三角色 + 7 个示范账号（bob/carol/dave/erin/frank/grace/selfscope）。
 - **example-api**：`tenants` 模型 + 迁移 + 种子（legacy / acme / off / dedicated 四租户，dedicated 的 `db_url_enc` 为 AES-256-GCM 密文）；`PrismaTenantStore` 解密独立库连接串；`/api/v1/demo/tenant-items` 鉴权验证端点；M3 遗留④ refresh 过期记录定时清理（`auth.refresh-cleanup`，分布式锁 + 快照端点）。
+- **`@fw/transport`（新框架包，T-M8-05，PRD-008 FR-06 / TC-TNT-005）**：微服务调用语义的传输层——业务模块经端口接口相互调用，`TransportModule.forRoot()` 按 `TRANSPORT_DRIVER` 装配 **in-process**（进程内直连，单体零依赖）或 **redis**（跨进程 RPC）双驱动，**切换只改配置，调用方代码 diff = 0**。
+  - **双驱动端口模式**（沿用 M7 `@fw/queue` 先例）：`TransportDriverPort`（register / start / call / ping / handledCount / close）两种实现；`TransportService` 只依赖端口，承载统计埋点（calls / successes / failures / timeouts）与启动/停机编排。
+  - **redis RPC 协议**：调用方 `LPUSH <prefix>:req:<address>` 投递信封（含 replyTo / callerId / timeoutMs）→ `BLPOP <prefix>:rpl:<id>` 等应答（按秒粒度循环保证超时精度）→ 读到后 `DEL`；处理方每地址一条阻塞连接 `BRPOP` 1s 轮询消费，执行后 `LPUSH` 应答 + `EXPIRE 60s` 兜底；连接分工（caller 与 worker 分离）防阻塞命令互堵，`maxRetriesPerRequest: 2` 保证 Redis 不可达快速失败。
+  - **对等语义**：处理器异常经 `serializeTransportError` 过线、`deserializeTransportError` 按 `ERROR_CODE_META` 重建 BizError——两种驱动下调用方 catch 到同一错误类；处理方执行上限取信封内调用方超时（`withTimeout`），双方超时语义一致。
+  - **角色语义**（`TRANSPORT_ROLE`）：`caller` 只发起调用（不起消费循环、本地不解析）/ `handler` 只处理请求 / `both`（默认）两者兼顾——单体部署保持 both，微服务拆分后按进程职责裁剪。
+  - **声明式注册与客户端代理**：`@TransportHandler('demo-transport.echo')` 类装饰器 + 启动期 `scanTransportHandlers` 扫描 Nest 容器（对齐 `@JobHandler`）；`createTransportProxy<T>(transport, prefix)` 以 Proxy 把端口方法映射为 `<前缀>.<方法名>` 调用（NON_METHOD_PROPS 黑名单 + 哑构造器，防生命周期钩子与序列化误触发）。
+  - **配置**：`@fw/config` 新增 7 个 `TRANSPORT_*` 键（driver / url / prefix / timeoutMs / role / instanceId / shutdownTimeout）；`tcp` / `kafka` 仅预留不入枚举（非法值启动即失败）；redis 缺 `TRANSPORT_URL` 时回退 `CACHE_URL`，两者皆缺**启动即失败**（配置守卫，与 M7 一致）；ioredis 为 optional peerDependency 懒加载，in-process 驱动零 Redis 依赖。
+- **example-api 传输演示模块**（`demo-transport`）：`EchoPort` 端口契约 + `ECHO_PORT` 代理工厂（`@TransportHandler('demo-transport.echo')` 提供方）+ `/api/v1/demo-transport/echo`（返回 callerId，冒烟据此判定跨进程）与 `/api/v1/demo-transport/stats`（driver / role / 地址 / 调用与处理计数）；错误映射：BizError 原样 / 超时与驱动不可用→9002 / 未注册→1002 / 其它→9001。
 
 ### M8 验证（2026-10-14，全量实跑）
 
 - 多租户冒烟 `smoke-tenant.mjs` **48/48**：阶段 A fail-closed 与三级回退（16 项，含跨租户越权拦截）+ 阶段 B 单租户回归（2 项）+ 阶段 C dedicated 独立库路由（11 项）——dedicated 租户读写落在 `prisma/tenant-dedicated.db`（独立库列表 total=1），共享库查无此数据、主库 tenants 元数据仍在，缺失租户标识仍 403/4001，共享库租户不受影响 + **阶段 D 数据权限四档（19 项）**——四档精确集合（all 11 账号 / self 仅本人 / org={bob,carol}、org={alice,dave,erin} / org_below 六人闭包）、三类详情越权 403+3002、范围内禁用恢复、审计收敛。
-- `@fw/db` 单测 **67/67**（新增 `TenantDataSource` 14 项：选路回退 / 缓存复用 / LRU 与空闲淘汰 / 创建失败重试 / 停机断开 / Repository 三条路径选路）；`@fw/logger` 17/17、`@fw/tenant` 19/19 全绿；**`@fw/auth` 108/108**（新增四档解析 / 越权校验 / 闭包算法 14 项）。
-- 回归：队列冒烟 22/22（未设 `SMOKE_REDIS_URL`，真实 Redis 阶段按设计跳过）、鉴权冒烟 25/25、文件头门禁 284、裸 SQL 门禁 204。
+- 传输层冒烟 `smoke-transport.mjs` **17/17**（T-M8-05，PRD-008 FR-06 / TC-TNT-005）：**阶段 A in-process**（连续 5 次往返 / 本进程处理 handledBy=callerId / 统计快照 / `/ready` transport 探针 / 空消息 BizError 1001 原样传播）+ **阶段 B redis 单进程**（真实 Redis 连续 5 次往返 / 空消息跨进程序列化→重建错误码仍为 1001）+ **阶段 C redis 双进程**（A=caller / B=handler 同前缀，A 调用时 handledBy ≠ callerId 证明由另一进程处理；B 主动调用自证往返；caller 进程 handled=0）+ **阶段 D 超时 fail-fast**（无处理方 1500ms 窗口内 503/9002，耗时 2.26s 而非挂死）+ **阶段 E 配置守卫**（redis 缺连接串启动即失败 exit=1）。redis 阶段由 `SMOKE_REDIS_URL` 门控，CI 未设置则跳过。
+- `@fw/transport` 单测 **78/78**，覆盖率 **lines 95.09% / functions 93.82% / statements 94.33% / branches 90.54%**（门禁 85/85/65/85）：fake redis 经 `createClient` 注入驱动，覆盖 in-process 本地分发与角色语义、redis 协议往返（键命名/信封字段/应答清理/60s 兜底 TTL）、错误跨进程重建、无处理方与处理方双路径超时、启动后注册补起消费循环、坏消息丢弃、启动期 URL 守卫、装配与探针绑定。
+- `@fw/db` 单测 **67/67**（新增 `TenantDataSource` 14 项：选路回退 / 缓存复用 / LRU 与空闲淘汰 / 创建失败重试 / 停机断开 / Repository 三条路径选路）；`@fw/logger` 17/17、`@fw/tenant` 19/19 全绿；**`@fw/auth` 108/108**（新增四档解析 / 越权校验 / 闭包算法 14 项）；`@fw/config` 10/10。
+- 回归：队列冒烟 22/22、缓存冒烟 12/12、鉴权冒烟 25/25、多租户冒烟 48/48、传输冒烟 17/17；文件头门禁 313、裸 SQL 门禁 225。
 
 ### Added（M7 队列与定时任务，2026-10-13）
 

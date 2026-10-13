@@ -1,0 +1,47 @@
+{
+  "name": "@fw/transport",
+  "version": "0.1.0",
+  "description": "微服务传输层：统一调用端口、in-process/redis 双驱动、@TransportHandler 声明式注册与客户端代理，切换不改调用方代码（PRD-008 FR-06）",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@fw/config": "workspace:*",
+    "@fw/core": "workspace:*",
+    "@fw/logger": "workspace:*",
+    "@nestjs/common": "^11.2.7",
+    "@nestjs/core": "^11.2.7",
+    "reflect-metadata": "^0.2.2"
+  },
+  "peerDependencies": {
+    "ioredis": "^5.4.1"
+  },
+  "peerDependenciesMeta": {
+    "ioredis": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^11.2.7",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^4.1.11",
+    "ioredis": "^5.4.1",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.11"
+  }
+}

@@ -12,6 +12,8 @@
 # @modified 2026-10-13 donttemo M6：单测覆盖率循环纳入 @fw/cli（生成器 116 用例 / 覆盖率 ≥80% 门禁）
 # @modified 2026-10-13 donttemo M7：纳入 @fw/queue（构建 + 覆盖率门禁）并新增 M7 队列端到端冒烟步骤
 #   （memory 驱动全能力 + 并发/限速 + 配置守卫；bullmq 阶段由 SMOKE_REDIS_URL 门控，CI 未设置则跳过）
+# @modified 2026-10-14 donttemo M8 T-M8-05：纳入 @fw/transport（构建 + 覆盖率门禁）并新增 M8 传输层
+#   端到端冒烟步骤（in-process 全能力 + 配置守卫；redis 阶段由 SMOKE_REDIS_URL 门控，CI 未设置则跳过）
 # @module ci
 
 name: CI
@@ -45,7 +47,7 @@ jobs:
       - name: 构建全部包
         run: |
           pnpm --filter @fw/db exec prisma generate --schema prisma/test-schema.prisma
-          for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli @fw/queue; do
+          for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/transport; do
             pnpm --filter $pkg run build
           done
           pnpm --filter example-api run build
@@ -55,7 +57,7 @@ jobs:
       # @fw/cli 的生成器测试自带临时工程与回滚断言（PRD-006 FR-07/08），不依赖真实数据库
       - name: 单元测试（SQLite）
         run: |
-          for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli @fw/queue; do
+          for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/transport; do
             pnpm --filter $pkg run test:coverage
           done
 
@@ -97,6 +99,13 @@ jobs:
       - name: M7 队列端到端冒烟（SQLite）
         working-directory: apps/example-api
         run: node scripts/smoke-queue.mjs
+
+      # M8 传输层切换端到端冒烟：in-process 往返/统计/就绪探针/错误传播 + 配置守卫（PRD-008 FR-06 / TC-TNT-005）
+      # 脚本自带服务生命周期（端口 3400/3401，分阶段以不同 TRANSPORT_* 配置起停）；
+      # redis 阶段（单进程往返/双进程跨进程/超时 fail-fast）需 SMOKE_REDIS_URL，未设置则跳过
+      - name: M8 传输层端到端冒烟（SQLite）
+        working-directory: apps/example-api
+        run: node scripts/smoke-transport.mjs
 
       # 静态检查：文件头门禁 + 原生 SQL 白名单门禁
       - name: 文件头门禁

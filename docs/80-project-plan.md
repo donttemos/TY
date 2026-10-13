@@ -128,9 +128,11 @@ gantt
 
 ### M8 多租户与规模化（PRD-008）
 
-> **状态：进行中（2026-10-14，未发版）**。T-M8-01（租户上下文与 shared 隔离）、T-M8-02（dedicated 独立库路由）与
-> T-M8-04（组织架构与数据权限四档）已完成：多租户冒烟阶段 A+B+C+D 共 **48/48**，`@fw/auth` 单测 **108/108**（新增四档 14 项），
-> `@fw/db` 67/67、`@fw/tenant` 19/19、`@fw/logger` 17/17；T-M8-05~08 待启动。
+> **状态：进行中（2026-10-14，未发版）**。T-M8-01（租户上下文与 shared 隔离）、T-M8-02（dedicated 独立库路由）、
+> T-M8-04（组织架构与数据权限四档）与 T-M8-05（transport 切换）已完成：多租户冒烟阶段 A+B+C+D 共 **48/48**，
+> 传输冒烟 **17/17**（含真实 Redis 双进程跨进程调用与超时 fail-fast），`@fw/auth` 单测 **108/108**（新增四档 14 项），
+> `@fw/transport` 78/78（覆盖率 95.09/93.82/94.33/90.54，门禁 85/85/65/85），
+> `@fw/db` 67/67、`@fw/tenant` 19/19、`@fw/logger` 17/17、`@fw/config` 10/10；T-M8-06~08 待启动。
 
 | 任务 ID | 任务 | 产出 | 人日 | 依赖 | 验收 | 状态 |
 |---|---|---|---|---|---|---|
@@ -138,7 +140,7 @@ gantt
 | T-M8-02 | dedicated 独立库路由 | 数据源路由 | 3 | T-M8-01 | TC-TNT-003 | ✅ |
 | T-M8-03 | 越权防护与 fail-closed | 强制条件 | 2 | T-M8-01 | TC-TNT-001/002 | ✅（随 T-M8-01 落地） |
 | T-M8-04 | 组织架构与数据权限四档 | departments + scope | 3 | M3、T-M8-01 | TC-TNT-004 | ✅ |
-| T-M8-05 | transport 切换（in-process → redis） | 微服务通路 | 3 | M4/M7 | TC-TNT-005 | 待启动 |
+| T-M8-05 | transport 切换（in-process → redis） | 微服务通路 | 3 | M4/M7 | TC-TNT-005 | ✅ |
 | T-M8-06 | OpenTelemetry 接入 | 追踪导出 | 3 | M1 | TC-TNT-006 | 待启动 |
 | T-M8-07 | Helm Chart 与部署模板 | Chart + values | 3 | 全部 | TC-TNT-007 | 待启动 |
 | T-M8-08 | 三大演练与终验 | 演练记录 | 2 | 全部 | L3 发布门禁通过 | 待启动 |
@@ -250,7 +252,7 @@ gantt
 - [x] T-M7-05 幂等、限速与优雅停机（`idempotencyKey` + `@Idempotent` 载荷哈希推导，成功才置位；令牌桶限速 + 并发上限；停机先停调度再等在途，超时 memory 重新入队 / bullmq 交失速检测恢复；`/metrics/queue` Prometheus 文本 + `/ready` queue 探针）
 - [x] T-M7-06 队列管理页与指标（后端 `/api/v1/admin/queue/*` 11 端点 + `system:queue:list|manage` 权限；admin-web `/system/queue` 页：积压总览卡 / 队列明细 / 死信重放清理 / cron 快照与手动触发；mock `/admin/queue/*` 端点与 C-06 §3.8 契约；CI 新增 M7 冒烟步骤）
 
-**Backlog**：M8 进行中——T-M8-01（租户三级回退上下文 / fail-closed / 冒烟 16/16）、T-M8-02（dedicated 独立库路由 / 冒烟阶段 C 11 项）与 T-M8-04（组织架构与数据权限四档：`departments` + `user_department` / `DataScopeOrgPort` 四档解析与详情越权校验 / 冒烟阶段 D 19 项）**已完成（2026-10-14）**；T-M8-03 越权防护地基随 01 落地（Repository tenantWhere + `@IgnoreTenant` + 审计），T-M8-05~08 待启动；~~M3 遗留项④（refresh 过期记录定时清理）~~——**已完成（2026-10-13）**：example-api `auth.refresh-cleanup` 定时任务（`@Cron('0 3 * * *')` 加分布式锁，过期 30 天清理，`/api/v1/auth-maintenance/refresh-cleanup` 快照端点），冒烟阶段 A 覆盖注册与手动触发。
+**Backlog**：M8 进行中——T-M8-01（租户三级回退上下文 / fail-closed / 冒烟 16/16）、T-M8-02（dedicated 独立库路由 / 冒烟阶段 C 11 项）、T-M8-04（组织架构与数据权限四档：`departments` + `user_department` / `DataScopeOrgPort` 四档解析与详情越权校验 / 冒烟阶段 D 19 项）与 T-M8-05（transport 切换：`@fw/transport` 双驱动端口 + redis RPC 协议 + `@TransportHandler` 声明式注册 + 客户端代理 / 冒烟 17/17 含真实 Redis 双进程）**已完成（2026-10-14）**；T-M8-03 越权防护地基随 01 落地（Repository tenantWhere + `@IgnoreTenant` + 审计），T-M8-06~08 待启动；~~M3 遗留项④（refresh 过期记录定时清理）~~——**已完成（2026-10-13）**：example-api `auth.refresh-cleanup` 定时任务（`@Cron('0 3 * * *')` 加分布式锁，过期 30 天清理，`/api/v1/auth-maintenance/refresh-cleanup` 快照端点），冒烟阶段 A 覆盖注册与手动触发。
 
 **M7 验收待补（TC-JOB-008）——已完成（2026-10-13）**：真实 Redis 失速恢复演练通过并固化进 `smoke-queue.mjs` 阶段 F（31/31），恢复窗口 ≈ lockDuration 30s + `MQ_STALLED_MS` 检测间隔；演练暴露并修复「register 未建消费器」「ensureWorker 自递归死锁与重复建」两个框架缺陷，记录见 `docs/94-queue-stall-drill.md`。memory 驱动不承诺跨进程持久化。
 
