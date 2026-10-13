@@ -193,6 +193,12 @@ export interface PageParams {
 /** 审计查询入参 */
 export interface AuditQuery extends PageParams {
   userId?: ID;
+  /**
+   * 归属人 ID 集合（M8 T-M8-04）：userId 命中其中任一即返回（OR 语义）。
+   * 由数据范围解析注入（org / org_below 档展开部门成员），**禁止**来自客户端入参。
+   * 与 userId 同时传入时取交集（都不命中即空结果）。
+   */
+  userIds?: ID[];
   module?: string;
   action?: AuditAction;
   targetType?: string;
@@ -208,6 +214,11 @@ export interface UserQuery extends PageParams {
   keyword?: string;
   status?: number;
   roleId?: ID;
+  /**
+   * 可见部门 ID 集合（M8 T-M8-04）：用户属于其中任一部门即命中（OR 语义）。
+   * 由数据范围解析注入（org / org_below 档），**禁止**来自客户端入参——否则可越权放宽范围。
+   */
+  departmentIds?: ID[];
 }
 
 /** 用户列表项（不含口令哈希） */

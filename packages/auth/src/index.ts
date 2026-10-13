@@ -16,6 +16,7 @@ export {
   AUTH_SESSION_STORE,
   AUTH_STORE,
   AUTH_STRATEGY_REGISTRY,
+  DATA_SCOPE_ORG,
 } from './tokens.js';
 
 // ---------- 服务 ----------
@@ -37,8 +38,10 @@ export type { RotationOutcome } from './refresh-token.service.js';
 export { TokenBlacklist, BLACKLIST_PREFIX, CUTOFF_PREFIX } from './token-blacklist.js';
 export { PermissionService } from './permission.service.js';
 export type { UserAuthContext } from './permission.service.js';
-export { resolveDataScope } from './data-scope.js';
-export type { DataScopeFilter } from './data-scope.js';
+export { resolveDataScope, resolveDataScopeFilter, assertWithinDataScope } from './data-scope.js';
+export type { DataScopeFilter, DataScopeOrgPort } from './data-scope.js';
+export { collectDescendantIds } from './org-tree.js';
+export type { OrgTreeNode } from './org-tree.js';
 export { AuditService, sanitizeForAudit } from './audit.service.js';
 export type { AuditEntry } from './audit.service.js';
 export { AuditInterceptor } from './audit.interceptor.js';

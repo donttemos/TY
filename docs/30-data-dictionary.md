@@ -1,8 +1,9 @@
 # 通用应用框架 · ER 图与数据字典
 
-> 版本 v0.1 ｜ 状态：草案 ｜ 关联：[架构设计](./20-architecture.md) ｜ [PRD-003 鉴权](./prd/prd-003-auth-rbac.md) ｜ 更新：2026-10-09
+> 版本 v0.1 ｜ 状态：草案 ｜ 关联：[架构设计](./20-architecture.md) ｜ [PRD-003 鉴权](./prd/prd-003-auth-rbac.md) ｜ 更新：2026-10-14
 >
 > 说明：表结构按**领域分组**给出；标注 `M8` 的表属于后续里程碑，字段可能调整。`job_records` 是 M7 的规划模型，当前 memory/bullmq 实现未创建该业务表；示例业务表（`orders`）仅用于说明代码生成器的字段约定，不属于框架必需表。
+> `departments` / `user_department`（§3.7/§3.8）已于 M8 T-M8-04 落地（含数据权限四档解析），主键为 UUID 字符串（与 M3 各表一致，字典中的 bigint 为逻辑描述）。
 
 ## 1. 建模约定
 
@@ -287,13 +288,17 @@ erDiagram
 | 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
 |---|---|---|---|---|---|
 | `id` | bigint | 是 | — | 主键 | PK |
-| `parent_id` | bigint | 是 | 0 | 上级部门 | `idx_dept_parent` |
+| `parent_id` | bigint | 是 | 0 | 上级部门；'0' 为顶级 | `idx_dept_parent` |
 | `tenant_id` | bigint | 是 | 0 | 租户 ID | `idx_dept_tenant` |
 | `code` | varchar(64) | 否 | NULL | 部门编码 | UK（租户内唯一） |
 | `name` | varchar(64) | 是 | — | 部门名 | — |
 | `leader_id` | bigint | 否 | NULL | 负责人（users.id） | — |
 | `sort` | int | 是 | 0 | 排序 | — |
 | 通用字段 | — | — | — | 同上 | — |
+
+> 实现说明（M8 T-M8-04）：与 users/roles 等 M3 表同构，主键与外键均为 UUID 字符串（字典中的 bigint 为逻辑描述）。
+> 数据权限四档语义（PRD-008 FR-04）：`org` = 本人所在部门成员；`org_below` = 所在部门及全部下级（闭包，经 `@fw/auth` 的 `collectDescendantIds` 计算）；
+> 用户无部门归属时一律收敛为 `self`（fail-closed）。部门树暂不提供维护端点，由种子与运维脚本维护（Backlog）。
 
 ### 3.8 `user_department` 用户-部门（M8，关联表，支持多部门）
 

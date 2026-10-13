@@ -134,6 +134,12 @@
 | POST | `/users/:id/reset-password` | `user:reset-password` | 重置密码，返回一次性密码或触发重置流程 |
 | PUT | `/users/:id/status` | `user:update` | 启用 / 禁用 |
 
+> **数据权限四档（M8 T-M8-04，PRD-008 FR-04）**：以上列表与详情/写端点按当前用户生效的 `dataScope` 收敛——
+> `all` 全部数据；`org_below` 本部门及全部下级成员；`org` 本部门成员；`self` 仅本人。
+> 部门集合由服务端按 `user_department` / `departments` 解析注入，**不接受客户端传参**（防越权放宽）；
+> 详情/写目标在范围外返回 `3002`（不泄露存在性）。用户无部门归属的 org 档按 `self` 收敛（fail-closed）。
+> 同一规则适用于 `GET /audit-logs`（按部门成员展开归属人集合）。
+
 ### 3.4 角色与权限（PRD-003）
 
 | 方法 | 路径 | 权限点 | 说明 |

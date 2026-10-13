@@ -4,13 +4,17 @@
  *   实现分工：
  *   - 带通用审计字段的表（users / roles / permissions / menus / refresh_tokens）走 @fw/db 的 PrismaRepository，
  *     软删过滤、审计字段填充、排序 tie-breaker 由基类保证；
- *   - 关联表（user_role / role_permission）与 audit_logs 没有完整通用字段（audit_logs 仅 created_at），
+ *   - 关联表（user_role / role_permission / user_department）与 audit_logs 没有完整通用字段（audit_logs 仅 created_at），
  *     且列表查询需要 OR / IN 等超出 Repository<T> 公共子集的条件，故直接用模型委托实现，
  *     全部为参数化查询，不涉及原生 SQL（dialect 白名单约束）。
+ *   - M8 T-M8-04：本类同时实现 @fw/auth 的 DataScopeOrgPort（departments / user_department 查询），
+ *     支撑 org / org_below 两档数据范围（PRD-008 FR-04/FR-05）；departments 与 users 列表同语义，
+ *     暂不按租户过滤（与 M3 基线一致，跨租户收敛由守卫保证，FR-03 加固见 Backlog）。
  *   TODO(donttemo, 2026-10-13): 关联表与审计表建议由 @fw/db 补 RelationRepository / ReadOnlyRepository 下沉（M3 后）。
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo 行类型按 @fw/auth 契约把主键收窄为 string（@fw/db 的 BaseEntity.id 为 string | number）
+ * @modified 2026-10-14 donttemo M8 T-M8-04：实现 DataScopeOrgPort；pageUsers 支持 departmentIds、pageAuditLogs 支持 userIds
  * @module example-api/auth
  */
 
@@ -29,6 +33,7 @@ import type {
   AuthUser,
   CreateUserInput,
   DataScope,
+  DataScopeOrgPort,
   ID,
   NewAuditLog,
   NewRefreshToken,
@@ -37,6 +42,7 @@ import type {
   UserListItem,
   UserQuery,
 } from '@fw/auth';
+import { collectDescendantIds } from '@fw/auth';
 import type { BaseEntity } from '@fw/db';
 
 /**
@@ -119,6 +125,19 @@ interface RolePermissionRow {
   permissionId: string;
 }
 
+/** user_department 行（M8 组织架构关联表） */
+interface UserDepartmentRow {
+  userId: string;
+  departmentId: string;
+  isPrimary: number;
+}
+
+/** departments 行（M8 组织架构；id/parentId 为 UUID 字符串，'0' 为顶级） */
+interface DepartmentRow {
+  id: string;
+  parentId: string;
+}
+
 /** audit_logs 行 */
 interface AuditLogRow {
   id: string;
@@ -139,10 +158,10 @@ interface AuditLogRow {
 const PAGE_SIZE_MAX = 100;
 
 /**
- * AuthStore 的 Prisma 实现
+ * AuthStore 的 Prisma 实现；同时实现 DataScopeOrgPort（M8 组织架构数据范围）
  */
 @Injectable()
-export class PrismaAuthStore implements AuthStore {
+export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
   private readonly users: PrismaRepository<UserRow>;
   private readonly roles: PrismaRepository<RoleRow>;
   private readonly permissions: PrismaRepository<PermissionRow>;
@@ -209,10 +228,21 @@ export class PrismaAuthStore implements AuthStore {
         { phone: { contains: query.keyword } },
       ];
     }
+
+    // roleId 与 departmentIds 均收敛为「用户 ID 集合」条件；同时传入时取交集（都不命中即空结果）
+    let idFilter: string[] | null = null;
     if (query.roleId) {
       const links = (await this.delegate('userRole').findMany({ where: { roleId: query.roleId } })) as UserRoleRow[];
-      where.id = { in: links.map((link) => link.userId) };
+      idFilter = links.map((link) => link.userId);
     }
+    if (query.departmentIds && query.departmentIds.length > 0) {
+      const links = (await this.delegate('userDepartment').findMany({
+        where: { departmentId: { in: query.departmentIds } },
+      })) as UserDepartmentRow[];
+      const deptUsers = links.map((link) => link.userId);
+      idFilter = idFilter ? idFilter.filter((id) => deptUsers.includes(id)) : deptUsers;
+    }
+    if (idFilter) where.id = { in: idFilter };
 
     const [rows, total] = await Promise.all([
       this.delegate('user').findMany({
@@ -381,7 +411,14 @@ export class PrismaAuthStore implements AuthStore {
     const page = Math.max(1, Math.floor(query.page));
     const pageSize = Math.min(PAGE_SIZE_MAX, Math.max(1, Math.floor(query.pageSize)));
     const where: Record<string, unknown> = {};
-    if (query.userId) where.userId = query.userId;
+    if (query.userIds !== undefined) {
+      // 数据范围注入的归属人集合（org / org_below 展开部门成员）；与 userId 同时传入取交集，
+      // 空集合匹配不到任何记录（fail-closed，绝不因「无展开结果」退化为全量）
+      const ids = query.userId ? query.userIds.filter((id) => id === query.userId) : query.userIds;
+      where.userId = { in: ids };
+    } else if (query.userId) {
+      where.userId = query.userId;
+    }
     if (query.module) where.module = query.module;
     if (query.action) where.action = query.action;
     if (query.targetType) where.targetType = query.targetType;
@@ -410,6 +447,30 @@ export class PrismaAuthStore implements AuthStore {
       pageSize,
       hasMore: page * pageSize < total,
     };
+  }
+
+  // ---------- 组织架构（M8 T-M8-04，DataScopeOrgPort：PRD-008 FR-04/FR-05） ----------
+
+  async listDepartmentIdsByUserId(userId: ID): Promise<ID[]> {
+    const links = (await this.delegate('userDepartment').findMany({ where: { userId } })) as UserDepartmentRow[];
+    return links.map((link) => link.departmentId);
+  }
+
+  async listVisibleDepartmentIds(userId: ID, scope: 'org' | 'org_below'): Promise<ID[]> {
+    const own = await this.listDepartmentIdsByUserId(userId);
+    // 无部门归属：返回空集合，由上层收敛为 self（放大会导致全量可见）
+    if (own.length === 0) return [];
+    if (scope === 'org') return own;
+    const rows = (await this.delegate('department').findMany({ where: { deletedAt: null } })) as DepartmentRow[];
+    return collectDescendantIds(rows, own);
+  }
+
+  async listUserIdsByDepartmentIds(departmentIds: ID[]): Promise<ID[]> {
+    if (departmentIds.length === 0) return [];
+    const links = (await this.delegate('userDepartment').findMany({
+      where: { departmentId: { in: departmentIds } },
+    })) as UserDepartmentRow[];
+    return [...new Set(links.map((link) => link.userId))];
   }
 
   // ---------- 行 → 领域对象 ----------

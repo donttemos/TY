@@ -12,11 +12,16 @@
  *   C. dedicated 独立库路由（T-M8-02 / TC-TNT-003）：dedicated 租户经 /api/v1/demo/tenant-items
  *      的读写落在 prisma/tenant-dedicated.db（独立物理库），共享库内查无此数据；
  *      未携带租户标识仍 fail-closed。
+ *   D. 数据权限四档（T-M8-04 / TC-TNT-004）：all / org / org_below / self 四档列表精确集合断言，
+ *      及 org 范围外 / org_below 旁支 / self 他人的详情越权拦截（403+3002）。
+ *      部门树：总部 → 研发部(rd) → 前端组(rd-fe：alice/dave/erin) / 后端组(rd-be：frank)；总部 → 市场部(mkt：grace)。
+ *      org_below(研发部) 期望集合含前端组与后端组成员，即 {alice,bob,carol,dave,erin,frank}。
  *   说明：@fw/db 的 tenantScoped fail-closed 与 @fw/auth 的 @IgnoreTenant 审计由框架单测覆盖
  *      （db/repository-suite、auth/rbac.guard.test），本脚本聚焦 HTTP 层端到端行为。
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo M8 T-M8-02 新增阶段 C（dedicated 独立库路由端到端验证）
+ * @modified 2026-10-14 donttemo M8 T-M8-04 新增阶段 D（数据权限四档 + 详情越权校验）
  * @module example-api
  */
 
@@ -300,10 +305,136 @@ async function phaseDedicated() {
   }
 }
 
+/** 用户列表查询（pageSize=100 一页取全，四档集合断言用） */
+async function listUsers(token) {
+  return call('/api/v1/users?page=1&pageSize=100', { headers: { authorization: `Bearer ${token}` } });
+}
+
+/** 启用 / 禁用账号（详情越权校验目标端点） */
+async function setUserStatus(token, userId, status) {
+  return call(`/api/v1/users/${userId}/status`, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ status }),
+  });
+}
+
+/** 列表项用户名集合（排序后比较，避免顺序不稳定） */
+function namesOf(list) {
+  return (list.body?.data?.items ?? []).map((item) => item.username).sort();
+}
+
+/**
+ * 阶段 D：数据权限四档（T-M8-04 / TC-TNT-004，PRD-008 FR-04/FR-05）
+ * 单租户模式（TENANT_ENABLED=false，与阶段 B 同环境）验证：
+ *   D1  all       —— admin 见全部账号；
+ *   D2  self      —— selfscope 仅本人一条；
+ *   D3  org       —— carol（研发部）仅见研发部成员 {bob, carol}（不含下级前端组/后端组）；
+ *   D4  org       —— dave（前端组）仅见前端组成员 {alice, dave, erin}；
+ *   D5  org_below —— bob（研发部）见部门及下级 {bob, carol, dave, erin, frank}；
+ *   D6~D8 详情越权 —— org 范围外 / org_below 旁支 / self 他人一律 403+3002（fail-closed）；
+ *   D9  org_below 范围内放行（bob 改 frank 禁用后即时恢复）；
+ *   D10 审计收敛 —— org_below 档审计列表只见部门子树成员记录。
+ */
+async function phaseDataScope() {
+  console.log('\n=== 阶段 D：数据权限四档（TC-TNT-004）===');
+  const server = await startServer({});
+  try {
+    // D0 集中登录五个代表性账号（先取令牌，避免后续禁用操作失效）
+    const tokens = {};
+    const accounts = [
+      ['admin', 'admin', 'Admin@123456'],
+      ['selfscope', 'selfscope', 'Self@123456'],
+      ['carol', 'carol', 'Carol@123456'],
+      ['dave', 'dave', 'Dave@123456'],
+      ['bob', 'bob', 'Bob@123456'],
+    ];
+    for (const [name, account, password] of accounts) {
+      const res = await login(account, password);
+      check(`D0 ${name} 登录成功`, isOk(res.status), `[http=${res.status}]`);
+      tokens[name] = res.body?.data?.accessToken;
+    }
+
+    // D1 all：admin 见全部账号（含租户账号；单租户模式不按租户过滤，与 M3 基线一致）
+    const adminList = await listUsers(tokens.admin);
+    const adminNames = namesOf(adminList);
+    check('D1 all 档列表查询成功', adminList.status === 200, `[http=${adminList.status}]`);
+    check(
+      'D1 all 档可见全部种子账号（9 个 legacy + 2 个租户账号）',
+      ['admin', 'alice', 'bob', 'carol', 'dave', 'erin', 'frank', 'grace', 'selfscope', 'acmeadmin', 'dedicatedadmin'].every((n) => adminNames.includes(n)),
+      `[names=${adminNames.join(',')}]`,
+    );
+    const idOf = (name) => (adminList.body?.data?.items ?? []).find((item) => item.username === name)?.id;
+
+    // D2 self：仅本人一条
+    const selfList = await listUsers(tokens.selfscope);
+    check('D2 self 档列表仅本人一条', selfList.status === 200 && selfList.body?.data?.total === 1 && namesOf(selfList)[0] === 'selfscope',
+      `[total=${selfList.body?.data?.total}]`);
+
+    // D3 org（carol@研发部）：仅研发部成员，不含下级部门
+    const carolList = await listUsers(tokens.carol);
+    check('D3 org 档列表=本部门成员 {bob,carol}', carolList.status === 200 && JSON.stringify(namesOf(carolList)) === JSON.stringify(['bob', 'carol']),
+      `[names=${namesOf(carolList).join(',')}]`);
+
+    // D4 org（dave@前端组）：仅前端组成员
+    const daveList = await listUsers(tokens.dave);
+    check('D4 org 档列表=本部门成员 {alice,dave,erin}', daveList.status === 200 && JSON.stringify(namesOf(daveList)) === JSON.stringify(['alice', 'dave', 'erin']),
+      `[names=${namesOf(daveList).join(',')}]`);
+
+    // D5 org_below（bob@研发部）：部门及全部下级（rd + rd-fe + rd-be；alice 属前端组，应在集合内）
+    const bobList = await listUsers(tokens.bob);
+    check('D5 org_below 档列表=部门及下级 {alice,bob,carol,dave,erin,frank}', bobList.status === 200 && JSON.stringify(namesOf(bobList)) === JSON.stringify(['alice', 'bob', 'carol', 'dave', 'erin', 'frank']),
+      `[names=${namesOf(bobList).join(',')}]`);
+
+    // D6 详情越权：org 范围外（carol 改 frank@后端组）→ 403/3002
+    const orgDenied = await setUserStatus(tokens.carol, idOf('frank'), 0);
+    check('D6 org 档详情越权被拦截（范围外 403/3002）', orgDenied.status === 403 && orgDenied.body?.code === 3002,
+      `[http=${orgDenied.status} code=${orgDenied.body?.code}]`);
+
+    // D7 详情越权：self 改他人 → 403/3002
+    const selfDenied = await setUserStatus(tokens.selfscope, idOf('alice'), 0);
+    check('D7 self 档详情越权被拦截（他人 403/3002）', selfDenied.status === 403 && selfDenied.body?.code === 3002,
+      `[http=${selfDenied.status} code=${selfDenied.body?.code}]`);
+
+    // D8 详情越权：org_below 旁支（bob 改 grace@市场部）→ 403/3002
+    const belowDenied = await setUserStatus(tokens.bob, idOf('grace'), 0);
+    check('D8 org_below 档旁支越权被拦截（403/3002）', belowDenied.status === 403 && belowDenied.body?.code === 3002,
+      `[http=${belowDenied.status} code=${belowDenied.body?.code}]`);
+
+    // D9 org_below 范围内放行：bob 禁用 frank 后即时恢复（副作用自愈）
+    const frankId = idOf('frank');
+    const disabled = await setUserStatus(tokens.bob, frankId, 0);
+    check('D9 org_below 档范围内目标可操作（200）', disabled.status === 200 && disabled.body?.code === 0, `[http=${disabled.status}]`);
+    const restored = await setUserStatus(tokens.bob, frankId, 1);
+    check('D9 即时恢复启用（200）', restored.status === 200 && restored.body?.code === 0, `[http=${restored.status}]`);
+
+    // D10 审计收敛：bob（org_below + audit:read）只见部门子树成员记录
+    // 登录审计为异步落盘，给一个短轮询窗口等 D0 的登录记录就绪
+    let audit = null;
+    for (let i = 0; i < 10; i++) {
+      audit = await call('/api/v1/audit-logs?page=1&pageSize=100', { headers: { authorization: `Bearer ${tokens.bob}` } });
+      if (audit.status === 200 && (audit.body?.data?.total ?? 0) > 0) break;
+      await sleep(200);
+    }
+    const auditItems = audit?.body?.data?.items ?? [];
+    const visibleIds = new Set((bobList.body?.data?.items ?? []).map((item) => item.id));
+    check('D10 org_below 档审计查询成功', audit?.status === 200, `[http=${audit?.status}]`);
+    check('D10 审计记录非空（部门子树成员有登录记录）', auditItems.length > 0, `[total=${audit?.body?.data?.total}]`);
+    check(
+      'D10 审计列表只见部门子树成员（admin/selfscope/grace 记录被收敛）',
+      auditItems.every((item) => visibleIds.has(item.userId)),
+      `[leak=${auditItems.filter((item) => !visibleIds.has(item.userId)).map((item) => item.userId).join(',') || '无'}]`,
+    );
+  } finally {
+    await stopServer(server);
+  }
+}
+
 async function main() {
   await phaseEnabled();
   await phaseDisabled();
   await phaseDedicated();
+  await phaseDataScope();
   const failed = results.filter((r) => !r.ok);
   console.log(`\n结果：${results.length - failed.length}/${results.length} 通过`);
   if (failed.length > 0) {

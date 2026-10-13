@@ -10,6 +10,8 @@
  * @modified 2026-10-13 donttemo M6：追加生成器产物（prisma/seed/demo-item.seed.ts 的 4 个权限点 + 1 条菜单），并给 admin 显式授权
  * @modified 2026-10-13 donttemo M8：新增租户基线（legacy/acme/off）与 acmeadmin 账号
  * @modified 2026-10-14 donttemo M8 T-M8-02：新增 dedicated 独立库租户（db_url_enc 密文）与 dedicatedadmin 账号
+ * @modified 2026-10-14 donttemo M8 T-M8-04：新增组织架构种子（部门树 + user_department）与
+ *   dept_leader(org_below) / dept_member(org) / self_updater(self) 三角色及示范账号（TC-TNT-004）
  * @module example-api
  */
 
@@ -145,12 +147,47 @@ async function truncate(): Promise<void> {
   await prisma.refreshToken.deleteMany();
   await prisma.rolePermission.deleteMany();
   await prisma.userRole.deleteMany();
+  await prisma.userDepartment.deleteMany();
   await prisma.menu.deleteMany();
   await prisma.permission.deleteMany();
   await prisma.role.deleteMany();
+  await prisma.department.deleteMany();
   await prisma.user.deleteMany();
   await prisma.demoItem.deleteMany();
   await prisma.tenant.deleteMany();
+}
+
+/**
+ * 写入组织架构基线（M8 T-M8-04，PRD-008 FR-05，tenant_id=0 即 legacy 租户）：
+ * 部门树（parent_id='0' 为顶级）：
+ *   总部(hq)
+ *   ├─ 研发部(rd)         ← bob 负责人（org_below：可见 rd + rd-fe + rd-be）
+ *   │  ├─ 前端组(rd-fe)   ← alice / dave / erin
+ *   │  └─ 后端组(rd-be)   ← frank
+ *   └─ 市场部(mkt)        ← grace（org_below 范围外，用于越权断言）
+ * 用户-部门分配见 seedUserDepartments。
+ */
+async function seedDepartments(): Promise<Map<string, string>> {
+  const rows = [
+    { code: 'hq', name: '总部', parent: '0', sort: 1 },
+    { code: 'rd', name: '研发部', parent: 'hq', sort: 1 },
+    { code: 'rd-fe', name: '前端组', parent: 'rd', sort: 1 },
+    { code: 'rd-be', name: '后端组', parent: 'rd', sort: 2 },
+    { code: 'mkt', name: '市场部', parent: 'hq', sort: 2 },
+  ];
+  const idByCode = new Map<string, string>();
+  for (const row of rows) {
+    const created = await prisma.department.create({
+      data: {
+        code: row.code,
+        name: row.name,
+        parentId: row.parent === '0' ? '0' : (idByCode.get(row.parent) as string),
+        sort: row.sort,
+      },
+    });
+    idByCode.set(row.code, created.id);
+  }
+  return idByCode;
 }
 
 /**
@@ -230,20 +267,41 @@ async function main(): Promise<void> {
   // 2) 权限点
   const permIdByCode = await seedPermissions();
 
-  // 3) 角色（dataScope：admin=all，user=self）
+  // 3) 角色（dataScope：admin=all，user=self；M8 T-M8-04 增 org_below / org / self 三档示范角色）
   const adminRole = await prisma.role.create({
     data: { code: ROLE.ADMIN, name: '超级管理员', remark: '内置角色，拥有全部权限', isSystem: 1, dataScope: 'all', sort: 1 },
   });
   const userRole = await prisma.role.create({
     data: { code: ROLE.USER, name: '普通用户', remark: '内置角色，仅自身相关', isSystem: 1, dataScope: 'self', sort: 2 },
   });
+  // M8 T-M8-04：数据权限四档验证角色（均持 user:read + user:update，差异只在 dataScope）
+  const deptLeaderRole = await prisma.role.create({
+    data: { code: 'dept_leader', name: '部门负责人', remark: 'M8 示范：本部门及下级数据（org_below，含审计查询）', isSystem: 0, dataScope: 'org_below', sort: 3 },
+  });
+  const deptMemberRole = await prisma.role.create({
+    data: { code: 'dept_member', name: '部门成员', remark: 'M8 示范：本部门数据（org）', isSystem: 0, dataScope: 'org', sort: 4 },
+  });
+  const selfUpdaterRole = await prisma.role.create({
+    data: { code: 'self_updater', name: '本人数据管理员', remark: 'M8 示范：仅本人数据（self，持 user:update 供详情越权验证）', isSystem: 0, dataScope: 'self', sort: 5 },
+  });
 
-  // 4) 授权：admin 全量；user 最小集
+  // 4) 授权：admin 全量；user 最小集；M8 三示范角色持 user:read + user:update
+  //    （dept_leader 另持 audit:read，供 TC-TNT-004 验证 org_below 档审计收敛）
   for (const permissionId of permIdByCode.values()) {
     await prisma.rolePermission.create({ data: { roleId: adminRole.id, permissionId } });
   }
   for (const code of USER_ROLE_CODES) {
     await prisma.rolePermission.create({ data: { roleId: userRole.id, permissionId: permIdByCode.get(code) as string } });
+  }
+  const scopeDemoGrants: Array<{ roleId: string; codes: string[] }> = [
+    { roleId: deptLeaderRole.id, codes: [PERM.USER_READ, PERM.USER_UPDATE, PERM.AUDIT_READ] },
+    { roleId: deptMemberRole.id, codes: [PERM.USER_READ, PERM.USER_UPDATE] },
+    { roleId: selfUpdaterRole.id, codes: [PERM.USER_READ, PERM.USER_UPDATE] },
+  ];
+  for (const grant of scopeDemoGrants) {
+    for (const code of grant.codes) {
+      await prisma.rolePermission.create({ data: { roleId: grant.roleId, permissionId: permIdByCode.get(code) as string } });
+    }
   }
 
   // 5) 菜单
@@ -258,6 +316,9 @@ async function main(): Promise<void> {
       await prisma.rolePermission.create({ data: { roleId: adminRole.id, permissionId: permission.id } });
     }
   }
+
+  // 6.5) M8 T-M8-04：组织架构（部门树；user_department 在第 9 步账号就绪后写入）
+  const orgDeptIds = await seedDepartments();
 
   // 7) 账号（Argon2id 现场哈希）
   const adminPassword = 'Admin@123456';
@@ -280,6 +341,31 @@ async function main(): Promise<void> {
       status: 1,
     },
   });
+
+  /** M8 T-M8-04 组织架构示范账号（tenant_id=0 即 legacy 租户） */
+  const orgAccounts = [
+    { username: 'bob', password: 'Bob@123456', nickname: 'Bob（研发部负责人）', email: 'bob@example.com', role: 'dept_leader', dept: 'rd' },
+    { username: 'carol', password: 'Carol@123456', nickname: 'Carol（研发部）', email: 'carol@example.com', role: 'dept_member', dept: 'rd' },
+    { username: 'dave', password: 'Dave@123456', nickname: 'Dave（前端组）', email: 'dave@example.com', role: 'dept_member', dept: 'rd-fe' },
+    { username: 'erin', password: 'Erin@123456', nickname: 'Erin（前端组）', email: 'erin@example.com', role: 'user', dept: 'rd-fe' },
+    { username: 'frank', password: 'Frank@123456', nickname: 'Frank（后端组）', email: 'frank@example.com', role: 'user', dept: 'rd-be' },
+    { username: 'grace', password: 'Grace@123456', nickname: 'Grace（市场部）', email: 'grace@example.com', role: 'user', dept: 'mkt' },
+    { username: 'selfscope', password: 'Self@123456', nickname: 'SelfScope（本人范围）', email: 'selfscope@example.com', role: 'self_updater', dept: null },
+  ];
+  const orgUserIds = new Map<string, string>();
+  for (const account of orgAccounts) {
+    const created = await prisma.user.create({
+      data: {
+        username: account.username,
+        passwordHash: await passwords.hash(account.password),
+        nickname: account.nickname,
+        email: account.email,
+        status: 1,
+      },
+    });
+    orgUserIds.set(account.username, created.id);
+  }
+
   // M8：acme 租户管理员（tenantId=1，用于子域名解析与跨租户越权用例）
   const acmePassword = 'Acme@123456';
   await prisma.user.create({
@@ -306,19 +392,43 @@ async function main(): Promise<void> {
   });
 
   // 8) 用户-角色（acmeadmin 与 alice 同权，角色归属第 5 步的 userRole）
+  const roleByCode = new Map(
+    [adminRole, userRole, deptLeaderRole, deptMemberRole, selfUpdaterRole].map((role) => [role.code, role.id]),
+  );
   await prisma.userRole.create({ data: { userId: admin.id, roleId: adminRole.id } });
   await prisma.userRole.create({ data: { userId: alice.id, roleId: userRole.id } });
+  for (const account of orgAccounts) {
+    await prisma.userRole.create({ data: { userId: orgUserIds.get(account.username) as string, roleId: roleByCode.get(account.role) as string } });
+  }
   const acmeUser = await prisma.user.findUnique({ where: { username: 'acmeadmin' } });
   if (acmeUser) await prisma.userRole.create({ data: { userId: acmeUser.id, roleId: userRole.id } });
+
+  // 9) M8 T-M8-04：用户-部门分配（is_primary=1 标主部门；selfscope 无部门，用于「无归属收敛 self」验证）
+  const deptIdByCode = orgDeptIds;
+  const deptOfUser: Array<{ username: string; dept: string }> = [
+    { username: 'alice', dept: 'rd-fe' },
+    ...orgAccounts.filter((a) => a.dept).map((a) => ({ username: a.username, dept: a.dept as string })),
+  ];
+  for (const item of deptOfUser) {
+    await prisma.userDepartment.create({
+      data: { userId: item.username === 'alice' ? alice.id : (orgUserIds.get(item.username) as string), departmentId: deptIdByCode.get(item.dept) as string, isPrimary: 1 },
+    });
+  }
+  // 研发部负责人回填（bob）
+  await prisma.department.update({
+    where: { id: deptIdByCode.get('rd') as string },
+    data: { leaderId: orgUserIds.get('bob') as string },
+  });
 
   console.log(
     [
       '[seed] 完成：',
       `演示条目 ${SEED_ITEMS.length} 条`,
       `权限点 ${permIdByCode.size + GENERATED_PERMISSION_CODES.length} 个（框架/业务 ${permIdByCode.size} + 生成器 ${GENERATED_PERMISSION_CODES.length}）`,
-      `角色 2 个（${ROLE.ADMIN} 全量 / ${ROLE.USER} ${USER_ROLE_CODES.length} 项）`,
+      `角色 5 个（${ROLE.ADMIN}=all / ${ROLE.USER}=self / dept_leader=org_below / dept_member=org / self_updater=self）`,
       `菜单 ${menuCounter.count} 项`,
-      `账号 3 个（admin / ${adminPassword}，alice / ${userPassword}）+ acmeadmin / ${acmePassword}（tenantId=1）+ dedicatedadmin / ${dedicatedPassword}（tenantId=3 独立库）`,
+      `部门 ${orgDeptIds.size} 个（总部 → 研发部 → 前端组/后端组；总部 → 市场部）`,
+      `账号 10 个（admin / ${adminPassword}，alice / ${userPassword}）+ orgAccounts 7 个（bob/carol/dave/erin/frank/grace/selfscope）+ acmeadmin / ${acmePassword}（tenantId=1）+ dedicatedadmin / ${dedicatedPassword}（tenantId=3 独立库）`,
       `租户 4 个（legacy=0 / acme=1 / off=2 停用 / dedicated=3 独立库）`,
     ].join(' '),
   );

@@ -211,12 +211,13 @@ describe('策略可插拔', () => {
 });
 
 describe('数据权限与免认证路径', () => {
-  it('TC-AUTH-013：self 只返回本人；all 不受限；org/org_below 在 M3 收敛为 self 并标记待实现', () => {
+  it('TC-AUTH-013：self 只返回本人；all 不受限；org/org_below 无组织端口时收敛为 self 并标记待解析', () => {
     expect(resolveDataScope({ id: 'u1', dataScope: 'self' })).toEqual({
       scope: 'self',
       selfOnly: true,
       ownerId: 'u1',
       unrestricted: false,
+      departmentIds: null,
       pendingScopes: [],
     });
     expect(resolveDataScope({ id: 'u1', dataScope: 'all' }).unrestricted).toBe(true);
@@ -226,6 +227,7 @@ describe('数据权限与免认证路径', () => {
     // 范围缺失时按最小权限收敛
     const fallback = resolveDataScope({ id: 'u1' } as { id: string; dataScope: 'self' });
     expect(fallback.selfOnly).toBe(true);
+    // 完整四档（注入 DataScopeOrgPort）由 data-scope.test.ts 覆盖（M8 T-M8-04）
   });
 
   it('探针与指标路径免认证（前缀匹配，忽略查询串）', async () => {

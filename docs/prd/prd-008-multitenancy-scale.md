@@ -1,10 +1,12 @@
 # PRD-008 · 多租户与规模化演进
 
-> 里程碑：M8 ｜ 状态：已定稿 ｜ 优先级：P2 ｜ 依赖：M2–M4、M7 ｜ 负责人：donttemo ｜ 更新：2026-10-13
+> 里程碑：M8 ｜ 状态：已定稿 ｜ 优先级：P2 ｜ 依赖：M2–M4、M7 ｜ 负责人：donttemo ｜ 更新：2026-10-14
 >
 > 变更记录：2026-10-13 donttemo 草案转定稿——结算两项待定问题（租户识别改三级回退可配、配置中心首版仅留适配位不绑定实现）；补 M7 依赖至头部（§8 已列）；状态置「已定稿」，M8 实现完成后再按验收门禁勾选 AC。
 >
 > 变更记录：2026-10-14 donttemo 实现进展——T-M8-01（三级回退解析 / fail-closed / 上下文透传，冒烟阶段 A+B）与 T-M8-02（`@fw/db` TenantDataSource：dedicated 独立库懒创建 + LRU/空闲淘汰 + Repository 按上下文选路，冒烟阶段 C 11 项）已完成；FR-01/FR-02/FR-03 已落地，FR-04~11 进行中。§7 AC 待里程碑收尾（T-M8-08）按门禁统一勾选。
+>
+> 变更记录：2026-10-14 donttemo T-M8-04 落地——FR-04/FR-05 完成：`@fw/auth` 新增 `DataScopeOrgPort` 端口与四档解析（`resolveDataScopeFilter` / `assertWithinDataScope`，fail-closed 收敛 self + `pendingScopes`），`departments` + `user_department` 两表与迁移落地，用户/角色分配/状态/审计四链路按档过滤（部门集合仅服务端注入，禁客户端传参），详情越权 403/3002 先于存在性查询；种子建五部门树 + 三角色 + 7 示范账号；TC-TNT-004 冒烟阶段 D 19 项断言全绿（四档精确集合 / 三类越权 / 审计收敛）。剩余 FR-06~11 进行中，§7 AC 仍待 T-M8-08 统一勾选。
 
 ## 1. 背景与目标
 

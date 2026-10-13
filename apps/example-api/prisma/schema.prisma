@@ -4,6 +4,7 @@
  *   切换数据库只改 datasource 两行（provider/url），业务代码零改动（TC-ORM-008）。
  * @author donttemo
  * @created 2026-10-12
+ * @modified 2026-10-14 donttemo M8 T-M8-04：新增 departments / user_department（组织架构，PRD-008 FR-05）
  * @module example-api
  */
 generator client {
@@ -135,6 +136,38 @@ model Menu {
   @@index([parentId], map: "idx_menus_parent")
   @@index([permissionCode], map: "idx_menus_perm")
   @@map("menus")
+}
+
+/// 组织部门（PRD-008 FR-05，数据字典 §3.7：树形，parentId='0' 为顶级）
+model Department {
+  id        String    @id @default(uuid())
+  tenantId  BigInt    @default(0) @map("tenant_id")
+  parentId  String    @default("0") @map("parent_id")
+  code      String?
+  name      String
+  leaderId  String?   @map("leader_id")
+  sort      Int       @default(0)
+  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdBy String    @default("system") @map("created_by")
+  updatedBy String    @default("system") @map("updated_by")
+
+  @@unique([tenantId, code], map: "uk_dept_tenant_code")
+  @@index([tenantId], map: "idx_dept_tenant")
+  @@index([parentId], map: "idx_dept_parent")
+  @@map("departments")
+}
+
+/// 用户-部门关联（PRD-008 FR-05，数据字典 §3.8：支持多部门，isPrimary 标主部门）
+model UserDepartment {
+  userId       String @map("user_id")
+  departmentId String @map("department_id")
+  isPrimary    Int    @default(0) @map("is_primary")
+
+  @@id([userId, departmentId])
+  @@index([departmentId], map: "idx_ud_dept")
+  @@map("user_department")
 }
 
 /// 刷新令牌（PRD-003 FR-02/FR-03：只存哈希 + 轮换族）
