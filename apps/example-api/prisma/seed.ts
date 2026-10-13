@@ -8,6 +8,8 @@
  * @created 2026-10-12
  * @modified 2026-10-13 donttemo M3：扩展为鉴权基线种子（权限点/角色/菜单/账号/授权），并保持幂等
  * @modified 2026-10-13 donttemo M6：追加生成器产物（prisma/seed/demo-item.seed.ts 的 4 个权限点 + 1 条菜单），并给 admin 显式授权
+ * @modified 2026-10-13 donttemo M8：新增租户基线（legacy/acme/off）与 acmeadmin 账号
+ * @modified 2026-10-14 donttemo M8 T-M8-02：新增 dedicated 独立库租户（db_url_enc 密文）与 dedicatedadmin 账号
  * @module example-api
  */
 
@@ -17,6 +19,14 @@ import 'reflect-metadata';
 import { PrismaClient } from '@prisma/client';
 import { PERM, ROLE, PasswordService } from '@fw/auth';
 import { seedDemoItemPermissions } from './seed/demo-item.seed.js';
+import { encryptDbUrl } from '../src/modules/tenant/db-url-crypto.js';
+
+/**
+ * dedicated 租户独立库连接串（T-M8-02）：与主库同 schema 的独立 sqlite 文件，
+ * 相对路径按 prisma/schema.prisma 所在目录解析（与主库 DB_URL 同一语义）。
+ * 冒烟脚本按需重建该库结构（同 schema 的 db push）。
+ */
+const DEDICATED_DB_URL = 'file:./tenant-dedicated.db';
 
 const prisma = new PrismaClient();
 const passwords = new PasswordService();
@@ -144,16 +154,27 @@ async function truncate(): Promise<void> {
 }
 
 /**
- * 写入租户基线（M8，PRD-008 FR-01）：
+ * 写入租户基线（M8，PRD-008 FR-01/FR-02）：
  * - legacy（id '0'）：存量单租户数据的归属租户，种子账号默认 tenantId=0 全部落在此租户；
  * - acme（id '1'）：演示「子域名解析」与跨租户越权用例的第二个租户；
- * - off（id '2'）：停用租户，验证 fail-closed（403）。
+ * - off（id '2'）：停用租户，验证 fail-closed（403）；
+ * - dedicated（id '3'）：独立库租户（T-M8-02），db_url_enc 存 AES-256-GCM 密文，
+ *   指向 prisma/tenant-dedicated.db（与主库同 schema 的独立物理库）。
  */
 async function seedTenants(): Promise<void> {
   const rows = [
     { id: '0', code: 'legacy', name: '存量单租户', isolation: 'shared', status: 1 },
     { id: '1', code: 'acme', name: 'ACME 公司', isolation: 'shared', status: 1 },
     { id: '2', code: 'off', name: '已停用租户', isolation: 'shared', status: 0 },
+    {
+      id: '3',
+      code: 'dedicated',
+      name: '独立库租户',
+      isolation: 'dedicated',
+      // 连接串加密存储（T-M8-02）；相对路径按 schema 所在目录解析 → prisma/tenant-dedicated.db
+      dbUrlEnc: encryptDbUrl(DEDICATED_DB_URL),
+      status: 1,
+    },
   ];
   for (const row of rows) {
     await prisma.tenant.create({ data: row });
@@ -271,6 +292,18 @@ async function main(): Promise<void> {
       status: 1,
     },
   });
+  // M8 T-M8-02：dedicated 租户管理员（tenantId=3，账号仍在共享库，业务数据走独立库）
+  const dedicatedPassword = 'Dedicated@123456';
+  await prisma.user.create({
+    data: {
+      username: 'dedicatedadmin',
+      tenantId: 3n,
+      passwordHash: await passwords.hash(dedicatedPassword),
+      nickname: '独立库租户管理员',
+      email: 'dedicatedadmin@dedicated.example.com',
+      status: 1,
+    },
+  });
 
   // 8) 用户-角色（acmeadmin 与 alice 同权，角色归属第 5 步的 userRole）
   await prisma.userRole.create({ data: { userId: admin.id, roleId: adminRole.id } });
@@ -285,8 +318,8 @@ async function main(): Promise<void> {
       `权限点 ${permIdByCode.size + GENERATED_PERMISSION_CODES.length} 个（框架/业务 ${permIdByCode.size} + 生成器 ${GENERATED_PERMISSION_CODES.length}）`,
       `角色 2 个（${ROLE.ADMIN} 全量 / ${ROLE.USER} ${USER_ROLE_CODES.length} 项）`,
       `菜单 ${menuCounter.count} 项`,
-      `账号 2 个（admin / ${adminPassword}，alice / ${userPassword}）+ acmeadmin / ${acmePassword}（tenantId=1）`,
-      `租户 3 个（legacy=0 / acme=1 / off=2 停用）`,
+      `账号 3 个（admin / ${adminPassword}，alice / ${userPassword}）+ acmeadmin / ${acmePassword}（tenantId=1）+ dedicatedadmin / ${dedicatedPassword}（tenantId=3 独立库）`,
+      `租户 4 个（legacy=0 / acme=1 / off=2 停用 / dedicated=3 独立库）`,
     ].join(' '),
   );
 }

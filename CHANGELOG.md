@@ -2,7 +2,7 @@
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
-> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；M7 队列与定时任务（PRD-007）已完成实现与全量验收（含真实 Redis 失速恢复演练 TC-JOB-008，见 docs/94-queue-stall-drill.md），未发版；运行时已升级 NestJS 11 / Express 5，dev 工具链升至 vitest 4 / vite 8，**`pnpm audit` 生产与 dev 全量零漏洞**。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
+> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；M7 队列与定时任务（PRD-007）已完成实现与全量验收（含真实 Redis 失速恢复演练 TC-JOB-008，见 docs/94-queue-stall-drill.md），未发版；**M8 多租户与规模化演进（PRD-008）进行中：T-M8-01 租户上下文 / T-M8-02 dedicated 独立库路由已完成（冒烟 29/29）**；运行时已升级 NestJS 11 / Express 5，dev 工具链升至 vitest 4 / vite 8，**`pnpm audit` 生产与 dev 全量零漏洞**。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
 
 ## 版本与变更规则
 
@@ -13,6 +13,24 @@
 - **频率**：每个发布版本一条记录；`Unreleased` 区间持续累积，发布时转为版本条目并清空。
 
 ## [Unreleased]
+
+### Added（M8 多租户与规模化演进，2026-10-14）
+
+> PRD-008 进行中：T-M8-01（租户上下文与 shared 隔离）与 T-M8-02（dedicated 独立库路由）已完成实现与验证，未发版。
+
+- **`@fw/tenant`（新框架包）**：三级回退租户解析（子域名 → 请求头 `X-Tenant-Id` → JWT claim，顺序与各级开关可配，PRD-008 §9 定稿）+ TTL 缓存 + fail-closed（缺失/不存在/停用/过期租户 → 403/4001 `TENANT_INVALID`）。
+  - **上下文透传**：解析结果经 `@fw/logger` AsyncLocalStorage 传递（`tenantId` / `tenantIsolation` / `tenantDbUrl`），日志自动携带 `tenantId`；dedicated 连接串仅进程内传递，禁入日志/审计。
+  - **express 级中间件**：经 `@fw/core` bootstrap 新增的 `beforeListen` 钩子以 `app.use` 注册（Nest 模块级 `forRoutes` 在 Express 5 下不覆盖其他模块路由）；运维路径（`/health`、`/ready`、`/metrics`）豁免。
+  - **配置**：`@fw/config` 新增 `TENANT_ENABLED` / `TENANT_ORDER` / `TENANT_HEADER_NAME` / `TENANT_BASE_DOMAIN` / `TENANT_JWT_CLAIM` / `TENANT_CACHE_TTL` / `TENANT_DB_KEY` 共 7 键。
+- **`@fw/db` 租户数据源路由（T-M8-02）**：`TenantDataSource` 按请求上下文选路——`tenantVerified` + `isolation=dedicated` + `dbUrl` 三者齐备才路由到独立库 client（懒创建、按租户缓存），shared / 未认证 / `@IgnoreTenant` 一律回退默认数据源；LRU 上限（默认 32）+ 空闲淘汰（默认 10 分钟）双策略，淘汰即断开；`onModuleDestroy` 全量断开。`PrismaRepository` 新增 `options.dataSource`，每次调用按上下文选路（读/写/事务同一语义），未注入时行为与旧版逐字节一致。
+- **`@fw/auth` 越权防护（T-M8-03 地基）**：守卫校验「登录用户归属当前租户」，不匹配即 403/4001；`@IgnoreTenant()` + `system:tenant:ignore` 权限的跨租户维护记审计（`action='grant'`）；`toAuthUser` 补 `tenantId` 映射（bigint → 十进制字符串）。
+- **example-api**：`tenants` 模型 + 迁移 + 种子（legacy / acme / off / dedicated 四租户，dedicated 的 `db_url_enc` 为 AES-256-GCM 密文）；`PrismaTenantStore` 解密独立库连接串；`/api/v1/demo/tenant-items` 鉴权验证端点；M3 遗留④ refresh 过期记录定时清理（`auth.refresh-cleanup`，分布式锁 + 快照端点）。
+
+### M8 验证（2026-10-14，全量实跑）
+
+- 多租户冒烟 `smoke-tenant.mjs` **29/29**：阶段 A fail-closed 与三级回退（16 项，含跨租户越权拦截）+ 阶段 B 单租户回归（2 项）+ **阶段 C dedicated 独立库路由（11 项）**——dedicated 租户读写落在 `prisma/tenant-dedicated.db`（独立库列表 total=1），共享库查无此数据、主库 tenants 元数据仍在，缺失租户标识仍 403/4001，共享库租户不受影响。
+- `@fw/db` 单测 **67/67**（新增 `TenantDataSource` 14 项：选路回退 / 缓存复用 / LRU 与空闲淘汰 / 创建失败重试 / 停机断开 / Repository 三条路径选路）；`@fw/logger` 17/17、`@fw/tenant` 19/19 全绿。
+- 回归：队列冒烟 22/22（未设 `SMOKE_REDIS_URL`，真实 Redis 阶段按设计跳过）、鉴权冒烟 25/25、文件头门禁 282、裸 SQL 门禁 203。
 
 ### Added（M7 队列与定时任务，2026-10-13）
 

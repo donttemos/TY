@@ -23,6 +23,16 @@ export interface RequestContext {
   tenantVerified?: boolean;
   /** 已授权的跨租户维护路由；由鉴权守卫写入 */
   ignoreTenant?: boolean;
+  /**
+   * 当前租户隔离级别（M8 T-M8-02）：dedicated 时 @fw/db 的 TenantDataSource
+   * 按租户把查询路由到独立库 client；shared / 缺省走默认数据源。
+   */
+  tenantIsolation?: 'shared' | 'dedicated';
+  /**
+   * dedicated 租户独立库连接串（M8 T-M8-02）：租户存储解密后的运行时值，
+   * 仅进程内经 AsyncLocalStorage 传递给数据源路由，禁止写入日志与审计。
+   */
+  tenantDbUrl?: string;
 }
 
 /** 全局异步上下文存储（进程单例） */

@@ -100,7 +100,7 @@ fw gen crud order
 | 管理后台模板 | `apps/admin-web`（Vue3 + Vite + Element Plus：登录、动态路由、按钮级权限、用户/角色/菜单/字典/审计页、`<CrudTable>` 标准组件；mock 全链路冒烟 40/40、单测 29） | M5 | ✅ 已完成（未发版） |
 | CRUD 代码生成器 | `@fw/cli gen`（schema 解析 + 类型映射 + 模板引擎 + 后端/前端/seed 生成 + dry-run/diff/回滚；模板外置 `templates/codegen/`；单测 116 / 覆盖率 94.7%） | M6 | ✅ 已完成（未发版） |
 | 队列与定时任务 | `@fw/queue`（统一 Job 抽象 + memory/bullmq 双驱动 + `@JobHandler`/`@Cron` 自动扫描 + 重试退避 + 死信重放 + 幂等 + 令牌桶限速 + cron 分布式锁 + 优雅停机 + 队列管理页；单测 135 / 覆盖率 93.1%、example-api 冒烟 27/27 含真实 Redis 的 bullmq 全链路） | M7 | 已实现（重启验收待补，未发版） |
-| 多租户与规模化 | 租户上下文 + transport + OTel + Helm | M8 | 未开工 |
+| 多租户与规模化 | `@fw/tenant`（三级回退租户解析 + fail-closed + 上下文透传）+ `@fw/db` TenantDataSource（dedicated 独立库路由：懒创建 + LRU/空闲淘汰 + Repository 按上下文选路）；transport / OTel / Helm 待启动 | M8 | 进行中（T-M8-01/02 已完成，冒烟 29/29，未发版） |
 
 ## 文档索引
 
@@ -141,7 +141,7 @@ fw gen crud order
 | M5 | 管理后台模板 | [005](./docs/prd/prd-005-admin-template.md) | ✅ 已完成（未发版） |
 | M6 | 代码生成器 | [006](./docs/prd/prd-006-code-generator.md) | ✅ 已完成（未发版） |
 | M7 | 队列与定时任务 | [007](./docs/prd/prd-007-queue-scheduler.md) | 已实现（重启验收待补，未发版） |
-| M8 | 多租户与规模化 | [008](./docs/prd/prd-008-multitenancy-scale.md) | 草案 |
+| M8 | 多租户与规模化 | [008](./docs/prd/prd-008-multitenancy-scale.md) | 进行中（T-M8-01/02 已完成，未发版） |
 
 ## 开发规范
 

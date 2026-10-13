@@ -18,6 +18,12 @@ import type { PrismaClientLike } from './types.js';
 /** 数据库客户端注入令牌（供业务 Repository 子类构造时注入） */
 export const DB_CLIENT = Symbol('fw.db.client');
 
+/**
+ * 租户数据源注入令牌（M8 T-M8-02）：宿主创建 TenantDataSource 后以 useValue 注入，
+ * 需要 dedicated 独立库路由的 Repository 在 options.dataSource 中引用。
+ */
+export const TENANT_DATA_SOURCE = Symbol('fw.db.tenantDataSource');
+
 /** 就绪探针（由 createDbReadinessProbe 创建，DbModule 负责标记连接状态） */
 export interface DbReadinessProbe {
   name: string;

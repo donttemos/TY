@@ -5,6 +5,8 @@
  *   只有鉴权守卫确认「当前用户归属该租户」后才置位，Repository 层据此 fail-closed。
  *   经 @fw/core bootstrap 的 beforeListen 钩子以 app.use 注册（模块级 forRoutes 在
  *   Express 5 下不覆盖其他模块的路由，故与 trace 中间件同层注册，顺序 trace → tenant → 路由）。
+ *   M8 T-M8-02：解析结果除 tenantId 外，还把 isolation 与解密后的独立库连接串写入上下文，
+ *   供 @fw/db 的 TenantDataSource 做 dedicated 租户数据源路由。
  * @author donttemo
  * @created 2026-10-13
  * @module @fw/tenant
@@ -59,7 +61,13 @@ export function createTenantExpressMiddleware(tenants: TenantService): TenantExp
       .resolve(input)
       .then((tenant: TenantInfo | null) => {
         if (tenant) {
-          patchRequestContext({ tenantId: tenant.id });
+          // 隔离级别与独立库连接串随上下文透传（T-M8-02）：@fw/db 的 TenantDataSource
+          // 据此把 dedicated 租户的查询路由到独立库 client；dbUrl 仅进程内传递，禁入日志
+          patchRequestContext({
+            tenantId: tenant.id,
+            tenantIsolation: tenant.isolation,
+            ...(tenant.dbUrl ? { tenantDbUrl: tenant.dbUrl } : {}),
+          });
           (req as TenantRequest).tenant = tenant;
         }
         next();

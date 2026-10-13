@@ -7,6 +7,7 @@
  * @modified 2026-10-13 donttemo M4 新增 9 个 CACHE_* 键（前缀/TTL/容量/降级/空值/抖动/锁/慢操作/大key）
  * @modified 2026-10-13 donttemo M7 新增 10 个 MQ_* 键（连接/前缀/并发/尝试/退避/超时/cron/限速/死信上限/停机等待）
  * @modified 2026-10-13 donttemo M8 新增 6 个 TENANT_* 键（总开关/解析顺序/请求头名/基准域名/JWT claim/缓存TTL）
+ * @modified 2026-10-14 donttemo M8 T-M8-02 新增 TENANT_DB_KEY（dedicated 租户独立库连接串加密密钥）
  * @modified 2026-10-13 donttemo 新增 MQ_STALLED_MS（bullmq 失速检测间隔，TC-JOB-008 演练可调）
  * @module config
  * @since v0.1.0
@@ -154,6 +155,11 @@ export const envSchema = z.object({
   TENANT_JWT_CLAIM: z.string().min(1).default('tenantId').describe('JWT 租户 claim 字段名（TENANT_JWT_CLAIM）'),
   /** 租户信息缓存 TTL（秒，M8）：tenants 表查询结果的本地缓存时长 */
   TENANT_CACHE_TTL: z.coerce.number().int().min(1).max(3600).default(60).describe('租户信息缓存 TTL（秒）'),
+  /**
+   * dedicated 租户独立库连接串的加密密钥（M8 T-M8-02）：64 位十六进制（32 字节）或 base64。
+   * 缺省时用内置开发密钥（仅限本地开发，生产必须显式配置）。
+   */
+  TENANT_DB_KEY: optionalString().describe('dedicated 租户独立库连接串加密密钥（TENANT_DB_KEY，64 位十六进制）'),
 });
 
 /** 校验后的环境变量类型 */

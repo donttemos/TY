@@ -1,5 +1,5 @@
 /**
- * @file M8 多租户冒烟验证脚本（PRD-008 FR-01/FR-03）
+ * @file M8 多租户冒烟验证脚本（PRD-008 FR-01/FR-02/FR-03）
  * @description 自带服务生命周期，分阶段验证租户层（TC-TNT-001/002/003 的可执行子集）：
  *   A. 多租户启用（TENANT_ENABLED=true + TENANT_BASE_DOMAIN=example.com）：
  *      A1 fail-closed——无租户标识的请求直接 403（AC：缺失上下文不返回全量数据）；
@@ -9,23 +9,34 @@
  *      A5 跨租户越权——acmeadmin（tenantId=1）携带 legacy 请求头被守卫拦截（AC：租户 A 无法访问租户 B）；
  *      A6 运维路径豁免——/health / /ready 无租户标识仍可用（与 @fw/auth 默认公开路径对齐）。
  *   B. 回归：TENANT_ENABLED=false 时无租户标识全部接口正常（单租户模式与 M7 行为一致）。
+ *   C. dedicated 独立库路由（T-M8-02 / TC-TNT-003）：dedicated 租户经 /api/v1/demo/tenant-items
+ *      的读写落在 prisma/tenant-dedicated.db（独立物理库），共享库内查无此数据；
+ *      未携带租户标识仍 fail-closed。
  *   说明：@fw/db 的 tenantScoped fail-closed 与 @fw/auth 的 @IgnoreTenant 审计由框架单测覆盖
  *      （db/repository-suite、auth/rbac.guard.test），本脚本聚焦 HTTP 层端到端行为。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo M8 T-M8-02 新增阶段 C（dedicated 独立库路由端到端验证）
  * @module example-api
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { promisify } from 'node:util';
 import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** 冒烟专用端口（避开 3000/3100/3200 的既有实例） */
+const execFileAsync = promisify(execFile);
+
+/** 冒烟专用端口（避开 3000/3100/3200/3300 的既有实例） */
 const PORT = 3300;
 const BASE = `http://127.0.0.1:${PORT}`;
 /** 应用目录（dist/main.js 所在） */
 const CWD = fileURLToPath(new URL('..', import.meta.url));
+/** dedicated 租户独立库（与主库同 schema；相对路径按 prisma/schema.prisma 目录解析） */
+const DEDICATED_DB = path.join(CWD, 'prisma', 'tenant-dedicated.db');
 
 const results = [];
 
@@ -199,9 +210,100 @@ async function phaseDisabled() {
   }
 }
 
+/**
+ * 重建 dedicated 独立库结构：删旧库 → 以主 schema 的副本（仅替换数据源）执行 db push。
+ * 副本 schema 放在 prisma/ 下，其 `file:./tenant-dedicated.db` 与运行时的绝对 URL 指向同一文件。
+ */
+async function resetDedicatedDb() {
+  if (fs.existsSync(DEDICATED_DB)) fs.rmSync(DEDICATED_DB);
+  const schema = fs.readFileSync(path.join(CWD, 'prisma', 'schema.prisma'), 'utf8');
+  const patched = schema.replace(/url\s*=\s*env\("DB_URL"\)/, 'url = "file:./tenant-dedicated.db"');
+  if (!patched.includes('file:./tenant-dedicated.db')) {
+    throw new Error('dedicated schema 数据源替换失败：未找到 DB_URL 占位');
+  }
+  const tmpSchema = path.join(CWD, 'prisma', 'smoke-dedicated.prisma');
+  fs.writeFileSync(tmpSchema, patched);
+  try {
+    await execFileAsync(
+      process.execPath,
+      [path.join(CWD, 'node_modules', 'prisma', 'build', 'index.js'), 'db', 'push', '--schema', tmpSchema, '--skip-generate'],
+      { cwd: CWD },
+    );
+  } finally {
+    fs.rmSync(tmpSchema, { force: true });
+  }
+  if (!fs.existsSync(DEDICATED_DB)) throw new Error('dedicated 独立库未创建（db push 未生成文件）');
+}
+
+/** 阶段 C：dedicated 独立库路由（T-M8-02 / TC-TNT-003） */
+async function phaseDedicated() {
+  console.log('\n=== 阶段 C：dedicated 独立库路由（TC-TNT-003）===');
+  await resetDedicatedDb();
+  const { PrismaClient } = await import('@prisma/client');
+  const mainDb = new PrismaClient({ datasources: { db: { url: 'file:./dev.db' } } });
+  const server = await startServer({
+    TENANT_ENABLED: 'true',
+    TENANT_BASE_DOMAIN: 'example.com',
+    TENANT_ORDER: 'subdomain,header,jwt',
+  });
+  try {
+    // C1 登录 dedicated 租户管理员（账号在共享库，业务数据走独立库）
+    const loginRes = await login('dedicatedadmin', 'Dedicated@123456', { 'x-tenant-id': 'dedicated' });
+    check('C1 dedicated 租户管理员登录成功', isOk(loginRes.status), `[http=${loginRes.status}]`);
+    const token = loginRes.body?.data?.accessToken;
+    check('C1 返回 access token', typeof token === 'string' && token.length > 0);
+
+    // C2 写入：dedicated 租户的创建请求落在独立库
+    const marker = `dedicated-smoke-${Date.now()}`;
+    const created = await call('/api/v1/demo/tenant-items', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'x-tenant-id': 'dedicated', 'content-type': 'application/json' },
+      body: JSON.stringify({ title: marker }),
+    });
+    check('C2 dedicated 租户写入成功', isOk(created.status), `[http=${created.status}]`);
+    const createdId = created.body?.data?.id;
+    check('C2 返回新建条目 ID', typeof createdId === 'string' && createdId.length > 0);
+
+    // C3 读取：dedicated 租户列表只见独立库内的数据（ freshly pushed 库，仅本条）
+    const list = await call('/api/v1/demo/tenant-items?page=1&pageSize=100', {
+      headers: { authorization: `Bearer ${token}`, 'x-tenant-id': 'dedicated' },
+    });
+    const items = list.body?.data?.items ?? [];
+    check('C3 dedicated 租户列表查询成功', list.status === 200, `[http=${list.status}]`);
+    check('C3 列表只含独立库数据（total=1）', list.body?.data?.total === 1, `[total=${list.body?.data?.total}]`);
+    check('C3 新建条目在独立库列表中可见', items.some((item) => item.id === createdId));
+
+  // C4 反向验证：共享库（主库）中查无此条（物理隔离）
+  // 相对 sqlite 路径按 schema 目录解析（与主库 DB_URL 同语义），冒烟进程 cwd 无关
+  const inMain = await mainDb.demoItem.findFirst({ where: { title: marker } });
+    check('C4 共享库中不存在 dedicated 租户数据', inMain === null, `[found=${inMain?.id ?? 'null'}]`);
+    const dedicatedCount = await mainDb.tenant.count({ where: { code: 'dedicated' } });
+    check('C4 主库 tenants 表仍登记 dedicated 租户元数据', dedicatedCount === 1, `[count=${dedicatedCount}]`);
+
+    // C5 fail-closed 不退化：dedicated 租户请求缺失租户标识仍 403（不回退共享库）
+    const noTenant = await call('/api/v1/demo/tenant-items', { headers: { authorization: `Bearer ${token}` } });
+    check('C5 缺失租户标识返回 403（fail-closed）', noTenant.status === 403, `[http=${noTenant.status}]`);
+    check('C5 错误码为 4001', noTenant.body?.code === 4001, `[code=${noTenant.body?.code}]`);
+
+    // C6 共享库租户不受影响：legacy 管理员看到的列表中没有 dedicated 数据
+    const legacyLogin = await login('admin', 'Admin@123456', { 'x-tenant-id': 'legacy' });
+    const legacyToken = legacyLogin.body?.data?.accessToken;
+    const legacyList = await call('/api/v1/demo/tenant-items?page=1&pageSize=100', {
+      headers: { authorization: `Bearer ${legacyToken}`, 'x-tenant-id': 'legacy' },
+    });
+    const legacyItems = legacyList.body?.data?.items ?? [];
+    check('C6 共享库列表不含 dedicated 数据', !legacyItems.some((item) => item.id === createdId));
+    check('C6 共享库列表仍含种子数据', legacyList.body?.data?.total >= 3, `[total=${legacyList.body?.data?.total}]`);
+  } finally {
+    await stopServer(server);
+    await mainDb.$disconnect();
+  }
+}
+
 async function main() {
   await phaseEnabled();
   await phaseDisabled();
+  await phaseDedicated();
   const failed = results.filter((r) => !r.ok);
   console.log(`\n结果：${results.length - failed.length}/${results.length} 通过`);
   if (failed.length > 0) {

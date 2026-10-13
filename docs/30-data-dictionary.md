@@ -333,6 +333,11 @@ erDiagram
 | `expire_at` | datetime(3) | 否 | NULL | 到期时间 | — |
 | 通用字段 | — | — | — | 同上 | — |
 
+> `db_url_enc` 加密格式（M8 T-M8-02）：AES-256-GCM 认证加密，密文形态 `v1.<iv-b64url>.<tag-b64url>.<ct-b64url>`；
+> 密钥取环境变量 `TENANT_DB_KEY`（64 位十六进制或 base64，缺省用内置开发密钥并告警，生产必须显式配置）。
+> 解密只发生在租户存储适配层，明文经进程内请求上下文传递给数据源路由，禁止写入日志/审计/队列消息。
+> sqlite 相对路径（`file:./xxx.db`）按 `prisma/schema.prisma` 所在目录解析，与主库 `DB_URL` 语义一致。
+
 ### 3.11 `dict_categories` 字典分类（M5）
 
 | 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |

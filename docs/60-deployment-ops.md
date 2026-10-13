@@ -81,6 +81,7 @@
 | | `TENANT_BASE_DOMAIN` | 否 | 空 | 子域名解析基准域名（如 `example.com`）；未配置时 subdomain 来源关闭 |
 | | `TENANT_JWT_CLAIM` | 否 | `tenantId` | JWT claim 来源的字段名（取 access token 载荷） |
 | | `TENANT_CACHE_TTL` | 否 | 60 | `tenants` 表查询结果的内存缓存 TTL，单位秒；租户停用/换库等管理操作最多延迟一个 TTL 生效 |
+| | `TENANT_DB_KEY` | 否 | 空 | dedicated 租户独立库连接串的加密密钥（64 位十六进制或 base64）；缺省用内置开发密钥并打印告警，**生产必须显式配置**。种子写入与运行解密须用同一密钥，轮换密钥需重写 `db_url_enc` |
 | 日志 | `LOG_LEVEL` | 否 | info | 级别 |
 | | `LOG_FORMAT` | 否 | json | 容器环境固定 json |
 | 追踪 | `OTEL_ENABLED` | 否 | false | M8 起支持 |
@@ -95,6 +96,14 @@
 **管理后台托管**：`apps/admin-web` 生产构建（`pnpm --filter admin-web build`）产出纯静态 `dist/`，无 Node 依赖；Nginx 需配置 SPA history 回退（`try_files $uri $uri/ /index.html`），API 请求经 `VITE_API_BASE_URL` 直连后端或由 Nginx 反代 `/api/`。
 
 **队列持久性**：`memory` 驱动的待执行任务不跨进程重启保留，仅用于可丢失任务；需要重启后恢复任务时选 `bullmq`，并为 Redis 配置持久化。多实例 cron 锁依赖 `CACHE_DRIVER=redis` 及可用的 `CACHE_URL`。
+
+**多租户 dedicated 隔离（M8 T-M8-02）**：`tenants.isolation='dedicated'` 的租户按 `db_url_enc`（AES-256-GCM 密文，密钥为 `TENANT_DB_KEY`）路由到独立库。运维要点：
+
+- 独立库与主库**同 schema**（迁移须同版本执行）；账号 / 权限 / 租户元数据仍在主库，业务数据在独立库；
+- 连接串解密只在租户存储适配层发生，明文不入日志 / 审计 / 队列消息；`TENANT_DB_KEY` 按密钥管理规范注入并轮换；
+- 路由层按进程内 LRU + 空闲淘汰管理独立库连接（默认上限 32、空闲 10 分钟），实例重启后按请求懒建连；
+- 新增 dedicated 租户流程：建同 schema 空库 → 写 `tenants` 行（密文连接串）→ 建账号（`tenant_id` = 新租户）→ 验证 `TENANT_CACHE_TTL` 内生效；
+- 停用 / 回收租户：`status=0` 立即 fail-closed（403/4001），独立库数据按合同约定归档后再下线。
 
 ## 4. 小档部署（单机 Docker）
 
