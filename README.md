@@ -18,7 +18,7 @@
 
 | 层 | 选型 |
 |---|---|
-| 语言 / 运行时 | TypeScript + Node.js 20+ |
+| 语言 / 运行时 | TypeScript + Node.js 20.19+（dev 工具链 vite 8 的下限；应用运行时 ≥ 20） |
 | 后端框架 | NestJS 11（Express 5；模块化 + 依赖注入，单体与微服务同构） |
 | ORM | Prisma 6（ADR-0002 定稿：多 provider 切换 = 改 datasource 两行 + generate + migrate） |
 | 缓存 | 自研 `CacheStore` 端口 + memory / ioredis 驱动（ADR-0012） |

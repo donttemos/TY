@@ -3,6 +3,8 @@
  * @description 覆盖错误码表、BizError、ResponseInterceptor、GlobalExceptionFilter、HealthController、GracefulShutdown；e2e 用 supertest 验证统一响应 + traceId 贯通（TC-CORE-003/004/006/007）
  * @author donttemo
  * @created 2026-10-12
+ * @modified 2026-10-13 donttemo vite 8/vitest 4 覆盖率统计更精后补齐真实缺口：停机超时强退、关闭钩子异常、stdout drain、默认 process.exit、信号注册与重复信号
+ * @modified 2026-10-13 donttemo vite 8/vitest 4 覆盖率统计更精后补齐真实缺口：停机超时强退、关闭钩子异常、stdout drain、默认 process.exit、信号注册与重复信号
  * @since v0.1.0
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -230,27 +232,121 @@ describe('@fw/core · traceId 透传', () => {
 });
 
 describe('@fw/core · 优雅停机（TC-CORE-007）', () => {
-  it('收到 SIGTERM 后调用 app.close 并打印 shutdown complete', async () => {
-    const appClose = vi.fn().mockResolvedValue(undefined);
+  /**
+   * 构造停机上下文。`autoClose: false` 时 server.close 的回调挂起不触发，用于模拟「在途请求尚未结束」，
+   * 由用例调用 releasePending() 收尾（避免留下悬挂的 await）。
+   */
+  function makeShutdownCtx(options: { closeHookFails?: boolean; autoClose?: boolean } = {}) {
+    const appClose = options.closeHookFails
+      ? vi.fn().mockRejectedValue(new Error('pool close failed'))
+      : vi.fn().mockResolvedValue(undefined);
     const app = { close: appClose } as unknown as INestApplication;
     const server = new EventEmitter() as unknown as Server;
-    const serverClose = vi.fn();
-    Object.assign(server, { close: serverClose, closeIdleConnections: vi.fn() });
-    // server.close(cb) 需要异步触发 close 回调以结束 server.close 的 await
-    serverClose.mockImplementation((cb?: () => void) => {
-      if (cb) setImmediate(cb);
+    const pending: (() => void)[] = [];
+    const serverClose = vi.fn((cb?: () => void) => {
+      if (!cb) return;
+      if (options.autoClose === false) pending.push(cb);
+      else setImmediate(cb);
     });
+    Object.assign(server, { close: serverClose, closeIdleConnections: vi.fn() });
 
     const logLines: string[] = [];
-    const logger = { info: (msg: string) => logLines.push(msg), error: () => undefined };
+    const logger = {
+      info: (msg: string) => logLines.push(msg),
+      error: (msg: string) => logLines.push(`ERROR ${msg}`),
+    };
     const exit = vi.fn();
 
-    await runGracefulShutdown({ app, server: server as Server, timeoutSeconds: 5, logger: logger as never, exit }, 'SIGTERM');
+    return {
+      app,
+      appClose,
+      server: server as Server,
+      serverClose,
+      logLines,
+      exit,
+      base: { app, server: server as Server, timeoutSeconds: 5, logger: logger as never, exit },
+      releasePending: () => {
+        for (const cb of pending) cb();
+      },
+    };
+  }
 
-    expect(serverClose).toHaveBeenCalled();
-    expect(appClose).toHaveBeenCalled();
-    expect(logLines.some((l) => l.includes('开始优雅停机'))).toBe(true);
-    expect(logLines).toContain('shutdown complete');
-    expect(exit).toHaveBeenCalledWith(0);
+  it('收到 SIGTERM 后调用 app.close 并打印 shutdown complete', async () => {
+    const ctx = makeShutdownCtx();
+
+    await runGracefulShutdown(ctx.base, 'SIGTERM');
+
+    expect(ctx.serverClose).toHaveBeenCalled();
+    expect(ctx.appClose).toHaveBeenCalled();
+    expect(ctx.logLines.some((l) => l.includes('开始优雅停机'))).toBe(true);
+    expect(ctx.logLines).toContain('shutdown complete');
+    expect(ctx.exit).toHaveBeenCalledWith(0);
+  });
+
+  it('在途请求超时未完成时先强制退出(1)，请求结束后仍走完正常退出(0)', async () => {
+    const ctx = makeShutdownCtx({ autoClose: false });
+
+    const running = runGracefulShutdown({ ...ctx.base, timeoutSeconds: 0.02 }, 'SIGTERM');
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(ctx.logLines.some((l) => l.includes('优雅停机超时'))).toBe(true);
+    expect(ctx.exit).toHaveBeenNthCalledWith(1, 1);
+
+    ctx.releasePending();
+    await running;
+    expect(ctx.exit).toHaveBeenLastCalledWith(0);
+  });
+
+  it('关闭钩子抛错时记录错误但不阻断退出', async () => {
+    const ctx = makeShutdownCtx({ closeHookFails: true });
+
+    await runGracefulShutdown(ctx.base, 'SIGTERM');
+
+    expect(ctx.logLines.some((l) => l.includes('关闭钩子执行失败'))).toBe(true);
+    expect(ctx.exit).toHaveBeenCalledWith(0);
+  });
+
+  it('stdout 有未落盘数据时等待 drain 事件再退出', async () => {
+    const ctx = makeShutdownCtx();
+    // 假装 stdout 仍有积压字节：真实环境走的是 else 分支（等 drain），此处显式构造
+    Object.defineProperty(process.stdout, 'writableLength', { configurable: true, get: () => 1024 });
+    try {
+      const running = runGracefulShutdown(ctx.base, 'SIGTERM');
+      await new Promise((resolve) => setImmediate(resolve));
+      process.stdout.emit('drain');
+      await running;
+      expect(ctx.exit).toHaveBeenCalledWith(0);
+    } finally {
+      delete (process.stdout as unknown as Record<string, unknown>).writableLength;
+    }
+  });
+
+  it('未注入 exit 时走默认 process.exit', async () => {
+    const ctx = makeShutdownCtx();
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    try {
+      await runGracefulShutdown(
+        { app: ctx.app, server: ctx.server, timeoutSeconds: 5, logger: ctx.base.logger },
+        'SIGTERM',
+      );
+      expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      exitSpy.mockRestore();
+    }
+  });
+
+  it('setupGracefulShutdown 注册信号处理，重复信号只停机一次', async () => {
+    const ctx = makeShutdownCtx();
+    setupGracefulShutdown(ctx.base);
+
+    process.emit('SIGTERM');
+    await new Promise((resolve) => setImmediate(resolve));
+    // 第二次信号应被 shuttingDown 守卫忽略（不重复执行 app.close）
+    process.emit('SIGINT');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(ctx.appClose).toHaveBeenCalledTimes(1);
+    expect(ctx.exit).toHaveBeenCalledTimes(1);
+    expect(ctx.exit).toHaveBeenCalledWith(0);
   });
 });

@@ -3,6 +3,7 @@
 # @author donttemo
 # @created 2026-10-09
 # @modified 2026-10-13 donttemo NestJS 10 → 11 升级：overrides 说明同步（R-06 两项 moderate 随 @nestjs/core@11.2.7 修复）
+# @modified 2026-10-13 donttemo dev 工具链升级：overrides 说明同步（vitest/vite/happy-dom/tinypool/braces 五项随之清零，无需新增 override）
 
 packages:
   - "packages/*"
@@ -32,7 +33,10 @@ allowBuilds:
 #   deepmerge-ts@<8.0.0 → 8.0.0：递归对象合并栈耗尽，仅 prisma CLI 配置解析路径使用（不在应用运行时）
 # 已随 NestJS 10 → 11 升级解决（2026-10-13，R-06）：@nestjs/core <=11.1.17 与 file-type 两项 moderate，
 #   由 @nestjs/core / @nestjs/common@11.2.7 修复（file-type 由 common 升至 21.3.4，经 load-esm 动态加载，ESM 工程原生可用）
-# 未覆盖（无可用补丁 / dev 工具链大版本）：braces（registry 最新即 3.0.3）、vitest(2→3)、tinypool(1→2)、happy-dom(15→20)、vite(5→6)
+# 已随 dev 工具链大版本升级解决（2026-10-13）：vitest/<3.2.6 与 @vitest/mocker（→vitest@4.1.11）、
+#   tinypool<=2.1.0（vitest 4 起不再依赖 tinypool，该链路整条消失）、happy-dom（15.11.7 → 21.0.1）、
+#   vite<=6.4.2（5.4.21 → 8.3.4）、esbuild<=0.24.2（0.21.5 → 0.28.2，随 vite 8 的 peer 上抬）
+# 未覆盖项：无（2026-10-13 dev 工具链升级后全量审计 0 项；原列入的 braces 随 vite 8 不再进入依赖树）
 overrides:
   multer@<2.4.0: 2.4.0
   qs@<6.16.0: 6.16.0

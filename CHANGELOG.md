@@ -2,7 +2,7 @@
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
-> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；运行时已升级 NestJS 11 / Express 5（生产依赖漏洞清零）。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
+> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；运行时已升级 NestJS 11 / Express 5，dev 工具链升至 vitest 4 / vite 8，**`pnpm audit` 生产与 dev 全量零漏洞**。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
 
 ## 版本与变更规则
 
@@ -13,6 +13,33 @@
 - **频率**：每个发布版本一条记录；`Unreleased` 区间持续累积，发布时转为版本条目并清空。
 
 ## [Unreleased]
+
+### Changed（dev 工具链大版本升级，2026-10-13）
+
+> 闭环 v0.1.0 发布验收遗留项 **R-05**（dev 工具链 13 项漏洞），并使**全仓 `pnpm audit` 归零**。
+
+- **主版本升级**：`vitest` 2.1.9 → **4.1.11**（`@vitest/coverage-v8` 同步）、`vite` 5.4.21 → **8.3.4**、`happy-dom` 15.11.7 → **21.0.1**、`@vitejs/plugin-vue` 5.2.4 → **6.0.10**、`vue-tsc` / `@vue/language-core` 2.2.12 → **3.3.13**、`unplugin-vue-components` 0.27.5 → **32.1.0**；`@vue/test-utils` 2.4.6 → 2.5.1。**`tinypool` 随 vitest 4 退出依赖树**（原 1.1.1），`braces` 亦不再被引入。
+- **vite 8 换用 rolldown + oxc** 的两处破坏性适配：
+  - **8 个 `vitest.config.ts` 新增顶层 `oxc.decorator = { legacy: true, emitDecoratorMetadata: true }`**。oxc 只在「文件被某个 tsconfig 覆盖」时才启用 legacy 装饰器，而本仓 tsconfig 普遍 `exclude` 掉 `src/__tests__` → 测试中声明的 `@Module/@Injectable` 会被原样保留，Node 直接判 `SyntaxError: Invalid or unexpected token`（core / cache / db 各有一个测试文件因此无法收集，且 cache 表现为「文件计为失败但用例数照旧」的**静默漏跑**）。显式声明后与 tsc 行为一致。
+  - **`apps/admin-web/vite.config.ts` 的 `manualChunks` 由对象形式改为函数形式**：rolldown 只接受函数（对象形式被忽略并告警），分包会静默失效。
+- **覆盖率统计更精确带来的真实缺口**（vitest 4 的 v8 函数映射修正了 vitest 2 的漏计，非本次引入的回归）：`@fw/logger` 的 `trace/warn/fatal` 包装、默认 stdout sink、`redactValue` 数组分支；`@fw/core` 优雅停机的超时强退、关闭钩子异常、stdout drain、信号注册与重复信号。**补真实用例而非下调阈值**（logger 13 → 16、core 12 → 17）。
+- **Node 要求**：dev 工具链下限为 **Node ≥ 20.19**（vite 8 / `@vitejs/plugin-vue` 6 要求 `^20.19.0 || >=22.12.0`），根 `engines.node` 由 `>=20` 收紧为 **`>=20.19`**；应用运行时要求不变（Nest 11 为 Node ≥ 20）。
+
+### Security（dev 工具链升级）
+
+- **全仓依赖漏洞归零**：`pnpm audit`（含 devDependencies）由 **13 项（critical 4 / high 4 / moderate 5）** 转为 **No known vulnerabilities**（0 项）。其中 `happy-dom` VM 逃逸 RCE、`tinypool` 原型污染 RCE、`vitest` UI 任意文件读取/执行三项 critical 与 vitest/@vitest/mocker、vite、esbuild 等 moderate/high 全部消除。至此 R-05、R-06 一并归零。
+
+### Fixed（dev 工具链升级顺带修复的既有缺陷）
+
+- **`apps/admin-web/scripts/smoke-mock.mjs` 的 bundle 门禁统计缺陷**：`vendor-element-plus` 体积由「取最后一个匹配文件」改为**累加**。rolldown 产物顺序变化后，该门禁此前只量到 CSS（29.9 kB）而漏掉 208.3 kB 的 JS chunk，**等于失效**；修正后实测 231.6 kB（门禁 ≤ 360 kB）。
+- **`packages/db/tsconfig.json` 缺 `experimentalDecorators` / `emitDecoratorMetadata`**：TS 5 会把 `@Global()/@Module()` 按**标准（TC39）装饰器**编译（dist 内 `__esDecorate`）。当前只因 @fw/db 恰好没有方法/参数装饰器而未暴露，一旦新增 `@Get`/`@Inject` 即会静默失效（Nest 方法/参数装饰器依赖 legacy 语义）——属潜在缺陷。已与 core/cache/auth 对齐，dist 产物恢复 `__decorate`。
+- **`apps/admin-web/src/views/system/users/index.vue` 的模板内联表达式**：模板中直接调用 `ElMessage.info(...)` 在 vue-tsc 3 下被解析为组件实例类型（TS2339），改为具名 `handleExport`（同时更易测试）。
+
+### 升级验证（2026-10-13，dev 工具链，全量实跑）
+
+- 框架包单测 **366/366** 且覆盖率门禁全过：config 10/10、logger 16/16（函数 100%）、core 17/17（函数 100%）、db 45/45（另 11 项三库矩阵按设计跳过）、cache 73/73、auth 89/89、cli 116/116。
+- `apps/example-api` 冒烟 **50/50**（M1+M2 13、M3 25、M4 12）；`apps/admin-web` 单测 **29/29** + mock 全链路冒烟 **40/40**（bundle gzip 总量 307.8 kB）。
+- `vue-tsc` 3 通过、`vite build`（rolldown）通过、逐包 `tsc` 零错误、文件头门禁 **222** 文件通过、`pnpm install --frozen-lockfile` 通过。
 
 ### Changed（NestJS 10 → 11 升级，2026-10-13）
 

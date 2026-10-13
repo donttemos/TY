@@ -3,6 +3,8 @@
  * @description 覆盖结构化输出、脱敏（键名 + 消息文本）、级别过滤、按模块级别、字节截断、AsyncLocalStorage traceId 贯通（TC-CORE-003/005）
  * @author donttemo
  * @created 2026-10-12
+ * @modified 2026-10-13 donttemo vite 8/vitest 4 覆盖率统计更精后补齐真实缺口：级别包装方法（trace/warn/fatal）、数组脱敏分支
+ * @modified 2026-10-13 donttemo vite 8/vitest 4 覆盖率统计更精后补齐真实缺口：级别包装方法（trace/warn/fatal）、数组脱敏分支
  * @since v0.1.0
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -70,6 +72,24 @@ describe('@fw/logger · 级别过滤（TC-CORE-005 准备）', () => {
   });
 });
 
+describe('@fw/logger · 各级别包装方法', () => {
+  beforeEach(() => {
+    configureLogger({ level: 'trace', maxBytes: 8192 });
+    setModuleLevel('levels', 'trace');
+  });
+
+  it('trace / warn / fatal 包装方法按各自级别输出', () => {
+    const cap = captureLogs();
+    const logger = Logger.for('levels');
+
+    logger.trace('t');
+    logger.warn('w');
+    logger.fatal('f');
+
+    expect(cap.lines.map((line) => parse(line).level)).toEqual(['trace', 'warn', 'fatal']);
+  });
+});
+
 describe('@fw/logger · 脱敏（TC-CORE-005）', () => {
   beforeEach(() => {
     configureLogger({ level: 'trace' });
@@ -94,6 +114,11 @@ describe('@fw/logger · 脱敏（TC-CORE-005）', () => {
   it('嵌套结构中的敏感字段也脱敏', () => {
     const result = redactValue({ user: { name: 'a', token: 'b' } });
     expect((result as { user: { token: string } }).user.token).toBe('***');
+  });
+
+  it('数组结构逐个元素脱敏（数组分支）', () => {
+    const result = redactValue([{ password: 'p' }, 'plain', [{ idcard: 'i' }]]);
+    expect(result).toEqual([{ password: '***' }, 'plain', [{ idcard: '***' }]]);
   });
 
   it('错误对象的 message 也走消息脱敏', () => {

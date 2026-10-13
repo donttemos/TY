@@ -5,6 +5,7 @@
  *   production 不挂载、产物为纯静态资源；构建按 vendor 分包，构建体积门禁见 scripts/smoke-mock.mjs。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-13 donttemo vite 8（rolldown）适配：manualChunks 由对象形式改为函数形式
  * @module admin-web
  */
 
@@ -40,9 +41,15 @@ export default defineConfig(({ mode }) => ({
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-vue': ['vue', 'vue-router', 'pinia'],
-          'vendor-element-plus': ['element-plus', '@element-plus/icons-vue'],
+        // rolldown（vite 8 起）只接受函数形式的 manualChunks，对象形式会被忽略并告警；
+        // 按模块实际路径分组：pnpm 布局下依赖位于 node_modules/.pnpm/<pkg>@<ver>/node_modules/<pkg>/，
+        // 因此统一匹配「/node_modules/<pkg>/」片段即可同时覆盖常规布局与 pnpm 布局。
+        manualChunks(id: string): string | undefined {
+          if (id.includes('/node_modules/element-plus/') || id.includes('/node_modules/@element-plus/')) {
+            return 'vendor-element-plus';
+          }
+          if (/\/node_modules\/(vue|vue-router|pinia|@vue)\//.test(id)) return 'vendor-vue';
+          return undefined;
         },
       },
     },

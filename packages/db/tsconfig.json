@@ -1,8 +1,19 @@
+/*
+ * @file @fw/db 编译配置
+ * @description 继承仓库严格模式基线，仅输出 dist 产物。
+ *   装饰器开关与 core/cache/auth 对齐：db.module 使用 @Global()/@Module()，缺这两个开关时
+ *   TS 5 会按标准（TC39）装饰器编译，Nest 的方法/参数装饰器语义将失效。
+ * @author donttemo
+ * @created 2026-10-12
+ * @modified 2026-10-13 donttemo 补 experimentalDecorators + emitDecoratorMetadata，与其余框架包一致
+ */
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src"
+    "rootDir": "src",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
   },
   "include": ["src/**/*.ts"],
   "exclude": ["src/__tests__/**", "dist"]

@@ -5,6 +5,8 @@
  *   角色分配弹窗为全量覆盖语义（PUT /users/:id/roles）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-13 donttemo 导出提示从模板内联表达式改为具名 handleExport：vue-tsc 3 下
+ *   模板内直接调用 ElMessage 会被解析为组件实例类型（TS2339），具名方法同时更易测试
  * @module admin-web/views
 -->
 
@@ -17,7 +19,7 @@ import * as userApi from '@/api/user';
 import * as roleApi from '@/api/role';
 import { useDictStore } from '@/store/dict';
 import { BizError, describeBizError } from '@/utils/biz-error';
-import type { CrudColumn, FormField, SearchField } from '@/components/CrudTable/types';
+import type { CrudColumn, FormField, SearchField, SearchModel } from '@/components/CrudTable/types';
 import type { RoleListItem, UserListItem } from '@/api/types';
 
 const dictStore = useDictStore();
@@ -142,6 +144,11 @@ function handleRefresh(): void {
   crudRef.value?.refresh();
   void dictStore.invalidate();
 }
+
+/** 导出：演示环境仅提示已发起（真实实现走 C-06 契约的导出端点） */
+function handleExport(payload: { search: SearchModel; sort: string | null }): void {
+  ElMessage.info(`导出已发起（演示环境）：${JSON.stringify(payload.search)}`);
+}
 </script>
 
 <template>
@@ -157,7 +164,7 @@ function handleRefresh(): void {
       edit-title="编辑用户 #{id}"
       selection
       exportable
-      @export="(payload) => ElMessage.info(`导出已发起（演示环境）：${JSON.stringify(payload.search)}`)"
+      @export="handleExport"
       @refresh="handleRefresh"
     >
       <template #cell-roles="{ row }">

@@ -233,7 +233,7 @@ gantt
 
 **Backlog**：M7–M8 全部任务。
 
-> **v0.1.0 遗留项（不阻塞发布）**：① ~~`@nestjs/core <=11.1.17` 与 `file-type` 的 3 项 moderate 依赖漏洞需随 NestJS 10 → 11 升级解决~~ → **✅ 已闭环（2026-10-13）**：全仓升 NestJS **11.2.7**（Express 5.2.1 / `@types/express` 5 / file-type 21.3.4 / multer 2.4.0），`pnpm audit --prod` **零漏洞**；② dev 工具链大版本升级（vitest 2→3、tinypool 1→2、happy-dom 15→20、vite 5→6）——全量审计剩余 13 项（critical 4 / high 4 / moderate 5）全部落在此路径内，**未执行**；③ `braces` 暂无可用补丁版本。
+> **v0.1.0 遗留项（不阻塞发布）**：① ~~`@nestjs/core <=11.1.17` 与 `file-type` 的 3 项 moderate 依赖漏洞需随 NestJS 10 → 11 升级解决~~ → **✅ 已闭环（2026-10-13）**：全仓升 NestJS **11.2.7**（Express 5.2.1 / `@types/express` 5 / file-type 21.3.4 / multer 2.4.0），`pnpm audit --prod` **零漏洞**；② ~~dev 工具链大版本升级（vitest 2→3、tinypool 1→2、happy-dom 15→20、vite 5→6）~~ → **✅ 已闭环（2026-10-13）**：vitest **4.1.11** / vite **8.3.4**（rolldown + oxc）/ happy-dom **21.0.1** / plugin-vue 6 / vue-tsc 3 / unplugin-vue-components 32，`tinypool` 随 vitest 4 整条链路消失；**全仓 `pnpm audit`（含 dev）零漏洞**，全套门禁复跑通过（框架包 366/366、example-api 50/50、admin-web 29+40）；③ ~~`braces` 暂无可用补丁版本~~ → **✅ 已消除（2026-10-13）**：`braces` 随 vite 8 不再进入依赖树，无需补丁。
 
 > **M3 遗留项（已登记，不阻塞 M3 验收）**：① `apikey`/`session`/`oauth2` 端到端路由（M5 接入后台模板时补）；② ~~权限缓存换 Redis 多实例共享~~（**M4 已完成**：`CacheBackedAuthCache` 适配器把 `AUTH_CACHE` 端口接到 `CacheService`，鉴权业务代码 diff = 0）；③ `dataScope` 的 `org`/`org_below` 两档（M8）；④ refresh 过期记录定时清理（M7）。
 

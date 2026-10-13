@@ -67,7 +67,7 @@
 | 脱敏：密码 / 令牌等不可见 | ✅ | 冒烟 `log-sensitive` 通过；日志按字段名脱敏 |
 | 密钥：无硬编码、仓库扫描无命中 | ✅ | 扫描 `jwt_secret\|password\|secret\|api_key\|token` 赋值模式未命中；`.env` 已被 `.gitignore` 排除 |
 | 传输：生产强制 HTTPS / Cookie 标记 | ⚠️ 不适用 | v0.1.0 无 Cookie 会话（Bearer token），HTTPS 由部署层强制（运维手册 §13） |
-| 依赖：漏洞扫描无高危 | ✅ 生产依赖 | **生产依赖 critical 0 / high 0**（16 → 3，剩余 3 项 moderate 受 NestJS 10 约束）；dev 工具链仍有 8 项高危，见 §6 R-05 |
+| 依赖：漏洞扫描无高危 | ✅ 生产依赖 | **生产依赖 critical 0 / high 0**（16 → 3，剩余 3 项 moderate 受 NestJS 10 约束）；dev 工具链仍有 8 项高危，见 §6 R-05 ｜ **2026-10-13 后：全量审计（含 dev）0 项，R-05 / R-06 均已闭环** |
 
 ### 3.4 可观测基线
 
@@ -125,7 +125,7 @@
 | R-02 | 根 `turbo run lint/test` 在本机 Windows 沙箱因「管道范例耗尽」(os error 231) 失败，属环境限制（逐包直调 vitest 可替代） | P2 | donttemo | 引入容器化本地环境后 |
 | R-03 | 性能基线（冷启动 / 接口 P95 / 缓存 get 延迟）未做专项压测 | P1 | donttemo | M6 前 |
 | R-04 | 专项注入用例（SQL 注入 / XSS / 命令注入）未单列到测试用例集 | P1 | donttemo | M6 前 |
-| R-05 | dev 工具链 8 项高危：`vitest`(2→3)、`tinypool`(1→2)、`happy-dom`(15→20)、`vite`(5→6)、`braces`（registry 最新即 3.0.3，补丁未发布） | P2 | donttemo | M5 开工时随 admin-web 依赖整理一并升级 |
+| R-05 | ~~dev 工具链 8 项高危：`vitest`(2→3)、`tinypool`(1→2)、`happy-dom`(15→20)、`vite`(5→6)、`braces`（registry 最新即 3.0.3，补丁未发布）~~ → **✅ 已闭环（2026-10-13）**：vitest **4.1.11** / vite **8.3.4**（rolldown + oxc）/ happy-dom **21.0.1** / plugin-vue 6 / vue-tsc 3 / unplugin-vue-components 32；tinypool 随 vitest 4 整条链路消失，`braces` 亦退出依赖树。`pnpm audit`（含 dev）**零漏洞**，全套门禁复跑通过 | P2 | donttemo | 已闭环 |
 | R-06 | ~~生产依赖 3 项 moderate：`@nestjs/core <=11.1.17` 与 `file-type`，均受 NestJS 10 约束，需升级 NestJS 11~~ → **✅ 已闭环（2026-10-13）**：全仓升级 NestJS **11.2.7**（Express 5.2.1 / file-type 21.3.4），`pnpm audit --prod` **零漏洞**；框架包 358/358 + 覆盖率门禁、example-api 冒烟 50/50、admin-web 全绿 | P1 | donttemo | 已闭环 |
 | R-07 | ~~真实 Redis / Redis Cluster 未实跑（`redis-cluster` 由 fake 客户端验证命令序列）~~ → **🟡 部分闭环（2026-10-13，提交 `fbce3b9`）**：真实 **Redis 8.10.2 standalone** 已实跑（缓存冒烟阶段 D 18/18，含键空间独立核验）；**Redis Cluster 仍未实跑**，留待 M8 演练 | P1 | donttemo | standalone 已闭环；Cluster → M8 |
 | R-08 | `apps/admin-web`（M5 进行中，**无任何测试**）本机 `node_modules` 未装全（`@vue/language-core` 缺失），导致其 `lint`/`build` 报 `MODULE_NOT_FOUND`；CI 干净环境不受影响。其 `test` 脚本已加 `--passWithNoTests`，避免拖红全量门禁 | P2 | donttemo | M5 开工时 |
@@ -155,5 +155,17 @@
 > example-api 三组冒烟 **50/50**（M1+M2 13、M3 25、M4 12）、admin-web 单测 29/29 + mock 冒烟 40/40、
 > 文件头门禁 221 文件通过。破坏性适配要点见 [CHANGELOG](../CHANGELOG.md)，遗留项状态见
 > [项目计划](./80-project-plan.md) 的「v0.1.0 遗留项」。
+
+> **发布后闭环之三（2026-10-13，dev 工具链大版本升级专项）**：**R-05 已闭环** ——
+> 前端与测试工具链升到当前稳定大版本：**vitest 2.1.9 → 4.1.11**（`@vitest/coverage-v8` 同步）、
+> **vite 5.4.21 → 8.3.4**（vite 8 起转换器换为 rolldown + oxc）、**happy-dom 15.11.7 → 21.0.1**、
+> `@vitejs/plugin-vue` 5 → **6.0.10**、`vue-tsc` / `@vue/language-core` 2 → **3.3.13**、
+> `unplugin-vue-components` 0.27.5 → **32.1.0**；**tinypool 整条链路消失**（vitest 4 不再依赖它）。
+> `pnpm audit`（含 devDependencies）由「13 项（critical 4 / high 4 / moderate 5）」转为
+> **No known vulnerabilities——全仓 0 项，R-05 与 R-06 一并归零**；`braces` 亦随之不再出现在依赖树中。
+> 门禁实测：框架包 **366/366**（config 10 / logger 16 / core 17 / db 45+11 跳过 / cache 73 / auth 89 / cli 116）、
+> example-api 三组冒烟 **50/50**、admin-web 单测 29/29 + mock 冒烟 **40/40**（bundle gzip 307.8 kB）、
+> `vue-tsc` 3 与 `vite build`（rolldown）通过、文件头门禁 222 文件通过。
+> 破坏性适配与两处顺带修复的既有缺陷见 [CHANGELOG](../CHANGELOG.md)。
 
 **发布动作**：打附注标签 `v0.1.0`（与 [CHANGELOG](../CHANGELOG.md) 的 `[0.1.0] - 2026-10-13` 条目一一对应）。首次推送后须立即触发 CI，用真实 Actions 结果闭环 R-01。

@@ -7,6 +7,8 @@
  *   运行：pnpm smoke（cwd 需为 apps/admin-web）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-13 donttemo 修 bundle 门禁统计缺陷：vendor-element-plus 由「取最后一个匹配文件」改为累加，
+ *   否则 rolldown（vite 8）产物顺序变化后只量到 CSS 文件，门禁形同失效
  * @module admin-web/scripts
  */
 
@@ -121,7 +123,8 @@ function checkBundle() {
   for (const file of files) {
     const size = gzipSync(readFileSync(file)).length;
     total += size;
-    if (file.includes('vendor-element-plus')) vendorEp = size;
+    // 累加而非覆盖：element-plus 的产物是「JS chunk + CSS」两个文件，取最后一个会把门禁量窄
+    if (file.includes('vendor-element-plus')) vendorEp += size;
   }
   const kb = (bytes) => `${(bytes / 1024).toFixed(1)} kB`;
   check('dist gzip 总量 ≤ 600 kB', total <= 600 * 1024, `实际 ${kb(total)}`);

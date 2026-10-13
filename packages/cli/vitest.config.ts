@@ -7,12 +7,19 @@
  *   阈值 80%：M6 交付时按 PRD-006 §4.3 从 40% 提升，当前实测约 92%，留退化余量。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-13 donttemo 适配 vite 8（rolldown + oxc）：显式开启 legacy 装饰器，使测试中声明的装饰器类可被正确降级
  * @modified 2026-10-13 donttemo M6：纳入 src/gen/**，阈值 40% → 80%（PRD-006 NFR），排除外部命令包装与进程入口
  * @module @fw/cli
  */
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  // vite 8 起转换器换成 rolldown + oxc：装饰器降级不再按 tsconfig 自动生效（oxc 只在文件被某个
+  // tsconfig 覆盖时才启用 legacy 装饰器），而本仓 tsconfig 普遍 exclude 掉 src/__tests__ →
+  // 测试里声明的 @Module/@Injectable 会被原样保留，Node 直接判 SyntaxError。此处显式声明，与 tsc 对齐。
+  oxc: {
+    decorator: { legacy: true, emitDecoratorMetadata: true },
+  },
   test: {
     include: ['src/**/__tests__/**/*.test.ts'],
     coverage: {
