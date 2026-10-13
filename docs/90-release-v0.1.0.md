@@ -121,13 +121,13 @@
 
 | 编号 | 描述 | 等级 | 责任人 | 闭环时间 |
 |---|---|---|---|---|
-| R-01 | MySQL / PostgreSQL 三库集成矩阵与「数据库切换演练」**未在真实环境执行**（本地无容器；CI 配置已就位但未触发过 Actions） | P1 | donttemo | 首次推送触发 CI 后 3 日内 |
-| R-02 | 根 `turbo run lint/test` 在本机 Windows 沙箱因「管道范例耗尽」(os error 231) 失败，属环境限制 | P2 | donttemo | 引入容器化本地环境后 |
+| R-01 | MySQL / PostgreSQL 三库集成矩阵与「数据库切换演练」~~**未在真实环境执行**（本地无容器；CI 配置已就位但未触发过 Actions）~~ → **✅ 已闭环（2026-10-13，提交 `fbce3b9`）**：远程 MySQL 8.4.11 / PostgreSQL 18.6 实跑，sqlite / mysql / postgres 三库共用同一套 11 项断言全绿，业务代码 diff = 0。CI 侧仍未触发（留 R-02 同类环境项），详见 [数据库联通性与切换实测](./93-db-connectivity-switch-test.md) | P1 | donttemo | 已闭环 |
+| R-02 | 根 `turbo run lint/test` 在本机 Windows 沙箱因「管道范例耗尽」(os error 231) 失败，属环境限制（逐包直调 vitest 可替代） | P2 | donttemo | 引入容器化本地环境后 |
 | R-03 | 性能基线（冷启动 / 接口 P95 / 缓存 get 延迟）未做专项压测 | P1 | donttemo | M6 前 |
 | R-04 | 专项注入用例（SQL 注入 / XSS / 命令注入）未单列到测试用例集 | P1 | donttemo | M6 前 |
 | R-05 | dev 工具链 8 项高危：`vitest`(2→3)、`tinypool`(1→2)、`happy-dom`(15→20)、`vite`(5→6)、`braces`（registry 最新即 3.0.3，补丁未发布） | P2 | donttemo | M5 开工时随 admin-web 依赖整理一并升级 |
 | R-06 | 生产依赖 3 项 moderate：`@nestjs/core <=11.1.17` 与 `file-type`，均受 NestJS 10 约束，需升级 NestJS 11 | P1 | donttemo | M6（NestJS 11 升级专项） |
-| R-07 | 真实 Redis / Redis Cluster 未实跑（`redis-cluster` 由 fake 客户端验证命令序列） | P1 | donttemo | M8 演练时 |
+| R-07 | ~~真实 Redis / Redis Cluster 未实跑（`redis-cluster` 由 fake 客户端验证命令序列）~~ → **🟡 部分闭环（2026-10-13，提交 `fbce3b9`）**：真实 **Redis 8.10.2 standalone** 已实跑（缓存冒烟阶段 D 18/18，含键空间独立核验）；**Redis Cluster 仍未实跑**，留待 M8 演练 | P1 | donttemo | standalone 已闭环；Cluster → M8 |
 | R-08 | `apps/admin-web`（M5 进行中，**无任何测试**）本机 `node_modules` 未装全（`@vue/language-core` 缺失），导致其 `lint`/`build` 报 `MODULE_NOT_FOUND`；CI 干净环境不受影响。其 `test` 脚本已加 `--passWithNoTests`，避免拖红全量门禁 | P2 | donttemo | M5 开工时 |
 | R-09 | 80 个 `vitest.config.ts.timestamp-*.mjs` 临时文件曾随首次提交进入仓库，已在第二个提交中移除并补充 `.gitignore` 规则 | P2 | donttemo | 已闭环（提交 `5bfcd1c`） |
 
@@ -141,5 +141,10 @@
 2. **代码层门禁全绿且可复现**：构建 8/8、单测 266/266、端到端冒烟 50/50、文件头与方言门禁通过、`frozen-lockfile` 通过、生产依赖高危清零。
 3. **判为「条件通过」的原因**：§3.5 三大演练中「数据库切换」未执行、「依赖故障降级」部分执行，§4.3 三库/Redis 兼容性未实跑。这些**均为环境能力缺失（无容器 / 无 Redis / CI 未触发）而非代码缺陷**，且 R-01 已给出可复现的闭环路径。
 4. **P1 遗留项（R-01、R-03、R-04、R-06、R-07）均已登记责任人与闭环时间**，符合验收总纲 §7.5「P1 未通过可留条件通过」。
+
+> **发布后闭环（2026-10-13，提交 `fbce3b9`）**：上述判定的核心成因已消除 ——
+> **R-01 已闭环**（远程 MySQL 8.4.11 / PostgreSQL 18.6 实跑，三库同套断言全绿，业务代码 diff = 0）、
+> **R-07 部分闭环**（真实 Redis 8.10.2 standalone 已实跑；Cluster 留待 M8）。
+> 记录见 [数据库联通性与切换实测](./93-db-connectivity-switch-test.md)。`v0.1.0` 判定本身维持「条件通过」不变（历史结论不追溯改写）。
 
 **发布动作**：打附注标签 `v0.1.0`（与 [CHANGELOG](../CHANGELOG.md) 的 `[0.1.0] - 2026-10-13` 条目一一对应）。首次推送后须立即触发 CI，用真实 Actions 结果闭环 R-01。

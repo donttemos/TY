@@ -33,7 +33,7 @@
 **文档**
 
 - 新增 [`docs/93-db-connectivity-switch-test.md`](./docs/93-db-connectivity-switch-test.md)：连通/鉴权实测（含 PG SCRAM-SHA-256 完整握手）、三库矩阵结果、键空间独立核验、发现与修复、遗留 T-01~T-05。
-- 验收总纲遗留 **R-04（三库矩阵）**、**R-06（Redis 集成）** 完成实测闭环。
+- 验收总纲遗留 **R-01（三库矩阵与数据库切换演练）** 完成实测闭环、**R-07（真实 Redis）** 完成 standalone 部分闭环（Cluster 留待 M8）。
 
 ## [0.1.0] - 2026-10-13
 
