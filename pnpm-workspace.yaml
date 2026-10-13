@@ -2,6 +2,7 @@
 # @description 定义 monorepo 的包边界：packages 框架包、apps 应用、templates 项目模板
 # @author donttemo
 # @created 2026-10-09
+# @modified 2026-10-13 donttemo NestJS 10 → 11 升级：overrides 说明同步（R-06 两项 moderate 随 @nestjs/core@11.2.7 修复）
 
 packages:
   - "packages/*"
@@ -25,11 +26,12 @@ allowBuilds:
 
 # 依赖漏洞修复（pnpm 11 起 overrides 写在 workspace 文件里，package.json 的 pnpm 字段已不再读取）
 # 说明：仅覆盖「确实存在补丁版本」的项，逐项验证构建 / 单测 / 端到端冒烟后采纳。
-#   multer@<2.4.0 → 2.4.0：DoS 类漏洞，位于 @nestjs/platform-express 生产依赖路径
+#   multer@<2.4.0 → 2.4.0：DoS 类漏洞；NestJS 11 起 @nestjs/platform-express 已直接依赖 2.4.0，此条保留为下界保护
 #   qs@<6.16.0 → 6.16.0：3 条 DoS/解析绕过，位于 body-parser → qs
-#   body-parser@<1.20.6 → 1.20.6：非法请求导致 DoS
+#   body-parser@<1.20.6 → 1.20.6：非法请求导致 DoS（仅作用于 1.x；Express 5 走 body-parser 2.x，不受此条约束）
 #   deepmerge-ts@<8.0.0 → 8.0.0：递归对象合并栈耗尽，仅 prisma CLI 配置解析路径使用（不在应用运行时）
-# 未覆盖（受 NestJS 10 约束，待 M6 随 NestJS 11 升级解决）：@nestjs/core <=11.1.17、file-type（需 ESM-only 的 21.x）
+# 已随 NestJS 10 → 11 升级解决（2026-10-13，R-06）：@nestjs/core <=11.1.17 与 file-type 两项 moderate，
+#   由 @nestjs/core / @nestjs/common@11.2.7 修复（file-type 由 common 升至 21.3.4，经 load-esm 动态加载，ESM 工程原生可用）
 # 未覆盖（无可用补丁 / dev 工具链大版本）：braces（registry 最新即 3.0.3）、vitest(2→3)、tinypool(1→2)、happy-dom(15→20)、vite(5→6)
 overrides:
   multer@<2.4.0: 2.4.0

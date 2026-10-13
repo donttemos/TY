@@ -5,6 +5,7 @@
  *   项目级配置 codegen.config.json 提供自定义变量 vars 与类型覆盖 typeOverrides。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-13 donttemo listBuiltinTemplates 只列 .tpl：目录内 README 等文档不算模板
  * @module cli/gen
  */
 
@@ -78,7 +79,8 @@ export function listBuiltinTemplates(subdir = ''): string[] {
   const walk = (dir: string, prefix: string): void => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (entry.isDirectory()) walk(path.join(dir, entry.name), `${prefix}${entry.name}/`);
-      else out.push(`${prefix}${entry.name}`);
+      // 只收集模板文件：目录内文档（README.md 等）不是模板，resolveTemplate 也只按 .tpl 解析
+      else if (entry.name.endsWith('.tpl')) out.push(`${prefix}${entry.name}`);
     }
   };
   walk(root, '');

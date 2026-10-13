@@ -2,7 +2,7 @@
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
-> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）已完成实现与验证，未发版。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
+> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；运行时已升级 NestJS 11 / Express 5（生产依赖漏洞清零）。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
 
 ## 版本与变更规则
 
@@ -13,6 +13,30 @@
 - **频率**：每个发布版本一条记录；`Unreleased` 区间持续累积，发布时转为版本条目并清空。
 
 ## [Unreleased]
+
+### Changed（NestJS 10 → 11 升级，2026-10-13）
+
+> 闭环 v0.1.0 发布验收遗留项 **R-06**（生产依赖 3 项 moderate）。
+
+- **依赖主版本升级**：`@nestjs/common` / `core` / `platform-express` / `testing` **10.4.22 → 11.2.7**，覆盖 `@fw/core`、`@fw/auth`、`@fw/cache`、`@fw/db`、`apps/example-api`，以及 **`templates/api`（`fw new` 新项目模板同步升级）**；`@types/express` 4.17.21 → **5.0.6**。
+- **随之传递的大版本**：Express 4.22 → **5.2.1**（路由解析换 `path-to-regexp` 8）、`file-type` 20.4.1 → **21.3.4**（`@nestjs/common` 生产依赖，经 `load-esm` 动态加载，本仓全 ESM 工程原生可用）、`multer` → 2.4.0（`platform-express` 已直接依赖，overrides 转为下界保护）。
+- **破坏性变更影响面：路由语法 0 处改动** —— 全仓无通配符路由（未触及 `*` → `*splat`）与 `:param?` 可选段；`req.ip` 未被直接使用（`auth.controller` 自解析 `x-forwarded-for`，不受 Express 5 的 trust proxy 语义影响）；`@Res({ passthrough: true })` 用法不变。
+- **DI 装配改显式注入（唯一的代码适配）**：`AuthModule.forRoot` 的 `APP_GUARD` / `APP_INTERCEPTOR` 由 `useClass` 改为 `useFactory` + `inject` 令牌。Nest 11 收紧了「构造函数依赖解析为 undefined」的报错，暴露出测试环境（vitest 经 esbuild 转译，不产出 `design:paramtypes` 元数据）下 `useClass` 装配不可靠；显式注入后生产与测试行为一致，且不再依赖转换器能力。
+- **Node 要求**：Nest 11 要求 Node ≥ 20，与本仓 `engines.node >= 20`（实测 22.x）一致，无变更。
+
+### Security
+
+- **生产依赖漏洞清零（R-06 闭环）**：`pnpm audit --prod` 由「3 项 moderate（`@nestjs/core <=11.1.17`、`file-type`）」转为 **No known vulnerabilities**；全量审计 16 → 13 项（critical 4 / high 4 / moderate 5），剩余全部位于 dev 工具链（vitest / tinypool / happy-dom / vite / esbuild / braces / launch-editor），见发布报告 §6 R-05。
+
+### Fixed
+
+- **`@fw/cli` 内置模板清单误把文档当模板**：`listBuiltinTemplates` 将 `templates/codegen/README.md` 计入模板清单（M6 收尾新增 README 时未同步该断言），现只收集 `.tpl` 文件，cli 单测恢复 **116/116**。
+
+### 升级验证（2026-10-13，全量实跑）
+
+- 框架包单测 **358/358** 且覆盖率门禁全过：config 10/10（98.3%）、logger 13/13（92.7%）、core 12/12（92.8%）、db 45/45（97.7%）、cache 73/73（96.2%）、auth 89/89（95.8%）、cli 116/116（94.7%）。
+- `apps/example-api` 冒烟 **50/50**：M1+M2 13/13、M3 鉴权 25/25、M4 缓存 12/12；`apps/admin-web` 单测 29/29 + mock 全链路冒烟 40/40。
+- 文件头门禁 221 文件通过；逐包 `tsc` 与 example-api 生产构建零错误。
 
 ### Added（M6 CRUD 代码生成器，2026-10-13）
 

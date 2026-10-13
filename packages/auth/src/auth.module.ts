@@ -8,11 +8,12 @@
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo allowRegister 缺省回落 false（默认关闭自助注册）
  * @modified 2026-10-13 donttemo cache 支持类形态（M4：应用侧把 @fw/cache 适配为 AuthCachePort 需 DI）
+ * @modified 2026-10-13 donttemo APP_GUARD / APP_INTERCEPTOR 改 useFactory + 显式 inject（不再依赖 design:paramtypes 元数据）
  * @module @fw/auth
  */
 
 import { Global, Module, type DynamicModule, type Provider } from '@nestjs/common';
-import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR, Reflector } from '@nestjs/core';
 import { loadEnv } from '@fw/config';
 import { AuditInterceptor } from './audit.interceptor.js';
 import { AuditService } from './audit.service.js';
@@ -249,11 +250,28 @@ export class AuthModule {
       },
     ];
 
+    // 用 useFactory + 显式 inject，而非 useClass：useClass 依赖 emitDecoratorMetadata 产出的
+    // 构造函数参数类型（design:paramtypes）。测试环境（vitest/esbuild）不生成该元数据，Nest 11 会因此
+    // 抛「依赖 undefined」装配错误；显式 inject 在生产与测试下行为一致，且不依赖转换器能力。
     if (options.globalGuard !== false) {
-      providers.push({ provide: APP_GUARD, useClass: RbacGuard });
+      providers.push({
+        provide: APP_GUARD,
+        useFactory: (
+          reflector: Reflector,
+          registry: StrategyRegistry,
+          permissions: PermissionService,
+          store: AuthStore,
+          config: AuthOptions,
+        ) => new RbacGuard(reflector, registry, permissions, store, config),
+        inject: [Reflector, AUTH_STRATEGY_REGISTRY, PermissionService, AUTH_STORE, AUTH_OPTIONS],
+      });
     }
     if (options.auditInterceptor !== false) {
-      providers.push({ provide: APP_INTERCEPTOR, useClass: AuditInterceptor });
+      providers.push({
+        provide: APP_INTERCEPTOR,
+        useFactory: (reflector: Reflector, audit: AuditService) => new AuditInterceptor(reflector, audit),
+        inject: [Reflector, AuditService],
+      });
     }
 
     return {

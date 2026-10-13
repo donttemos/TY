@@ -126,7 +126,7 @@
 | R-03 | 性能基线（冷启动 / 接口 P95 / 缓存 get 延迟）未做专项压测 | P1 | donttemo | M6 前 |
 | R-04 | 专项注入用例（SQL 注入 / XSS / 命令注入）未单列到测试用例集 | P1 | donttemo | M6 前 |
 | R-05 | dev 工具链 8 项高危：`vitest`(2→3)、`tinypool`(1→2)、`happy-dom`(15→20)、`vite`(5→6)、`braces`（registry 最新即 3.0.3，补丁未发布） | P2 | donttemo | M5 开工时随 admin-web 依赖整理一并升级 |
-| R-06 | 生产依赖 3 项 moderate：`@nestjs/core <=11.1.17` 与 `file-type`，均受 NestJS 10 约束，需升级 NestJS 11 | P1 | donttemo | M6（NestJS 11 升级专项） |
+| R-06 | ~~生产依赖 3 项 moderate：`@nestjs/core <=11.1.17` 与 `file-type`，均受 NestJS 10 约束，需升级 NestJS 11~~ → **✅ 已闭环（2026-10-13）**：全仓升级 NestJS **11.2.7**（Express 5.2.1 / file-type 21.3.4），`pnpm audit --prod` **零漏洞**；框架包 358/358 + 覆盖率门禁、example-api 冒烟 50/50、admin-web 全绿 | P1 | donttemo | 已闭环 |
 | R-07 | ~~真实 Redis / Redis Cluster 未实跑（`redis-cluster` 由 fake 客户端验证命令序列）~~ → **🟡 部分闭环（2026-10-13，提交 `fbce3b9`）**：真实 **Redis 8.10.2 standalone** 已实跑（缓存冒烟阶段 D 18/18，含键空间独立核验）；**Redis Cluster 仍未实跑**，留待 M8 演练 | P1 | donttemo | standalone 已闭环；Cluster → M8 |
 | R-08 | `apps/admin-web`（M5 进行中，**无任何测试**）本机 `node_modules` 未装全（`@vue/language-core` 缺失），导致其 `lint`/`build` 报 `MODULE_NOT_FOUND`；CI 干净环境不受影响。其 `test` 脚本已加 `--passWithNoTests`，避免拖红全量门禁 | P2 | donttemo | M5 开工时 |
 | R-09 | 80 个 `vitest.config.ts.timestamp-*.mjs` 临时文件曾随首次提交进入仓库，已在第二个提交中移除并补充 `.gitignore` 规则 | P2 | donttemo | 已闭环（提交 `5bfcd1c`） |
@@ -146,5 +146,14 @@
 > **R-01 已闭环**（远程 MySQL 8.4.11 / PostgreSQL 18.6 实跑，三库同套断言全绿，业务代码 diff = 0）、
 > **R-07 部分闭环**（真实 Redis 8.10.2 standalone 已实跑；Cluster 留待 M8）。
 > 记录见 [数据库联通性与切换实测](./93-db-connectivity-switch-test.md)。`v0.1.0` 判定本身维持「条件通过」不变（历史结论不追溯改写）。
+
+> **发布后闭环之二（2026-10-13，NestJS 10 → 11 升级专项）**：**R-06 已闭环** ——
+> 全仓 `@nestjs/*` 由 10.4.22 升至 **11.2.7**（随之 Express 4 → **5.2.1**、`@types/express` → 5.0.6、
+> file-type 20.4.1 → **21.3.4**、multer → 2.4.0），`pnpm audit --prod` 由「3 项 moderate」转为
+> **No known vulnerabilities**（全量 16 → 13 项，剩余全部位于 dev 工具链，见 R-05）。
+> 门禁实测：框架包单测 **358/358** 且覆盖率门禁全过（config 10 / logger 13 / core 12 / db 45 / cache 73 / auth 89 / cli 116）、
+> example-api 三组冒烟 **50/50**（M1+M2 13、M3 25、M4 12）、admin-web 单测 29/29 + mock 冒烟 40/40、
+> 文件头门禁 221 文件通过。破坏性适配要点见 [CHANGELOG](../CHANGELOG.md)，遗留项状态见
+> [项目计划](./80-project-plan.md) 的「v0.1.0 遗留项」。
 
 **发布动作**：打附注标签 `v0.1.0`（与 [CHANGELOG](../CHANGELOG.md) 的 `[0.1.0] - 2026-10-13` 条目一一对应）。首次推送后须立即触发 CI，用真实 Actions 结果闭环 R-01。
