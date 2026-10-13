@@ -27,3 +27,6 @@ packages/db/prisma/test-client/
 
 # 本地工具数据（AI 会话状态与项目记忆，不入版本库）
 .workbuddy/
+
+# vitest / vite 加载 .ts 配置时生成的临时包装文件
+*.timestamp-*.mjs
