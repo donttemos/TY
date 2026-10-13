@@ -7,6 +7,7 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo M4 接入 CacheModule（memory 默认）+ 缓存就绪探针 + 缓存演示模块
+ * @modified 2026-10-13 donttemo M6 接入 DemoItemModule（fw gen crud 生成的 CRUD 验证载体）
  * @module example-api
  */
 import { Module } from '@nestjs/common';
@@ -15,6 +16,7 @@ import { FwCoreModule } from '@fw/core';
 import { AppAuthModule } from './modules/auth/app-auth.module.js';
 import { CacheDemoModule } from './modules/cache-demo/cache-demo.module.js';
 import { DemoModule, dbReadinessProbe } from './modules/demo/demo.module.js';
+import { DemoItemModule } from './modules/demo-item/demo-item.module.js';
 
 /** 缓存就绪探针：与 CacheModule.forRoot 共用同一实例（装配后由模块绑定缓存服务） */
 export const cacheReadinessProbe = createCacheReadinessProbe();
@@ -29,6 +31,7 @@ export const cacheReadinessProbe = createCacheReadinessProbe();
     AppAuthModule,
     DemoModule,
     CacheDemoModule,
+    DemoItemModule,
   ],
 })
 export class AppModule {}

@@ -7,6 +7,7 @@
  *   前置：已执行 fw db:migrate + fw db:seed，且服务监听 127.0.0.1:3000。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-13 donttemo M6：/permissions 断言由写死总数改为「形状 + 下界 + 关键权限码」（生成器为 example-api 追加 demo-item 权限点）
  * @module example-api
  */
 
@@ -91,9 +92,13 @@ async function main() {
     `codes=${JSON.stringify(roles.body.data?.map((r) => r.code))}`);
 
   const perms = await call('/api/v1/permissions', { token: admin.accessToken });
-  const permCount = (perms.body.data ?? []).reduce((sum, g) => sum + g.items.length, 0);
-  check('GET /permissions 按 module 分组', perms.status === 200 && (perms.body.data?.length ?? 0) >= 4 && permCount === 22,
-    `groups=${perms.body.data?.length} perms=${permCount}`);
+  const permGroups = perms.body.data ?? [];
+  const permCount = permGroups.reduce((sum, g) => sum + g.items.length, 0);
+  // 断言「形状 + 下界 + 关键权限码」而非写死总数：example-api 是各里程碑的验证载体，
+  // 模块增加会追加权限点（如 M6 生成器写入的 demo-item:create/read/update/delete）
+  const permCodes = permGroups.flatMap((g) => (g.items ?? []).map((i) => i.code));
+  check('GET /permissions 按 module 分组', perms.status === 200 && permGroups.length >= 4 && permCount >= 22 && permCodes.includes('role:grant'),
+    `groups=${permGroups.length} perms=${permCount}`);
 
   const menusAdmin = await call('/api/v1/auth/menus', { token: admin.accessToken });
   const namesAdmin = JSON.stringify(menusAdmin.body.data ?? []);

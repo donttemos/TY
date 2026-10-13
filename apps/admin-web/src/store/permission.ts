@@ -29,11 +29,12 @@ export const KNOWN_SYSTEM_PATHS: readonly string[] = [
 /** 菜单 component 字段 → 视图模块映射（新增页面在此登记；生成器产出页面由 M6 追加） */
 const VIEW_MODULES = import.meta.glob('../views/**/*.vue');
 
-/** 按 component 字符串解析视图加载器 */
+/** 按 component 字符串解析视图加载器（兼容 目录/index.vue 与 单文件.vue 两种落盘方式） */
 function resolveComponent(component: string | null): (() => Promise<unknown>) | null {
   if (!component) return null;
-  const suffix = `/views/${component}.vue`;
-  const key = Object.keys(VIEW_MODULES).find((path) => path.endsWith(suffix));
+  // 菜单 component 约定为 views 下相对路径且不带扩展名：'system/users' 与 'layout/blank' 均合法
+  const candidates = [`/views/${component}/index.vue`, `/views/${component}.vue`];
+  const key = Object.keys(VIEW_MODULES).find((path) => candidates.some((suffix) => path.endsWith(suffix)));
   if (!key) return null;
   const loader = VIEW_MODULES[key] as () => Promise<unknown>;
   return loader;
@@ -72,14 +73,17 @@ export const usePermissionStore = defineStore('permission', () => {
       return user.hasPermission(node.permissionCode as PermissionCode);
     };
 
-    const buildChildren = (nodes: MenuNode[]): RouteRecordRaw[] => {
+    const buildChildren = (nodes: MenuNode[], parentPath: string): RouteRecordRaw[] => {
       const children: RouteRecordRaw[] = [];
       for (const node of nodes) {
         if (!allowed(node)) continue;
         const loader = resolveComponent(node.component);
         if (!loader) continue;
+        // 子路由必须用相对路径（vue-router 拼接规则）：全路径去掉父级前缀，否则 /system 下的 /system/users 会拼成 /system/system/users
+        const full = node.path ?? '';
+        const relative = (full.startsWith(parentPath) ? full.slice(parentPath.length) : full).replace(/^\/+/, '');
         children.push({
-          path: node.path?.replace(/^\//, '') ?? '',
+          path: relative,
           name: node.path ?? node.id,
           component: loader,
           meta: { title: node.name, icon: node.icon, permissionCode: node.permissionCode },
@@ -94,7 +98,7 @@ export const usePermissionStore = defineStore('permission', () => {
       if (!loader) continue;
 
       if (node.children.length > 0) {
-        const children = buildChildren(node.children);
+        const children = buildChildren(node.children, node.path ?? '/');
         if (children.length === 0) continue;
         routes.push({
           path: node.path ?? '/',

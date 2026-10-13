@@ -7,6 +7,9 @@
 # @modified 2026-10-13 donttemo 纳入 @fw/cache（构建 + 覆盖率门禁）并新增 M4 缓存层端到端冒烟步骤
 # @modified 2026-10-13 donttemo 三库矩阵改用方言 schema 变体 + migrate diff 建表（原 sed 改 provider 后
 #   跑 SQLite 迁移 SQL 的方式在 MySQL/PG 上必然失败），并改为共用 repository-suite 的矩阵测试
+# @modified 2026-10-13 donttemo 纳入 apps/admin-web：构建列表增加该包，新增 M5 门禁步骤（单测 + mock
+#   全链路冒烟）；其 test 脚本同步移除 --passWithNoTests（已有真实测试，门禁须真实生效）
+# @modified 2026-10-13 donttemo M6：单测覆盖率循环纳入 @fw/cli（生成器 116 用例 / 覆盖率 ≥80% 门禁）
 # @module ci
 
 name: CI
@@ -44,13 +47,27 @@ jobs:
             pnpm --filter $pkg run build
           done
           pnpm --filter example-api run build
+          pnpm --filter admin-web run build
 
       # 单测（SQLite 内存库，秒级反馈；turbo 管道在 Windows 沙箱不可用，CI 用 Linux 可恢复）
+      # @fw/cli 的生成器测试自带临时工程与回滚断言（PRD-006 FR-07/08），不依赖真实数据库
       - name: 单元测试（SQLite）
         run: |
-          for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache; do
+          for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli; do
             pnpm --filter $pkg run test:coverage
           done
+
+      # M5 管理后台前端：单测（happy-dom）+ mock 全链路冒烟（PRD-005 AC / TC-WEB）
+      # 冒烟脚本自管理 vite dev server 生命周期（端口 5199，strictPort），dist 存在时附带 bundle 门禁
+      - name: M5 管理后台前端门禁（单测 + mock 冒烟）
+        run: |
+          pnpm --filter admin-web run test
+          pnpm --filter admin-web run smoke
+
+      # M6 代码生成器：以真实 schema 跑 dry-run（解析 → 计划 → diff 预览，不落盘）
+      # 覆盖 TC-GEN-004（--dry 与实际生成同源）；产物合规性由本地 vue-tsc / tsc 生成后校验
+      - name: M6 生成器 dry-run 冒烟
+        run: node packages/cli/dist/index.js gen crud demo-item --dry
 
       # M3 端到端冒烟：迁移 + 种子 + 起服务 + TC-AUTH 断言（PRD-003 AC）
       - name: M3 鉴权端到端冒烟（SQLite）

@@ -71,8 +71,14 @@
 | | `LOG_FORMAT` | 否 | json | 容器环境固定 json |
 | 追踪 | `OTEL_ENABLED` | 否 | false | M8 起支持 |
 | | `OTEL_EXPORTER_URL` | 条件 | — | 启用后必填 |
+| 前端（admin-web） | `VITE_API_BASE_URL` | 是 | — | 管理后台 API 基址（如 `https://api.example.com/api/v1`）；**构建期注入**，改值需重新构建 |
+| | `VITE_APP_TITLE` | 否 | 通用应用框架 | 站点标题 |
+| | `VITE_LOGIN_CAPTCHA` | 否 | false | 登录页验证码开关（true 时需接入验证码服务） |
+| | `VITE_USE_MOCK` | 否 | 随 mode | 是否挂载 mock server（`true`/`false`）；**生产构建不引入任何 mock 代码**，切真实后端只改此项与 `VITE_API_BASE_URL` |
 
 **密钥管理**：生产禁止把密钥写进镜像或仓库；用 K8s Secret / 环境变量注入 / 密钥管理服务，定期轮换并保留 `*_PREV` 过渡值。
+
+**管理后台托管**：`apps/admin-web` 生产构建（`pnpm --filter admin-web build`）产出纯静态 `dist/`，无 Node 依赖；Nginx 需配置 SPA history 回退（`try_files $uri $uri/ /index.html`），API 请求经 `VITE_API_BASE_URL` 直连后端或由 Nginx 反代 `/api/`。
 
 ## 4. 小档部署（单机 Docker）
 

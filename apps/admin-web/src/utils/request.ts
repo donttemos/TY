@@ -47,7 +47,8 @@ function doRefresh(): Promise<string> {
     .then((response) => {
       const body = response.data;
       if (body.code !== BIZ_CODE.OK || !body.data) {
-        throw toBizError(body);
+        // 刷新响应的 data 是令牌对（非错误详情），直接构造 BizError 并保留服务端错误码（如 3004 锁定）
+        throw new BizError(body.code ?? BIZ_CODE.UNAUTHORIZED, body.message || '刷新登录状态失败');
       }
       tokenStore.setAccess(body.data.accessToken);
       tokenStore.setRefresh(body.data.refreshToken);
@@ -129,19 +130,29 @@ service.interceptors.response.use(
   },
 );
 
+/**
+ * 收敛 axios 1.20 的条件返回类型
+ * axios 1.20 的 get/post/put/delete 返回 Promise<AxiosResponseResult<T, R, D, P>>，
+ * 其中 R 为显式传入的响应类型；泛型上下文下该条件类型无法解析为 T。
+ * 本实例的响应拦截器已解包统一信封（直接返回 data），故此处断言为 Promise<T>。
+ */
+function unwrap<T>(promise: Promise<unknown>): Promise<T> {
+  return promise as Promise<T>;
+}
+
 /** 封装的请求方法（业务侧只面对 data） */
 export const request = {
   get<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
-    return service.get<T, T>(url, config);
+    return unwrap<T>(service.get<T, T>(url, config));
   },
   post<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
-    return service.post<T, T>(url, data, config);
+    return unwrap<T>(service.post<T, T>(url, data, config));
   },
   put<T>(url: string, data?: unknown, config?: AxiosRequestConfig): Promise<T> {
-    return service.put<T, T>(url, data, config);
+    return unwrap<T>(service.put<T, T>(url, data, config));
   },
   delete<T>(url: string, config?: AxiosRequestConfig): Promise<T> {
-    return service.delete<T, T>(url, config);
+    return unwrap<T>(service.delete<T, T>(url, config));
   },
 };
 

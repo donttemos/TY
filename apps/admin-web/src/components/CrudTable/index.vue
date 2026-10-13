@@ -20,6 +20,7 @@ import DictSelect from '@/components/DictSelect/index.vue';
 import FormDialog from '@/components/FormDialog/index.vue';
 import { request, BizError, describeBizError } from '@/utils/request';
 import { useUserStore } from '@/store/user';
+import type { PermissionCode } from '@/api/types';
 import type { CrudColumn, FormField, FormModel, PagePayload, SearchField, SearchModel } from './types';
 
 const props = withDefaults(
@@ -134,8 +135,9 @@ const editingId = ref<string | null>(null);
 const formDialogRef = ref<InstanceType<typeof FormDialog>>();
 
 /** 权限按钮（无 permission 前缀时全部放行） */
-function perm(code: string): string | null {
-  return props.permission ? `${props.permission}:${code}` : null;
+function perm(code: string): PermissionCode | null {
+  // 模板拼接结果在类型层面是 string，这里断言为 PermissionCode（<前缀>:<动作> 形状由调用方保证）
+  return props.permission ? (`${props.permission}:${code}` as PermissionCode) : null;
 }
 
 function canCreate(): boolean {
@@ -185,9 +187,10 @@ async function fetchList(): Promise<void> {
       list.value = payload.items ?? [];
       total.value = payload.total ?? 0;
     } else {
-      const array = data as Record<string, unknown>[];
-      list.value = array ?? [];
-      total.value = array?.length ?? 0;
+      // 非分页接口约定返回裸数组；兼容后端误包 PageResult 的情况（取 items），避免 el-table 拿到非数组崩溃
+      const array = Array.isArray(data) ? (data as Record<string, unknown>[]) : ((data as PagePayload<Record<string, unknown>>)?.items ?? []);
+      list.value = array;
+      total.value = array.length;
     }
   } catch (err) {
     list.value = [];

@@ -1,11 +1,12 @@
 /*
  * @file CLI 入口
  * @description 组装真实的命令实现与 IO，交给 args.ts 的 dispatch 分派；
- *   fw new / dev / build / check / db:migrate / db:rollback / db:seed 的参数解析见 args.ts。
+ *   fw new / dev / build / check / db:migrate / db:rollback / db:seed / gen crud 的参数解析见 args.ts。
  * @author donttemo
  * @created 2026-10-09
  * @modified 2026-10-13 donttemo db:* 三个命令改为 await 分派（命令实现已异步化）
  * @modified 2026-10-13 donttemo 分派逻辑抽到 args.ts（可注入依赖与 IO，便于单测覆盖全部分支）
+ * @modified 2026-10-13 donttemo 接入 M6 gen crud（CRUD 代码生成器，编排见 gen/gen.ts）
  * @module cli
  * @since v0.1.0
  */
@@ -14,6 +15,7 @@ import { runCheck } from './commands/check.js';
 import { runMigrate, runRollback, runSeed } from './commands/db.js';
 import { runNew } from './commands/new.js';
 import { runPnpmScript } from './commands/run.js';
+import { runGenCrud } from './gen/gen.js';
 
 /** 分派主函数：注入真实实现与进程 IO */
 async function main(): Promise<void> {
@@ -26,6 +28,7 @@ async function main(): Promise<void> {
       migrate: runMigrate,
       rollback: runRollback,
       seed: runSeed,
+      genCrud: runGenCrud,
     },
     {
       log: (message) => console.log(message),

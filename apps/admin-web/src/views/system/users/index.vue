@@ -27,6 +27,7 @@ const columns: CrudColumn[] = [
   { prop: 'nickname', label: '昵称', minWidth: 100 },
   { prop: 'phone', label: '手机', minWidth: 120 },
   { prop: 'email', label: '邮箱', minWidth: 160 },
+  { prop: 'roleIds', label: '角色', minWidth: 140, slot: 'roles' },
   { prop: 'status', label: '状态', width: 90, align: 'center', slot: 'status' },
   { prop: 'lastLoginAt', label: '最近登录', width: 180, slot: 'lastLoginAt' },
   { prop: 'createdAt', label: '创建时间', width: 180, slot: 'createdAt' },
@@ -159,6 +160,9 @@ function handleRefresh(): void {
       @export="(payload) => ElMessage.info(`导出已发起（演示环境）：${JSON.stringify(payload.search)}`)"
       @refresh="handleRefresh"
     >
+      <template #cell-roles="{ row }">
+        {{ roleNames(row) }}
+      </template>
       <template #cell-status="{ row }">
         <status-tag :value="row.status" dict-code="user_status" />
       </template>

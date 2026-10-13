@@ -89,7 +89,7 @@ export interface MenuNode {
   children: MenuNode[];
 }
 
-/** 用户列表项（C-05 UserListItem） */
+/** 用户列表项（C-05 UserListItem；roleIds 为 Web 契约新增要求：分配角色弹窗预选，避免逐行拉详情） */
 export interface UserListItem {
   id: ID;
   username: string;
@@ -98,6 +98,7 @@ export interface UserListItem {
   email: string | null;
   avatar: string | null;
   status: 0 | 1;
+  roleIds: ID[];
   lastLoginAt: string | null;
   lastLoginIp: string | null;
   createdAt: string;

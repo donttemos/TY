@@ -89,8 +89,8 @@ export function describeBizError(error: BizError): string {
   }
 }
 
-/** 从信封体构造 BizError（code≠0 时） */
-export function toBizError(body: { code: number; message?: string; traceId?: string; data?: { details?: FieldError[] } }): BizError {
+/** 从信封体构造 BizError（code≠0 时；code 缺省按 9001 处理，data 可为 null） */
+export function toBizError(body: { code?: number; message?: string; traceId?: string; data?: { details?: FieldError[] } | null }): BizError {
   const details = Array.isArray(body.data?.details) ? (body.data?.details as FieldError[]) : null;
-  return new BizError(body.code, body.message ?? '', body.traceId ?? null, details);
+  return new BizError(body.code ?? BIZ_CODE.INTERNAL, body.message ?? '', body.traceId ?? null, details);
 }

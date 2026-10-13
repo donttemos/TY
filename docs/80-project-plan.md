@@ -103,14 +103,17 @@ gantt
 
 ### M6 代码生成器（PRD-006）
 
-| 任务 ID | 任务 | 产出 | 人日 | 依赖 | 验收 |
-|---|---|---|---|---|---|
-| T-M6-01 | 模型解析与类型映射表 | 元信息解析 | 2 | M2 | 映射覆盖全部基础类型 |
-| T-M6-02 | 后端代码模板与生成 | 模板 + 生成逻辑 | 3 | T-M6-01 | TC-GEN-001/002 |
-| T-M6-03 | 前端页面生成 | 列表/表单/API 模板 | 3 | M5、T-M6-02 | TC-GEN-001 |
-| T-M6-04 | 权限点与菜单 seed 生成 | seed 生成 | 1.5 | T-M6-02 | TC-GEN-005 |
-| T-M6-05 | dry-run、diff 与覆盖策略 | 安全写入 | 2 | T-M6-02 | TC-GEN-003/004/006 |
-| T-M6-06 | 模板定制与文档 | 模板覆盖机制 | 1.5 | T-M6-02 | TC-GEN-007 |
+> **状态：已完成（2026-10-13，未发版）**。`fw gen crud` 五层实现（解析 / 映射 / 模板引擎 / 安全写入 / 编排），模板外置 `templates/codegen/`；
+> `@fw/cli` 单测 **116/116**、覆盖率 **94.69% / 91.18%**（门禁 ≥80%）；端到端以真实 schema 的 `DemoItem` 为载体验证，生成产物零手改通过后端 `tsc` 与前端 `vue-tsc`；PRD-006 §7 八条 AC 全部满足。
+
+| 任务 ID | 任务 | 产出 | 人日 | 依赖 | 验收 | 状态 |
+|---|---|---|---|---|---|---|
+| T-M6-01 | 模型解析与类型映射表 | 元信息解析 | 2 | M2 | 映射覆盖全部基础类型 | ✅ |
+| T-M6-02 | 后端代码模板与生成 | 模板 + 生成逻辑 | 3 | T-M6-01 | TC-GEN-001/002 | ✅ |
+| T-M6-03 | 前端页面生成 | 列表/表单/API 模板 | 3 | M5、T-M6-02 | TC-GEN-001 | ✅ |
+| T-M6-04 | 权限点与菜单 seed 生成 | seed 生成 | 1.5 | T-M6-02 | TC-GEN-005 | ✅ |
+| T-M6-05 | dry-run、diff 与覆盖策略 | 安全写入 | 2 | T-M6-02 | TC-GEN-003/004/006 | ✅ |
+| T-M6-06 | 模板定制与文档 | 模板覆盖机制 | 1.5 | T-M6-02 | TC-GEN-007 | ✅ |
 
 ### M7 队列与调度（PRD-007）
 
@@ -197,19 +200,40 @@ gantt
 - [x] T-M4-07 降级与指标（`CACHE_FAIL_OPEN` 降级直查、降级日志与 `/metrics` 指标、`/ready` 依赖探针；TC-CACHE-007/008）
 - [x] T-M4-08 M4 验收演示（`scripts/smoke-cache.mjs` 12/12；`@fw/cache` 单测 8 文件，覆盖率 96.23%/94.45%；M1/M2 13/13、M3 25/25 回归通过；AC 见 PRD-004 §10）
 
-**In Progress**（M5 管理后台前端）
+**Done**（M5 管理后台前端，2026-10-13）
 
-> **v0.1.0 已于 2026-10-13 发布**（M1–M4 全部验收通过），验收记录见 [`docs/90-release-v0.1.0.md`](./90-release-v0.1.0.md)。
-> M5 现状：`apps/admin-web` 已有 api / store / router / layout / views / components / mock 等实现，但**无任何测试**，**未验收、不计入 v0.1.0**。
+> M5 已完成实现与验证，未发版（不计入 v0.1.0）。`apps/admin-web` 全量门禁通过：
+> `vue-tsc --noEmit` 类型检查 ✓；生产构建 ✓（gzip 总量 434.9 kB，门禁 600 kB）；
+> vitest 单测 **29/29**（错误码语义 / 无感刷新重放与并发合并 / 权限路由生成 / CrudTable 四态与权限按钮）；
+> mock 全链路冒烟 **40/40**（`scripts/smoke-mock.mjs`：登录 / me / 错误码 / 禁用账号 / 菜单 / 字典 / 用户 CRUD / 越权 3002 / 无感刷新轮换 / 角色 / 菜单树 / 审计 / 订单 / 登出）；
+> 文件头校验 192 文件通过。C-06 契约冻结（`docs/contracts/api-web.ts`）。PRD-005 §7 六条 AC 全部满足。
 
-| 任务 | 里程碑 | 优先级 | 依赖 | 负责人 |
-|---|---|---|---|---|
-| T-M5-01 Vite 工程与布局骨架 | M5 | P0 | C-06（mock 已就绪） | 待认领 |
-| T-M5-02 request 层与登录流程 | M5 | P0 | T-M5-01 | 待认领 |
+- [x] T-M5-01 前端工程与布局主题（Vite 5 + Vue3 + TS + Element Plus 按需引入 + Pinia + Vue Router；侧边栏 / 顶栏 / 面包屑 / 多标签页、主色 / 暗色 / 紧凑、响应式；`mock/` 三件套 + C-06 契约；构建 gzip 434.9 kB）
+- [x] T-M5-02 请求层与无感刷新（信封解包 / Bearer / traceId 透传 / 错误码提示；3001/3003 无感刷新，并发共用同一 Promise 并重放；access 内存 + refresh 按记住我落 local/sessionStorage；TC-WEB-003 单测覆盖）
+- [x] T-M5-03 登录页与个人中心（账号密码 + 验证码钩子 + 记住我；3001/3004/9003 提示；资料修改 / 改密 / 登录设备查看与下线）
+- [x] T-M5-04 动态路由与按钮权限（菜单树生成路由 + 二次过滤；静态路由仅登录 / 403 / 404 / 工作台 / 个人中心；`v-permission` + CrudTable 按钮权限；TC-WEB-001/002）
+- [x] T-M5-05 用户 / 角色 / 菜单管理页（用户：CRUD + 启用禁用 + 重置密码 + 分配角色；角色：权限树勾选 + 数据范围 + 复制；菜单：树形维护，变更重新登录生效）
+- [x] T-M5-06 字典管理页与 `useDict`（分类 + 项维护；`useDict(code)` 按编码消费，维护后主动失效；禁止枚举硬编码）
+- [x] T-M5-07 审计日志页（按人 / 时间 / 模块查询；详情抽屉展示字段级 diff）
+- [x] T-M5-08 `<CrudTable>` 标准组件（四要素配置；四态；列设置持久化；导入导出钩子；内置弹窗含服务端字段级错误回显；新列表页 ≤ 80 行，演示页 65 行）
 
-**Backlog**：M5 其余任务与 M6–M8 全部任务。
+**Done**（M6 代码生成器，2026-10-13）
 
-> **v0.1.0 遗留项（不阻塞发布）**：① `@nestjs/core <=11.1.17` 与 `file-type` 的 3 项 moderate 依赖漏洞需随 NestJS 10 → 11 升级解决（M6，见发布报告 §6）；② dev 工具链大版本升级（vitest 2→3、tinypool 1→2、happy-dom 15→20、vite 5→6）；③ `braces` 暂无可用补丁版本。
+> M6 已完成实现与验证，未发版（不计入 v0.1.0）。落地于 `packages/cli/src/gen/`（五层可注入 IO 实现）+ `templates/codegen/`（内置模板）：
+> `@fw/cli` 单测 **116/116**、覆盖率 **94.69% / 91.18%**（门禁 ≥80%）；以仓库真实 schema 的 `DemoItem` 端到端验证
+> （`fw gen crud demo-item` 产出后端 6 + 前端 3 + seed 1 共 10 文件，零手改通过 `example-api` `tsc` 与 `admin-web` `vue-tsc`）；
+> 根文件头门禁 221 文件通过。PRD-006 §7 八条 AC 全部满足。
+
+- [x] T-M6-01 模型解析与类型映射表（`schema-parser.ts` 解析 model/enum/字段属性/文档注释/块属性；`type-map.ts` 类型→TS→控件→校验唯一映射，`bigint`/`decimal` 强制 `string`，未命中类型报错）
+- [x] T-M6-02 后端代码模板与生成（`template-engine.ts` 轻量引擎 + `render.ts` 计划组装；后端 entity/repository/dto/service/controller/module 六文件，Repository 继承 `@fw/db` `PrismaRepository` 无原生 SQL）
+- [x] T-M6-03 前端页面生成（api 封装 + `index.vue`（`<CrudTable>` 列/查询配置推导）+ `form.vue`（独立弹窗，控件与校验同源）；外键生成带责任人与日期的 TODO）
+- [x] T-M6-04 权限点与菜单 seed 生成（`prisma/seed/<model>.seed.ts` 幂等 upsert 4 权限点 + 菜单，与 PRD-003 RBAC 对齐）
+- [x] T-M6-05 dry-run、diff 与覆盖策略（`writer.ts`：默认跳过已存在文件并提示 `--force`、`--dry` 与真实生成同源、脏工作区告警、校验失败回滚含清理新建文件与空目录）
+- [x] T-M6-06 模板定制与文档（`templates/codegen/README.md` 定制说明；项目根同名模板优先 + `codegen.config.json` 的 `vars`/`typeOverrides`；`--all`/`--only`/`--app`/`--web`/`--schema` 与交互式选择）
+
+**Backlog**：M7–M8 全部任务。
+
+> **v0.1.0 遗留项（不阻塞发布）**：① `@nestjs/core <=11.1.17` 与 `file-type` 的 3 项 moderate 依赖漏洞需随 NestJS 10 → 11 升级解决（**未执行**：原挂 M6，M6 实际交付的是代码生成器，该升级需单独排期，见发布报告 §6）；② dev 工具链大版本升级（vitest 2→3、tinypool 1→2、happy-dom 15→20、vite 5→6）；③ `braces` 暂无可用补丁版本。
 
 > **M3 遗留项（已登记，不阻塞 M3 验收）**：① `apikey`/`session`/`oauth2` 端到端路由（M5 接入后台模板时补）；② ~~权限缓存换 Redis 多实例共享~~（**M4 已完成**：`CacheBackedAuthCache` 适配器把 `AUTH_CACHE` 端口接到 `CacheService`，鉴权业务代码 diff = 0）；③ `dataScope` 的 `org`/`org_below` 两档（M8）；④ refresh 过期记录定时清理（M7）。
 

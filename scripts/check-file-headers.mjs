@@ -3,6 +3,7 @@
  * @description 扫描源码目录，校验每个文件是否存在中文文件头（@file / @author / @created）以及 TODO 标记是否带责任人与日期；--fix 可为缺头文件按模板补头。CI 中失败即阻断。
  * @author donttemo
  * @created 2026-10-09
+ * @modified 2026-10-13 donttemo 跳过 prisma 多 schema 矩阵生成物（matrix-client-*）与点号前缀的工具生成文件（如 .redis-probe.mjs），与 test-client 既有约定一致
  * @since v0.1.0
  */
 
@@ -27,8 +28,10 @@ const SKIP_DIRS = [
   'test-client',
   'migrations',
 ];
-/** 跳过的文件（按文件名匹配）：vitest 用 tsx 编译 .ts 配置时产生的临时产物，不属于源码 */
-const SKIP_FILES = (name) => /\.(?:timestamp-[\w-]+|[a-z0-9-]+\.tmp)\.(?:mjs|js)$/i.test(name);
+/** 生成物目录名模式：三库矩阵的 prisma generate 输出（matrix-client-mysql / matrix-client-postgresql，见 packages/db/scripts/matrix-db-setup.mjs） */
+const SKIP_DIR_PATTERN = /^matrix-client-/;
+/** 跳过的文件（按文件名匹配）：vitest 用 tsx 编译 .ts 配置时产生的临时产物，以及点号前缀的工具生成文件（如 .redis-probe.mjs），不属于源码 */
+const SKIP_FILES = (name) => /\.(?:timestamp-[\w-]+|[a-z0-9-]+\.tmp)\.(?:mjs|js)$/i.test(name) || name.startsWith('.');
 
 const args = process.argv.slice(2);
 const fixMode = args.includes('--fix');
@@ -61,7 +64,7 @@ function collectFiles(dir, out = []) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (SKIP_DIRS.includes(entry.name)) continue;
+      if (SKIP_DIRS.includes(entry.name) || SKIP_DIR_PATTERN.test(entry.name)) continue;
       collectFiles(full, out);
     } else if (!SKIP_FILES(entry.name) && EXTENSIONS.includes(path.extname(entry.name))) {
       out.push(full);

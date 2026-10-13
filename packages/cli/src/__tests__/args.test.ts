@@ -1,13 +1,15 @@
 /*
  * @file CLI 参数解析与命令分派单测
- * @description 覆盖 parseOptions 的解析规则与 dispatch 的全部分支：
- *   help / 未知命令 / new 缺项目名 / new 模板透传与默认值 / dev 与 build / check / db 三命令的 schema 传递。
+ * @description 覆盖 parseOptions / parseFlags 的解析规则与 dispatch 的全部分支：
+ *   help / 未知命令 / new 缺项目名 / new 模板透传与默认值 / dev 与 build / check /
+ *   db 三命令的 schema 传递 / gen crud 的模型、布尔 flag 与 --only 校验（M6）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-13 donttemo 增补 gen crud 分派与 parseFlags 用例（M6）
  * @module cli
  */
 import { describe, expect, it, vi } from 'vitest';
-import { dispatch, parseOptions, USAGE } from '../args.js';
+import { dispatch, parseFlags, parseOptions, USAGE } from '../args.js';
 import type { CliDeps, CliIo } from '../args.js';
 
 /** 被 spy 的记录型 IO */
@@ -43,6 +45,7 @@ interface MockedDeps {
   migrate: ReturnType<typeof vi.fn>;
   rollback: ReturnType<typeof vi.fn>;
   seed: ReturnType<typeof vi.fn>;
+  genCrud: ReturnType<typeof vi.fn>;
 }
 
 /** 构造替身依赖（所有命令默认成功） */
@@ -54,6 +57,7 @@ function makeDeps(): MockedDeps {
     migrate: vi.fn(async () => undefined),
     rollback: vi.fn(async () => undefined),
     seed: vi.fn(async () => undefined),
+    genCrud: vi.fn(async () => undefined),
   };
 }
 
@@ -84,6 +88,16 @@ describe('parseOptions', () => {
 
   it('无参数时返回空对象', () => {
     expect(parseOptions([])).toEqual({});
+  });
+});
+
+describe('parseFlags', () => {
+  it('解析无等号的布尔 flag', () => {
+    expect(parseFlags(['order', '--dry', '--force', '--app=web'])).toEqual(['dry', 'force']);
+  });
+
+  it('无 flag 时返回空数组', () => {
+    expect(parseFlags(['order', '--app=web'])).toEqual([]);
   });
 });
 
@@ -164,5 +178,62 @@ describe('dispatch', () => {
     const deps = makeDeps();
     await run(['db:migrate', '--schema=prisma/custom.prisma'], deps, makeIo().io);
     expect(deps.migrate).toHaveBeenCalledWith({ schema: 'prisma/custom.prisma' });
+  });
+});
+
+describe('dispatch gen crud（M6）', () => {
+  it('位置参数模型与布尔 flag / 键值选项一并透传', async () => {
+    const deps = makeDeps();
+    await run(['gen', 'crud', 'order', '--dry', '--only=backend', '--app=example-api'], deps, makeIo().io);
+    expect(deps.genCrud).toHaveBeenCalledWith({
+      models: ['order'],
+      all: false,
+      only: 'backend',
+      app: 'example-api',
+      web: undefined,
+      schema: undefined,
+      dry: true,
+      force: false,
+      noVerify: false,
+    });
+  });
+
+  it('--model=a,b 与位置参数合并', async () => {
+    const deps = makeDeps();
+    await run(['gen', 'crud', 'order', '--model=user,role'], deps, makeIo().io);
+    expect(deps.genCrud).toHaveBeenCalledWith(expect.objectContaining({ models: ['order', 'user', 'role'] }));
+  });
+
+  it('--all 与 --force / --no-verify 透传', async () => {
+    const deps = makeDeps();
+    await run(['gen', 'crud', '--all', '--force', '--no-verify'], deps, makeIo().io);
+    expect(deps.genCrud).toHaveBeenCalledWith(
+      expect.objectContaining({ all: true, force: true, noVerify: true, models: [] }),
+    );
+  });
+
+  it('--only 取值不合法时报错退出', async () => {
+    const deps = makeDeps();
+    const { io, errors, exits } = makeIo();
+    await run(['gen', 'crud', 'order', '--only=both'], deps, io);
+    expect(errors[0]).toContain('--only 取值不合法');
+    expect(exits).toEqual([1]);
+    expect(deps.genCrud).not.toHaveBeenCalled();
+  });
+
+  it('未知 gen 子命令时报错退出', async () => {
+    const deps = makeDeps();
+    const { io, errors, exits } = makeIo();
+    await run(['gen', 'rest'], deps, io);
+    expect(errors[0]).toContain('未知 gen 子命令');
+    expect(exits).toEqual([1]);
+  });
+
+  it('gen 缺子命令时报错退出', async () => {
+    const deps = makeDeps();
+    const { io, errors, exits } = makeIo();
+    await run(['gen'], deps, io);
+    expect(errors[0]).toContain('未知 gen 子命令');
+    expect(exits).toEqual([1]);
   });
 });

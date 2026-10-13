@@ -7,6 +7,7 @@
  * @author donttemo
  * @created 2026-10-12
  * @modified 2026-10-13 donttemo M3：扩展为鉴权基线种子（权限点/角色/菜单/账号/授权），并保持幂等
+ * @modified 2026-10-13 donttemo M6：追加生成器产物（prisma/seed/demo-item.seed.ts 的 4 个权限点 + 1 条菜单），并给 admin 显式授权
  * @module example-api
  */
 
@@ -15,6 +16,7 @@ import 'reflect-metadata';
 
 import { PrismaClient } from '@prisma/client';
 import { PERM, ROLE, PasswordService } from '@fw/auth';
+import { seedDemoItemPermissions } from './seed/demo-item.seed.js';
 
 const prisma = new PrismaClient();
 const passwords = new PasswordService();
@@ -62,6 +64,14 @@ const FRAMEWORK_PERMISSIONS: PermissionSeed[] = [
 const BUSINESS_PERMISSIONS: PermissionSeed[] = [
   { code: 'order:read', name: '订单查询', type: 'menu', module: 'order' },
   { code: 'order:refund', name: '订单退款', type: 'button', module: 'order' },
+];
+
+/** M6 生成器写入的权限点编码（与 prisma/seed/demo-item.seed.ts 的 PERMISSIONS 一一对应） */
+const GENERATED_PERMISSION_CODES: string[] = [
+  'demo-item:create',
+  'demo-item:read',
+  'demo-item:update',
+  'demo-item:delete',
 ];
 
 /** 普通用户角色默认持有的权限（刻意不含 role:read / audit:read / user:assign-role，用于验证越权拦截） */
@@ -198,7 +208,16 @@ async function main(): Promise<void> {
   const menuCounter = { count: 0 };
   await seedMenus('0', MENU_TREE, menuCounter);
 
-  // 6) 账号（Argon2id 现场哈希）
+  // 6) M6 生成器产物：权限点 + 菜单（幂等 upsert；truncate 之后执行，admin 显式授权后后台角色配置页可见）
+  await seedDemoItemPermissions();
+  for (const code of GENERATED_PERMISSION_CODES) {
+    const permission = await prisma.permission.findUnique({ where: { code } });
+    if (permission) {
+      await prisma.rolePermission.create({ data: { roleId: adminRole.id, permissionId: permission.id } });
+    }
+  }
+
+  // 7) 账号（Argon2id 现场哈希）
   const adminPassword = 'Admin@123456';
   const userPassword = 'Alice@123456';
   const admin = await prisma.user.create({
@@ -220,7 +239,7 @@ async function main(): Promise<void> {
     },
   });
 
-  // 7) 用户-角色
+  // 8) 用户-角色
   await prisma.userRole.create({ data: { userId: admin.id, roleId: adminRole.id } });
   await prisma.userRole.create({ data: { userId: alice.id, roleId: userRole.id } });
 
@@ -228,7 +247,7 @@ async function main(): Promise<void> {
     [
       '[seed] 完成：',
       `演示条目 ${SEED_ITEMS.length} 条`,
-      `权限点 ${permIdByCode.size} 个`,
+      `权限点 ${permIdByCode.size + GENERATED_PERMISSION_CODES.length} 个（框架/业务 ${permIdByCode.size} + 生成器 ${GENERATED_PERMISSION_CODES.length}）`,
       `角色 2 个（${ROLE.ADMIN} 全量 / ${ROLE.USER} ${USER_ROLE_CODES.length} 项）`,
       `菜单 ${menuCounter.count} 项`,
       `账号 2 个（admin / ${adminPassword}，alice / ${userPassword}）`,

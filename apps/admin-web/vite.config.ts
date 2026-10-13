@@ -11,7 +11,7 @@
 import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
-import Components from 'unplugin-vue-components';
+import Components from 'unplugin-vue-components/vite';
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers';
 import { viteMockServer } from './mock/plugin';
 
@@ -35,7 +35,9 @@ export default defineConfig(({ mode }) => ({
   build: {
     outDir: 'dist',
     target: 'es2022',
-    chunkSizeWarningLimit: 900,
+    // element-plus 全量 vendor 分包 raw ≈ 930 kB / gzip ≈ 300 kB（按需引入已树摇，拆分 vendor 反而伤缓存）；
+    // 体积门禁以 gzip 口径为准，见 scripts/smoke-mock.mjs，故此处告警线放宽到 1000 kB
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
         manualChunks: {

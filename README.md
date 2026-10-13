@@ -2,7 +2,7 @@
 
 > 一套「框架之上的框架」：用它在 1 天内搭出任意业务系统的可运行骨架，小到内部工具站、大到多租户 SaaS，规模升级时业务代码零重写。
 >
-> **当前状态：v0.1.0 已发布（M1 核心骨架 + M2 数据库抽象层 + M3 鉴权与权限 + M4 缓存层）**；M5 管理后台前端（PRD-005）进行中。发布验收记录见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
+> **当前状态：v0.1.0 已发布（M1 核心骨架 + M2 数据库抽象层 + M3 鉴权与权限 + M4 缓存层）**；M5 管理后台前端（PRD-005）已完成实现与验证（构建 / 单测 29 / mock 全链路冒烟 40/40），未发版。发布验收记录见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
 
 ## 设计原则
 
@@ -43,12 +43,14 @@ framework/
     admin/ api/ cms/          # 项目模板（M5 起）
   apps/
     example-api/              # 示例应用（每里程碑的验证载体）
+    admin-web/                # M5 管理后台前端（Vue3 + Vite + Element Plus，C-06 mock 可独立运行）
   scripts/
     check-file-headers.mjs    # 文件头注释校验（中文 / 作者 / 日期）
     check-no-raw-sql.mjs      # 原生 SQL 方言标注检查（TC-ORM-005）
   docs/
     contracts/                # 并行开发先行契约（类型即契约，只读）
       auth.ts                 # C-05 权限契约（RequestUser / 权限码 / 菜单树 / 守卫失败码）
+      api-web.ts              # C-06 前端 API 契约（登录/菜单/字典/审计/通用 CRUD 的请求响应结构）
     00-vision-scope.md        # 愿景与范围（1 页）
     10-acceptance-criteria.md # 验收标准（DoD / 门禁 / 基线 / 演练）
     20-architecture.md        # 架构设计与技术方案
@@ -94,8 +96,8 @@ fw gen crud order
 | 数据库抽象与多库切换 | `@fw/db`（Repository 契约 + Prisma 适配 + 方言白名单 + 迁移工具 + 慢查询观测） | M2 | ✅ 已完成 |
 | 鉴权与权限 | `@fw/auth`（双 token 轮换 + RBAC 五表 + 多策略 + 审计 + 登录加固） | M3 | ✅ 已完成 |
 | 缓存 | `@fw/cache`（统一 CacheService + memory/redis/cluster 驱动 + 三防护 + 标签失效 + 分布式锁 + 降级与指标） | M4 | ✅ 已完成 |
-| 管理后台模板 | `templates/admin` | M5 | 未开工 |
-| CRUD 代码生成器 | `@fw/cli gen` | M6 | 未开工 |
+| 管理后台模板 | `apps/admin-web`（Vue3 + Vite + Element Plus：登录、动态路由、按钮级权限、用户/角色/菜单/字典/审计页、`<CrudTable>` 标准组件；mock 全链路冒烟 40/40、单测 29） | M5 | ✅ 已完成（未发版） |
+| CRUD 代码生成器 | `@fw/cli gen`（schema 解析 + 类型映射 + 模板引擎 + 后端/前端/seed 生成 + dry-run/diff/回滚；模板外置 `templates/codegen/`；单测 116 / 覆盖率 94.7%） | M6 | ✅ 已完成（未发版） |
 | 队列与定时任务 | `@fw/queue` + memory/bullmq | M7 | 未开工 |
 | 多租户与规模化 | 租户上下文 + transport + OTel + Helm | M8 | 未开工 |
 
@@ -115,14 +117,16 @@ fw gen crud order
 | [编码 Git PR 规范](./docs/70-engineering-standards.md) | 编码规范、**中文注释规范（文件头含作者与日期）**、反模式清单、分支与提交约定、PR 与评审规则 |
 | [项目计划与任务板](./docs/80-project-plan.md) | 15 周甘特、M1–M8 WBS（40+ 任务）、任务板列与标签、当前快照 |
 | [并行开发工作线划分](./docs/85-parallel-workstreams.md) | 多线并行：7 条工作线与负责人、8 份先行契约、目录所有权矩阵、W0–W10 时间轴与 I1/I2/I3 集成点 |
-| [先行契约](./docs/contracts/cache.ts) | 类型即契约（只读）：C-04 缓存、C-05 权限契约已冻结，其余 C-03/C-06/C-07/C-08 待 L0 落地 |
+| [先行契约](./docs/contracts/api-web.ts) | 类型即契约（只读）：C-04 缓存、C-05 权限契约、C-06 前端 API 契约已冻结，其余 C-03/C-07/C-08 待落地 |
 | [AI 多线程开工执行手册](./docs/86-ai-parallel-execution.md) | 编排者 + 5 个执行 agent 的拓扑、Wave 0–4 波次、agent 名额与目录白名单、prompt 模板、防造假四道闸 |
 | [贡献指南](./CONTRIBUTING.md) | 三步上手与硬性规则入口 |
 | [PRD 索引](./docs/prd/README.md) | 迭代清单与 PRD 模板约定 |
 | PRD-001 ~ PRD-008 | 见 `docs/prd/`，每个功能 / 迭代一份 |
 | [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md) | M1–M4 发布门禁逐条判定、验证证据清单、遗留问题与发布结论（条件通过） |
-| [文档一致性核对报告](./docs/95-doc-audit.md) | 全量文档交叉核对结果、冲突修复记录与遗留项 |
+| [测试数据库环境](./docs/92-test-databases.md) | 远程共用测试实例（MySQL / PostgreSQL / Redis）连接登记与测试切换方式（含明文凭证，仅测试用） |
 | [数据库联通性与切换实测](./docs/93-db-connectivity-switch-test.md) | v0.1.0 三库连通/鉴权实测、T-M2-07 三库一致性矩阵、业务代码零改动证明、Redis 真实实例联调与遗留项 |
+| [代码生成模板定制](./templates/codegen/README.md) | `fw gen crud` 模板目录结构、标签语法、可用变量清单、项目级同名覆盖与 `codegen.config.json`（vars / typeOverrides） |
+| [文档一致性核对报告](./docs/95-doc-audit.md) | 全量文档交叉核对结果、冲突修复记录与遗留项 |
 
 ## 路线图
 
@@ -132,8 +136,8 @@ fw gen crud order
 | M2 | 数据库抽象层 | [002](./docs/prd/prd-002-database-abstraction.md) | ✅ 已完成 |
 | M3 | 鉴权与权限 | [003](./docs/prd/prd-003-auth-rbac.md) | ✅ 已完成 |
 | M4 | 缓存层 | [004](./docs/prd/prd-004-cache-layer.md) | ✅ 已完成 |
-| M5 | 管理后台模板 | [005](./docs/prd/prd-005-admin-template.md) | 草案 |
-| M6 | 代码生成器 | [006](./docs/prd/prd-006-code-generator.md) | 草案 |
+| M5 | 管理后台模板 | [005](./docs/prd/prd-005-admin-template.md) | ✅ 已完成（未发版） |
+| M6 | 代码生成器 | [006](./docs/prd/prd-006-code-generator.md) | ✅ 已完成（未发版） |
 | M7 | 队列与定时任务 | [007](./docs/prd/prd-007-queue-scheduler.md) | 草案 |
 | M8 | 多租户与规模化 | [008](./docs/prd/prd-008-multitenancy-scale.md) | 草案 |
 

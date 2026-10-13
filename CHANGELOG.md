@@ -2,7 +2,7 @@
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
-> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）进行中。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
+> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）已完成实现与验证，未发版。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
 
 ## 版本与变更规则
 
@@ -14,7 +14,39 @@
 
 ## [Unreleased]
 
-（M5 管理后台模板进行中，暂无对外可见变更）
+### Added（M6 CRUD 代码生成器，2026-10-13）
+
+**`@fw/cli gen crud <model>`（PRD-006，未发版）**
+
+- **五层可测架构**（`packages/cli/src/gen/`）：`schema-parser`（解析 Prisma 的 model/enum/字段属性/文档注释/块属性）→ `type-map`（类型/控件/校验唯一映射，`bigint`/`decimal` 强制 `string` 防精度丢失，未命中类型直接报错）→ `template-engine`（轻量 `{{var}}` / `{{#if}}` / `{{#each}}` 引擎，Vue `{{ }}` 字面量以 `{{ '{' }}` 转义）→ `writer`（dry-run / diff / 默认不覆盖 / 失败回滚）→ `gen`（编排：范围、批量、交互、自检清单）；全部 IO 可注入，单测 **116 用例全绿 / 覆盖率 94.7%**（门禁 ≥80%）。
+- **后端生成**：`entity` / `repository`（继承 `@fw/db` 的 `PrismaRepository`，无原生 SQL）/ `dto` / `service` / `controller`（`/api/v1/<模型复数>` 标准 CRUD）/ `module` 六文件。
+- **前端生成**：`api/<model>.ts` 请求封装 + `views/<model>/index.vue`（`<CrudTable>` 配置：列宽/对齐/slot 按字段类型推导）+ `views/<model>/form.vue`（独立弹窗，控件与校验规则同源）；外键自动生成带责任人与日期的 `TODO` 提示绑定数据源。
+- **权限点与菜单 seed**：`prisma/seed/<model>.seed.ts` 幂等 upsert 4 个权限点（`<kebab>:create/read/update/delete`）+ 菜单记录，与 PRD-003 RBAC 对齐；单条命令一次产出 10 个文件（后端 6 + 前端 3 + seed 1）。
+- **安全写入（FR-07/08）**：默认跳过已存在文件并提示 `--force`；`--dry` 与真实生成共用同一渲染路径，输出保证一致；生成前 `git status` 脏工作区告警（不阻断）；后端 `tsc` 校验失败即回滚本次全部写入（含删除新建文件与空目录），不留半成品。
+- **模板可定制（FR-06）**：内置模板外置 `templates/codegen/{backend,frontend,seed}/`，项目根同名模板优先覆盖；`codegen.config.json` 提供自定义变量 `vars` 与类型映射 `typeOverrides`；定制说明见 `templates/codegen/README.md`。
+- **中文文件头（FR-11）**：产物统一带 `@file/@description/@author/@created` 文件头与 `@generated` 标注；署名取 `git config user.name`，缺失时回退 `donttemo` 并告警。
+- **批量与筛范围**：`--all`（schema 全部可生成模型，自动排除复合主键模型）、`--only=backend|frontend|seed|all`、`--app`/`--web`/`--schema` 显式指定、无位置参数时交互式选择。
+- **端到端验证**：以仓库真实 schema 的 `DemoItem` 为载体验证——`fw gen crud demo-item` 产物零手改即通过 `apps/example-api` `tsc --noEmit` 与 `apps/admin-web` `vue-tsc --noEmit`；`app.module.ts` 接入 `DemoItemModule`、`prisma/seed.ts` 引用生成的权限种子，均作为生成器可用性的活体证据。
+- **CI 纳入**：单测覆盖率循环新增 `@fw/cli`；`base` job 增加「M6 生成器 dry-run 冒烟」步骤。
+
+### Added（M5 管理后台前端，2026-10-13）
+
+**`apps/admin-web`（v0.1.0，PRD-005 / C-06 契约）**
+
+- **工程与主题**：Vite 5 + Vue3 + TypeScript + Element Plus（按需引入，vendor gzip 291.6 kB）+ Pinia + Vue Router；布局（侧边栏 / 顶栏 / 面包屑 / 多标签页）、主色切换、暗色模式、紧凑模式、响应式折叠；`.env.*` 四环境（dev/test/production/example）。
+- **mock server（C-06 内存实现）**：`mock/db.ts` 种子 + `handlers.ts` 全量端点 + vite 插件中间件，非 production 模式自动挂载；切真实后端只改 `VITE_API_BASE_URL`，业务代码零改动。冒烟脚本 `scripts/smoke-mock.mjs` 以真实 HTTP 走完全链路（**40/40 通过**：登录 / me / 错误码 / 禁用账号 / 菜单 / 字典 / 用户 CRUD / 越权 3002 / 无感刷新轮换与旧 token 失效 / 角色 / 菜单树 / 审计 / 订单 / 登出）。
+- **请求层**：统一信封解包、Bearer 注入、traceId 透传、错误码 → 用户可读提示；3001/3003 无感刷新（并发共用同一刷新 Promise，刷新成功自动重放原请求）；access token 仅存内存、refresh token 按「记住我」存 local/sessionStorage。单测覆盖重放、跳登录、防递归与并发合并（TC-WEB-003）。
+- **登录与个人中心**：账号密码 + 验证码钩子 + 记住我；3001/3004/9003 错误码提示；资料修改、改密、登录设备查看与下线。
+- **动态路由与按钮权限**：菜单树由 `/auth/menus` 下发并二次过滤生成路由（静态路由仅登录 / 403 / 404 / 工作台 / 个人中心）；`v-permission` 指令 + CrudTable 按钮级权限（无权限不渲染，服务端仍独立校验）；未授权路径直输 URL 落 403/404。
+- **标准 CRUD 组件 `<CrudTable>`**：columns / searchForm / api / permission 四要素配置即得完整列表页（查询区含字典下拉与展开收起、工具栏、排序 / 多选 / 列设置本地持久化 / 导入导出钩子、加载 / 空 / 错误 / 无权限四态、内置表单弹窗含服务端字段级错误回显）；新业务列表页 ≤ 80 行（演示页 `views/demo/orders` 65 行）。
+- **系统管理页**：用户（列表 / 新建 / 编辑 / 启用禁用 / 重置密码 / 分配角色）、角色（权限树勾选 / 数据范围 / 复制角色）、菜单（树形维护）、字典（分类 + 项，`useDict` 按编码消费、禁止枚举硬编码）、审计日志（按人 / 时间 / 模块查询，详情抽屉展示字段级 diff）。
+- **测试**：vitest + happy-dom 单测 **29/29**（错误码语义、无感刷新重放、权限路由生成含 component 解析与相对路径拼接、CrudTable 四态与权限按钮）；`vue-tsc --noEmit` 全量类型检查通过；构建产物 gzip 总量 434.9 kB（门禁 600 kB）。
+- **CI 纳入**：`.github/workflows/ci.yml` 构建列表新增 `admin-web`，`base` job 增加「M5 管理后台前端门禁」步骤（vitest 单测 + mock 全链路冒烟 + bundle 门禁）；`test` 脚本移除 `--passWithNoTests`，无测试文件即失败，门禁真实生效。
+
+**契约与文档**
+
+- `docs/contracts/api-web.ts`：C-06 前端 API 契约冻结（类型即契约；用户列表项 `roleIds` 为 Web 契约新增要求，供分配角色弹窗预选）。
+- `docs/60-deployment-ops.md` §3：新增管理后台前端环境变量清单（`VITE_API_BASE_URL` 等，构建期注入）。
 
 ### Added（数据库联通性与三库切换实测，2026-10-13）
 
@@ -34,7 +66,13 @@
 **文档**
 
 - 新增 [`docs/93-db-connectivity-switch-test.md`](./docs/93-db-connectivity-switch-test.md)：连通/鉴权实测（含 PG SCRAM-SHA-256 完整握手）、三库矩阵结果、键空间独立核验、发现与修复、遗留 T-01~T-05。
+- [`docs/92-test-databases.md`](./docs/92-test-databases.md) 增补 §5 执行记录（实测服务端版本、`framework_test` 创建、大小写归一与批量造数注意事项）。
 - 验收总纲遗留 **R-01（三库矩阵与数据库切换演练）** 完成实测闭环、**R-07（真实 Redis）** 完成 standalone 部分闭环（Cluster 留待 M8）。
+
+### Fixed
+
+- 修复动态路由子路径拼接缺陷：菜单全路径（如 `/system/users`）曾直接作为子路由相对路径，导致 `/system` 下的用户页拼成 `/system/system/users` 无法命中；现按父级前缀换算相对路径（单测回归护栏）。
+- 修复 CrudTable 非分页接口响应兼容：接口约定返回裸数组，现兼容误包 `{ items }` 的响应，避免 el-table 拿到非数组崩溃。
 
 ## [0.1.0] - 2026-10-13
 

@@ -46,6 +46,11 @@ export interface MockMenu {
   sort: number;
 }
 
+/** 菜单树节点（children 仅存在于 menuTree 组装结果，扁平表中无此字段） */
+export interface MockMenuTree extends MockMenu {
+  children: MockMenuTree[];
+}
+
 /** 用户（不含口令哈希字段，mock 口令单独存放） */
 export interface MockUser {
   id: string;

@@ -13,10 +13,22 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import * as menuApi from '@/api/menu';
 import { BizError, describeBizError } from '@/utils/biz-error';
-import type { MenuManageItem, MenuUpsertInput } from '@/api/types';
+import type { MenuManageItem, MenuUpsertInput, PermissionCode } from '@/api/types';
 
 interface TreeNode extends MenuManageItem {
   children: TreeNode[];
+}
+
+/** 表单模型（输入控件均为字符串，提交时再收敛为可空） */
+interface MenuForm {
+  parentId: string;
+  name: string;
+  path: string;
+  component: string;
+  icon: string;
+  permissionCode: string;
+  visible: boolean;
+  sort: number;
 }
 
 const loading = ref(false);
@@ -73,7 +85,7 @@ onMounted(load);
 const dialogVisible = ref(false);
 const saving = ref(false);
 const editing = ref<MenuManageItem | null>(null);
-const form = reactive<MenuUpsertInput>({
+const form = reactive<MenuForm>({
   parentId: '0',
   name: '',
   path: '',
@@ -121,13 +133,14 @@ async function submit(): Promise<void> {
   }
   saving.value = true;
   try {
+    // 空串收敛为 undefined（JSON 中丢弃该键 = 不设置 / 新建时置空），权限码需断言为契约模板类型
     const payload: MenuUpsertInput = {
       parentId: form.parentId,
       name: form.name,
-      path: form.path || null,
-      component: form.component || null,
-      icon: form.icon || null,
-      permissionCode: form.permissionCode || null,
+      path: form.path || undefined,
+      component: form.component || undefined,
+      icon: form.icon || undefined,
+      permissionCode: form.permissionCode ? (form.permissionCode as PermissionCode) : undefined,
       visible: form.visible,
       sort: form.sort,
     };

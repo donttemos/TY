@@ -29,7 +29,7 @@ M1 骨架已落地，无需重做：
 | `@fw/cli` | 已实现 | `fw new / dev / build / check` |
 | `apps/example-api` | 可运行 | 有 demo 模块，作为集成验证载体 |
 | `packages/orm`、`auth`、`cache`、`queue` | **未开工** | 本文划分的主要对象 |
-| `apps/admin-web`（前端） | **未开工** | L4 线新建 |
+| `apps/admin-web`（前端） | **已交付（M5，2026-10-13）** | L4 线：工程 / mock / 请求层 / 登录 / 动态路由 / 管理页 / `<CrudTable>` 全部完成，门禁全过（单测 29、冒烟 40/40、构建 gzip 434.9 kB） |
 
 因此 **W0 只做三件事**：冻结契约、建目录所有权与分支约定、补齐 CI 与 mock server。之后 6 条线同周开工。
 
@@ -60,7 +60,7 @@ M1 骨架已落地，无需重做：
 | C-03 | `Repository<T>` | `docs/contracts/repository.ts` | `findById/list/page/create/update/softDelete/count/withTransaction`、分页入出参、软删语义、事务边界 | L1（实现） L2 L5（消费） | **新建** |
 | C-04 | `CacheService` / `Lock` | `docs/contracts/cache.ts` | `get/set/del/has/wrap/mget/expire/invalidateTag`、锁 API、降级语义 `CACHE_FAIL_OPEN` | L3（实现） L2 L4 | **已冻结（M4，2026-10-13）** |
 | C-05 | 权限契约 | `docs/contracts/auth.ts` | `RequestUser` 结构、权限码 `资源:操作`、菜单树 JSON、`@Permissions` 语义、守卫失败返回码 | L2（实现） L4 L5 | **已冻结（M3，2026-10-13）** |
-| C-06 | 前端 API 契约 | `docs/contracts/api-web.ts` + `apps/admin-web/mock/` | 登录/刷新/登出/`me`/菜单/字典/审计/通用 CRUD 的请求响应结构 + mock 数据 | L2 L4（共同遵守，L4 先建 mock） | **新建** |
+| C-06 | 前端 API 契约 | `docs/contracts/api-web.ts` + `apps/admin-web/mock/` | 登录/刷新/登出/`me`/菜单/字典/审计/通用 CRUD 的请求响应结构 + mock 数据 | L2 L4（共同遵守，L4 先建 mock） | **已冻结（M5，2026-10-13）** |
 | C-07 | 元信息接口 | `docs/contracts/introspector.ts` | 表/字段元信息结构（类型映射以数据字典 1.3 为准）、`SchemaIntrospector` 接口 | L1（实现） L5（消费） | **新建** |
 | C-08 | Job 契约 | `docs/contracts/queue.ts` | `name/payload/options(attempts, backoff, delay, idempotencyKey)`、`@Cron`、`@JobHandler` 语义 | L3（实现） L4 | **新建** |
 
@@ -147,7 +147,7 @@ M1 骨架已落地，无需重做：
 - **不做**：orm 元信息来源（消费 C-07）、前端页面实现（生成模板，范例由 L4 提供）。
 - **任务**：`T-M1-07`（CLI 收尾 + templates 补全）→ `T-M6-01`（元信息解析 + 类型映射，**用 fixture 驱动，不等 L1 真实实现**）→ `T-M6-05`（dry-run/diff/覆盖策略，**尽早做，是安全底线**）→ `T-M6-02`（后端模板）→ `T-M6-04`（权限点与菜单 seed）→ `T-M6-03`（前端页面模板，消费 L4 的 `<CrudTable>`）→ `T-M6-06`（模板定制与文档）。
 - **自测**：`TC-GEN-001~007`；`fw gen crud order --dry` 必须可离线运行（fixture 模式）。
-- **完成判定**：生成物 `*.base.ts` 与业务类分离；`--force` 才覆盖；生成代码通过 lint + 文件头校验。
+- **完成判定**：生成物零手改即通过后端 `tsc` / 前端 `vue-tsc`；默认不覆盖已存在文件（`--force` 才覆盖，产物头标 `@generated`）；生成代码通过文件头校验；模板可项目级同名覆盖。（**已定 2026-10-13**：放弃 `*.base.ts` 分层——改为「不覆盖 + 头标 + 业务走继承/钩子」，机制更简单且不额外引入文件层，见 PRD-006 §9。）
 
 ### L6 质量与交付线（横切）
 
@@ -287,3 +287,4 @@ git worktree add ../TY-wt/l5-cli   -b lane/l5-cli
 | 日期 | 作者 | 摘要 |
 |---|---|---|
 | 2026-10-12 | donttemo | 初版：7 条工作线划分、8 份契约、目录所有权矩阵、W0–W10 并行时间轴、两种人力映射 |
+| 2026-10-13 | donttemo | L5 完成判定更新：放弃 `*.base.ts` 分层，改为「默认不覆盖 + `@generated` 头标 + 业务走继承/钩子」；M6 已交付（`@fw/cli` 单测 116 / 覆盖率 94.69%） |

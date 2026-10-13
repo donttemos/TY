@@ -136,8 +136,6 @@ async function handleDeleteCategory(category: DictCategory): Promise<void> {
 }
 
 /** ---------- 字典项 ---------- */
-const crudRef = ref<InstanceType<typeof CrudTable>>();
-
 /** 固定查询条件：当前分类（不在查询区展示） */
 const itemFilters = computed(() => ({ category_id: activeCategory.value }));
 

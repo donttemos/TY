@@ -12,7 +12,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormItemRule } from 'element-plus';
 import DictSelect from '@/components/DictSelect/index.vue';
-import type { FormField, FormModel } from './types';
+import type { FormField, FormModel } from '@/components/CrudTable/types';
 
 const props = defineProps<{
   /** 是否打开 */
@@ -143,7 +143,7 @@ defineExpose({ applyServerErrors });
             <!-- 字典下拉 -->
             <dict-select
               v-else-if="field.type === 'dict-select'"
-              v-model="model[field.prop] as string | number | null"
+              v-model="model[field.prop]"
               :dict-code="field.dictCode ?? ''"
             />
             <!-- 单选组 -->

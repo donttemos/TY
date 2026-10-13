@@ -16,6 +16,7 @@ import type {
   MockDictCategory,
   MockDictItem,
   MockMenu,
+  MockMenuTree,
   MockOrder,
   MockPermission,
   MockRole,
@@ -191,19 +192,20 @@ function send<T>(res: ServerResponse, code: number, message: string, data: T, tr
 }
 
 /** 菜单树（嵌套结构，按 sort 排序） */
-function menuTree(database: MockDb, filter?: (menu: MockMenu) => boolean): MockMenu[] {
+function menuTree(database: MockDb, filter?: (menu: MockMenu) => boolean): MockMenuTree[] {
   const nodes = database.menus.filter((m) => filter === undefined || filter(m));
-  const byId = new Map(nodes.map((m) => [m.id, { ...m, children: [] as MockMenu[] }]));
-  const roots: MockMenu[] = [];
+  const byId = new Map<string, MockMenuTree>();
+  for (const menu of nodes) byId.set(menu.id, { ...menu, children: [] });
+  const roots: MockMenuTree[] = [];
   for (const node of byId.values()) {
     const parent = byId.get(node.parentId);
     if (parent && parent !== node) {
-      (parent.children as MockMenu[]).push(node);
+      parent.children.push(node);
     } else {
       roots.push(node);
     }
   }
-  const sortRec = (list: MockMenu[]): void => {
+  const sortRec = (list: MockMenuTree[]): void => {
     list.sort((a, b) => a.sort - b.sort);
     for (const item of list) sortRec(item.children);
   };
@@ -211,11 +213,9 @@ function menuTree(database: MockDb, filter?: (menu: MockMenu) => boolean): MockM
   return roots;
 }
 
-/** 去掉 children 的扁平菜单（管理页表格用） */
-function flatMenus(database: MockDb): Omit<MockMenu, 'children'>[] {
-  return database.menus
-    .map(({ children: _children, ...rest }) => rest)
-    .sort((a, b) => a.sort - b.sort);
+/** 扁平菜单（管理页表格用；mock 菜单本身即扁平存储，按 sort 排序输出） */
+function flatMenus(database: MockDb): MockMenu[] {
+  return [...database.menus].sort((a, b) => a.sort - b.sort);
 }
 
 /** 登录：账号密码 → 双 token + 用户（失败计数与锁定略，mock 以 3001 提示） */
@@ -1170,8 +1170,7 @@ function stripRole(role: MockRole): Omit<MockRole, 'permissionIds'> & { permissi
   return { ...rest, permissionCount: role.permissionIds.length };
 }
 
-/** 菜单输出（管理页表格不需要 children） */
-function stripMenu(menu: MockMenu): Omit<MockMenu, 'children'> {
-  const { children: _children, ...rest } = menu;
-  return rest;
+/** 菜单输出（扁平存储，无需裁剪 children；保留函数为输出口径统一） */
+function stripMenu(menu: MockMenu): MockMenu {
+  return { ...menu };
 }

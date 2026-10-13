@@ -64,12 +64,12 @@ web/src/directives/permission.ts  # v-permission 按钮级控制
 
 ## 7. 验收标准（AC）
 
-- [ ] 模板项目启动后可直接登录，未授权菜单不出现在侧边栏与路由中（直接输 URL 也被拦截）。
-- [ ] 角色勾选权限保存后，目标用户重新登录生效；按钮级权限同步隐藏/禁用。
-- [ ] 新增一个业务列表页，仅用 `<CrudTable>` + 一段配置即可完成，代码 ≤ 80 行。
-- [ ] token 过期时自动刷新并重试原请求，用户无感。
-- [ ] 审计日志页能按人查出一次操作的前后值。
-- [ ] 生产构建产物为静态文件，Nginx 托管后功能完整，无 Node 依赖。
+- [x] 模板项目启动后可直接登录，未授权菜单不出现在侧边栏与路由中（直接输 URL 也被拦截）。（登录页 + `/auth/menus` 下发菜单树二次过滤生成路由，静态路由仅登录/403/404/工作台/个人中心；守卫对已知系统路径无权限落 403，未知落 404；权限过滤有单测）
+- [x] 角色勾选权限保存后，目标用户重新登录生效；按钮级权限同步隐藏/禁用。（角色页权限树勾选 → `PUT /roles/:id/permissions`；权限码经 `/auth/me` 唯一权威来源，重登生效；`v-permission` + CrudTable 按 `user:create` 等码渲染按钮，冒烟验证 alice 越权 3002）
+- [x] 新增一个业务列表页，仅用 `<CrudTable>` + 一段配置即可完成，代码 ≤ 80 行。（演示页 `views/demo/orders/index.vue` 65 行：columns + searchForm + api + permission 四要素）
+- [x] token 过期时自动刷新并重试原请求，用户无感。（3001/3003 → 无感刷新，并发共用同一 Promise、刷新成功重放原请求；刷新失败清令牌跳登录；单测覆盖重放/跳登录/防递归/并发合并，TC-WEB-003）
+- [x] 审计日志页能按人查出一次操作的前后值。（审计页按用户/时间/模块查询，详情抽屉展示字段级 diff；mock 冒烟验证 `module=user` 可查且含前后值）
+- [x] 生产构建产物为静态文件，Nginx 托管后功能完整，无 Node 依赖。（`vite build` 产出纯静态 dist；mock 仅 dev/test 挂载、生产不引入；Nginx SPA 托管配置见部署手册 §3）
 
 ## 8. 依赖与风险
 
@@ -77,9 +77,9 @@ web/src/directives/permission.ts  # v-permission 按钮级控制
 - 风险：动态路由与静态路由混合导致权限绕过 → 所有业务路由统一由权限树生成，静态路由仅限 404/登录页。
 - 风险：Element Plus 全量引入导致体积膨胀 → 按需引入 + 构建体积门禁。
 
-## 9. 待定问题
+## 9. 待定问题（均已结论）
 
 | 问题 | 建议 | 负责人 | 结论时间 |
 |---|---|---|---|
-| 前端选 Vue3 还是 React？ | 默认 Vue3 + Element Plus，React 版本作为第二模板后续补 | 待定 | M5 开工前 |
-| token 存 localStorage 还是 Cookie？ | 跟随 AUTH_STRATEGY：jwt 用 httpOnly Cookie，apikey 用内存 | 待定 | M5 评审前 |
+| 前端选 Vue3 还是 React？ | 默认 Vue3 + Element Plus，React 版本作为第二模板后续补 | donttemo | **已定（M5，2026-10-13）：Vue3 + Vite + Element Plus** |
+| token 存 localStorage 还是 Cookie？ | 跟随 AUTH_STRATEGY：jwt 用 httpOnly Cookie，apikey 用内存 | donttemo | **已定（M5，2026-10-13）：access token 仅存内存（刷新即失效，由 refresh 无感恢复）、refresh token 按「记住我」存 local/sessionStorage；AUTH_STRATEGY=session 时本地不落令牌** |

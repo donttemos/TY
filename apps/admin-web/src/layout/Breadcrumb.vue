@@ -24,7 +24,8 @@ const crumbs = computed<Crumb[]>(() => {
   const matched = route.matched.filter((m) => m.meta?.title && !m.meta.hiddenInMenu);
   return matched.map((m: RouteLocationMatched, index: number) => ({
     title: String(m.meta.title),
-    path: index === matched.length - 1 ? null : m.redirectedFrom?.fullPath ?? m.path,
+    // 末级为当前页（不可点）；上级用路由记录路径（menu 目录均为静态段，可直接跳转）
+    path: index === matched.length - 1 ? null : m.path,
     clickable: index !== matched.length - 1,
   }));
 });
