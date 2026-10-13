@@ -200,7 +200,7 @@ gantt
 **In Progress**（M5 管理后台前端）
 
 > **v0.1.0 已于 2026-10-13 发布**（M1–M4 全部验收通过），验收记录见 [`docs/90-release-v0.1.0.md`](./90-release-v0.1.0.md)。
-> M5 现状：`apps/admin-web` 已有 api / store / router / directives / composables / utils / mock 等基础设施，但缺入口、页面与测试，**未验收、不计入 v0.1.0**。
+> M5 现状：`apps/admin-web` 已有 api / store / router / layout / views / components / mock 等实现，但**无任何测试**，**未验收、不计入 v0.1.0**。
 
 | 任务 | 里程碑 | 优先级 | 依赖 | 负责人 |
 |---|---|---|---|---|

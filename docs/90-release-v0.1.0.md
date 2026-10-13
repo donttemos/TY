@@ -19,7 +19,7 @@
 | `@fw/cli` | 0.1.0 | `fw new / dev / build / check / db:*` |
 | `apps/example-api` | 0.1.0 | M1–M4 验收载体（演示端点 + 端到端冒烟） |
 
-**明确排除**：`apps/admin-web`（M5 半成品：有 api/store/router/mock 基础设施，缺入口、页面与测试）。**不纳入 v0.1.0**，不参与本次门禁判定。
+**明确排除**：`apps/admin-web`（M5 进行中：`api` / `store` / `router` / `layout` / `views` / `components` / `mock` 已具备，但**无任何测试**、未经验收）。**不纳入 v0.1.0**，不参与本次门禁判定。
 
 ## 2. L2 里程碑门禁（M1–M4）
 
@@ -128,7 +128,8 @@
 | R-05 | dev 工具链 8 项高危：`vitest`(2→3)、`tinypool`(1→2)、`happy-dom`(15→20)、`vite`(5→6)、`braces`（registry 最新即 3.0.3，补丁未发布） | P2 | donttemo | M5 开工时随 admin-web 依赖整理一并升级 |
 | R-06 | 生产依赖 3 项 moderate：`@nestjs/core <=11.1.17` 与 `file-type`，均受 NestJS 10 约束，需升级 NestJS 11 | P1 | donttemo | M6（NestJS 11 升级专项） |
 | R-07 | 真实 Redis / Redis Cluster 未实跑（`redis-cluster` 由 fake 客户端验证命令序列） | P1 | donttemo | M8 演练时 |
-| R-08 | `apps/admin-web` 为 M5 半成品，本机 `node_modules` 未装全（`@vue/language-core` 缺失）导致其 `lint`/`build` 报 `MODULE_NOT_FOUND`；CI 干净环境不受影响 | P2 | donttemo | M5 开工时 |
+| R-08 | `apps/admin-web`（M5 进行中，**无任何测试**）本机 `node_modules` 未装全（`@vue/language-core` 缺失），导致其 `lint`/`build` 报 `MODULE_NOT_FOUND`；CI 干净环境不受影响。其 `test` 脚本已加 `--passWithNoTests`，避免拖红全量门禁 | P2 | donttemo | M5 开工时 |
+| R-09 | 80 个 `vitest.config.ts.timestamp-*.mjs` 临时文件曾随首次提交进入仓库，已在第二个提交中移除并补充 `.gitignore` 规则 | P2 | donttemo | 已闭环（提交 `5bfcd1c`） |
 
 ## 7. 判定
 
