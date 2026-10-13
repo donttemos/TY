@@ -61,7 +61,10 @@ describe('QueueAdminController', () => {
     expect(admin.handlers()).toEqual({ names: ['demo'] });
     const stats = await admin.stats();
     expect(stats.driver).toBe('memory');
-    expect(stats.queues).toEqual([]);
+    // 注册即告知驱动默认队列（TC-JOB-008：保证新消费进程启动期就有消费器与失速检查器）
+    expect(stats.queues).toEqual([
+      { name: 'default', waiting: 0, active: 0, completed: 0, deadLetter: 0, backlog: 0, concurrency: 10, rateLimit: 0 },
+    ]);
     const snapshot = admin.metrics();
     expect(snapshot.driver).toBe('memory');
     expect(snapshot.dispatched).toBe(0);

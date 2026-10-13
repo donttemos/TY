@@ -63,6 +63,9 @@ export class BullmqQueueDriver implements QueueDriverPort {
 
   private readonly workers = new Map<string, BullWorkerLike>();
 
+  /** 进行中的消费器创建（并发防重） */
+  private readonly creating = new Map<string, Promise<void>>();
+
   /** 已知队列名（含尚未建立连接的） */
   private readonly known = new Set<string>();
 
@@ -302,13 +305,24 @@ export class BullmqQueueDriver implements QueueDriverPort {
     const queue = new mod.Queue(name, { connection: this.connection, prefix: this.options.prefix });
     this.queues.set(name, queue);
     this.known.add(name);
-    if (this.started) await this.ensureWorker(name);
+    // 注意：这里不能回调 ensureWorker——createWorker → getQueue → ensureWorker 会 await 到
+    // 自己那个尚未完成的创建 Promise，造成启动期死锁（TC-JOB-008 排障记录）。
+    // 消费器的创建统一由 ensureQueue / start() 负责。
     return queue;
   }
 
-  /** 取/建消费器实例 */
-  private async ensureWorker(name: string): Promise<void> {
-    if (this.workers.has(name)) return;
+  /** 取/建消费器实例（并发安全：创建中先登记 Promise，避免同队列重复建） */
+  private ensureWorker(name: string): Promise<void> {
+    if (this.workers.has(name)) return Promise.resolve();
+    const pending = this.creating.get(name);
+    if (pending) return pending;
+    const task = this.createWorker(name).finally(() => this.creating.delete(name));
+    this.creating.set(name, task);
+    return task;
+  }
+
+  /** 实际创建消费器（仅由 ensureWorker 调用） */
+  private async createWorker(name: string): Promise<void> {
     const mod = await this.ensureReady();
     await this.getQueue(name);
     const runner = this.runner;

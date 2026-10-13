@@ -34,6 +34,9 @@ import type {
 
 const logger = Logger.for('queue');
 
+/** 默认队列名（未显式指定 options.queue 时使用） */
+export const DEFAULT_QUEUE_NAME = 'default';
+
 /** 幂等窗口默认值（秒） */
 const DEFAULT_IDEMPOTENCY_TTL_SECONDS = 3600;
 
@@ -113,6 +116,9 @@ export class QueueService implements JobRunner {
       logger.warn('任务处理器被覆盖注册', { name });
     }
     this.handlers.set(name, { fn: handler as JobHandlerFn<unknown>, idempotent });
+    // 启动期即告知驱动默认队列：否则新消费进程在首次 dispatch 前不建消费器，
+    // 失速检测器不存在，被强杀进程遗留的在途任务永远无人恢复（TC-JOB-008）
+    this.driver.ensureQueue(DEFAULT_QUEUE_NAME);
     logger.debug('任务处理器已注册', { name, idempotent: idempotent !== undefined });
   }
 
@@ -360,7 +366,7 @@ export class QueueService implements JobRunner {
     const idempotencyKey = options.idempotencyKey ?? this.deriveIdempotencyKey(name, payload, entry);
     return {
       id: `job-${this.nextId()}`,
-      queue: options.queue ?? 'default',
+      queue: options.queue ?? DEFAULT_QUEUE_NAME,
       name,
       payload,
       attempts,

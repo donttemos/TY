@@ -129,7 +129,7 @@ const MENU_TREE: MenuSeed[] = [
   },
 ];
 
-/** 清场顺序：外键依赖倒序（关联表 → 主表 → 演示表） */
+/** 清场顺序：外键依赖倒序（关联表 → 主表 → 演示表 → 租户） */
 async function truncate(): Promise<void> {
   await prisma.auditLog.deleteMany();
   await prisma.refreshToken.deleteMany();
@@ -140,6 +140,24 @@ async function truncate(): Promise<void> {
   await prisma.role.deleteMany();
   await prisma.user.deleteMany();
   await prisma.demoItem.deleteMany();
+  await prisma.tenant.deleteMany();
+}
+
+/**
+ * 写入租户基线（M8，PRD-008 FR-01）：
+ * - legacy（id '0'）：存量单租户数据的归属租户，种子账号默认 tenantId=0 全部落在此租户；
+ * - acme（id '1'）：演示「子域名解析」与跨租户越权用例的第二个租户；
+ * - off（id '2'）：停用租户，验证 fail-closed（403）。
+ */
+async function seedTenants(): Promise<void> {
+  const rows = [
+    { id: '0', code: 'legacy', name: '存量单租户', isolation: 'shared', status: 1 },
+    { id: '1', code: 'acme', name: 'ACME 公司', isolation: 'shared', status: 1 },
+    { id: '2', code: 'off', name: '已停用租户', isolation: 'shared', status: 0 },
+  ];
+  for (const row of rows) {
+    await prisma.tenant.create({ data: row });
+  }
 }
 
 /** 写入权限点，返回 code → id 映射 */
@@ -179,6 +197,9 @@ async function seedMenus(parentId: string, items: MenuSeed[], counter: { count: 
 
 async function main(): Promise<void> {
   await truncate();
+
+  // 0) M8 租户基线（先建租户，账号 tenantId 依赖其 ID 语义）
+  await seedTenants();
 
   // 1) M2 演示条目
   for (const item of SEED_ITEMS) {
@@ -238,10 +259,24 @@ async function main(): Promise<void> {
       status: 1,
     },
   });
+  // M8：acme 租户管理员（tenantId=1，用于子域名解析与跨租户越权用例）
+  const acmePassword = 'Acme@123456';
+  await prisma.user.create({
+    data: {
+      username: 'acmeadmin',
+      tenantId: 1n,
+      passwordHash: await passwords.hash(acmePassword),
+      nickname: 'ACME 管理员',
+      email: 'acmeadmin@acme.example.com',
+      status: 1,
+    },
+  });
 
-  // 8) 用户-角色
+  // 8) 用户-角色（acmeadmin 与 alice 同权，角色归属第 5 步的 userRole）
   await prisma.userRole.create({ data: { userId: admin.id, roleId: adminRole.id } });
   await prisma.userRole.create({ data: { userId: alice.id, roleId: userRole.id } });
+  const acmeUser = await prisma.user.findUnique({ where: { username: 'acmeadmin' } });
+  if (acmeUser) await prisma.userRole.create({ data: { userId: acmeUser.id, roleId: userRole.id } });
 
   console.log(
     [
@@ -250,7 +285,8 @@ async function main(): Promise<void> {
       `权限点 ${permIdByCode.size + GENERATED_PERMISSION_CODES.length} 个（框架/业务 ${permIdByCode.size} + 生成器 ${GENERATED_PERMISSION_CODES.length}）`,
       `角色 2 个（${ROLE.ADMIN} 全量 / ${ROLE.USER} ${USER_ROLE_CODES.length} 项）`,
       `菜单 ${menuCounter.count} 项`,
-      `账号 2 个（admin / ${adminPassword}，alice / ${userPassword}）`,
+      `账号 2 个（admin / ${adminPassword}，alice / ${userPassword}）+ acmeadmin / ${acmePassword}（tenantId=1）`,
+      `租户 3 个（legacy=0 / acme=1 / off=2 停用）`,
     ].join(' '),
   );
 }

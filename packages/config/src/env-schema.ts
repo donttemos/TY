@@ -6,6 +6,8 @@
  * @modified 2026-10-13 donttemo AUTH_ALLOW_REGISTER 默认改 false（与部署手册/「默认安全」一致）
  * @modified 2026-10-13 donttemo M4 新增 9 个 CACHE_* 键（前缀/TTL/容量/降级/空值/抖动/锁/慢操作/大key）
  * @modified 2026-10-13 donttemo M7 新增 10 个 MQ_* 键（连接/前缀/并发/尝试/退避/超时/cron/限速/死信上限/停机等待）
+ * @modified 2026-10-13 donttemo M8 新增 6 个 TENANT_* 键（总开关/解析顺序/请求头名/基准域名/JWT claim/缓存TTL）
+ * @modified 2026-10-13 donttemo 新增 MQ_STALLED_MS（bullmq 失速检测间隔，TC-JOB-008 演练可调）
  * @module config
  * @since v0.1.0
  */
@@ -25,6 +27,8 @@ export const AUTH_STRATEGY_VALUES = ['jwt', 'session', 'oauth2', 'apikey'] as co
 export const AUTH_PASSWORD_POLICY_VALUES = ['low', 'medium', 'high'] as const;
 /** 队列驱动可选值（M7 起生效；`kafka` 仅预留驱动端口，M8 落地，故暂不入枚举——非法取值启动即失败） */
 export const MQ_DRIVER_VALUES = ['memory', 'bullmq'] as const;
+/** 租户识别来源可选值（M8 起生效，PRD-008 FR-01 三级回退） */
+export const TENANT_SOURCE_VALUES = ['subdomain', 'header', 'jwt'] as const;
 
 /** 空字符串视为未设置（.env 里 `DB_URL=` 留空等价于注释掉） */
 const emptyToUndefined = (value: unknown): unknown =>
@@ -132,10 +136,24 @@ export const envSchema = z.object({
   MQ_DEAD_LETTER_MAX: z.coerce.number().int().min(1).max(1000000).default(1000).describe('死信保留上限'),
   /** 优雅停机等待在途任务的超时（秒）；超时未完成的任务重新入队 */
   MQ_SHUTDOWN_TIMEOUT: z.coerce.number().int().min(1).max(300).default(30).describe('队列优雅停机等待超时（秒）'),
+  /** bullmq 失速检测间隔（毫秒）：消费进程被强杀后，在途任务最长等这么久被搬回等待区重试；0 = 用 bullmq 默认 30s */
+  MQ_STALLED_MS: z.coerce.number().int().min(0).max(600000).default(30000).describe('bullmq 失速检测间隔（毫秒）'),
   /** 优雅停机等待在途请求的超时（秒） */
   SHUTDOWN_TIMEOUT: z.coerce.number().int().min(1).max(300).default(10).describe('优雅停机超时（秒）'),
   /** 慢查询告警阈值（毫秒，M2 起由 @fw/db 消费） */
   DB_SLOW_MS: z.coerce.number().int().min(10).max(60000).default(500).describe('慢查询告警阈值（毫秒）'),
+  /** 多租户总开关（M8）：false 时全部接口按单租户运行（无租户上下文校验） */
+  TENANT_ENABLED: boolString(false).describe('是否启用多租户（TENANT_ENABLED）'),
+  /** 租户解析回退顺序（M8，PRD-008 §9 定稿）：subdomain/header/jwt 的子序列，逗号分隔；未列出的来源即关闭 */
+  TENANT_ORDER: z.string().default('subdomain,header,jwt').describe('租户解析回退顺序（TENANT_ORDER）'),
+  /** 租户标识请求头名称（M8）：小写；默认 x-tenant-id */
+  TENANT_HEADER_NAME: z.string().regex(/^[a-z0-9-]+$/).default('x-tenant-id').describe('租户标识请求头名（TENANT_HEADER_NAME）'),
+  /** 子域名解析基准域名（M8）：如 example.com；未配置时 subdomain 来源按设计关闭 */
+  TENANT_BASE_DOMAIN: optionalString().describe('子域名解析基准域名（TENANT_BASE_DOMAIN）'),
+  /** JWT claim 字段名（M8）：从 access token 载荷提取租户归属，默认 tenantId */
+  TENANT_JWT_CLAIM: z.string().min(1).default('tenantId').describe('JWT 租户 claim 字段名（TENANT_JWT_CLAIM）'),
+  /** 租户信息缓存 TTL（秒，M8）：tenants 表查询结果的本地缓存时长 */
+  TENANT_CACHE_TTL: z.coerce.number().int().min(1).max(3600).default(60).describe('租户信息缓存 TTL（秒）'),
 });
 
 /** 校验后的环境变量类型 */
@@ -150,4 +168,5 @@ export const ENUM_OPTIONS: Record<string, readonly string[]> = {
   AUTH_STRATEGY: AUTH_STRATEGY_VALUES,
   AUTH_PASSWORD_POLICY: AUTH_PASSWORD_POLICY_VALUES,
   MQ_DRIVER: MQ_DRIVER_VALUES,
+  TENANT_ORDER: TENANT_SOURCE_VALUES,
 };

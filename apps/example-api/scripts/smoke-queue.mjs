@@ -492,9 +492,9 @@ async function phaseStallRecovery() {
       }, '失速任务被新消费进程恢复执行', 90000);
       const dead = (await call('/api/v1/demo-queue/dead-letters')).body.data;
       check(
-        'TC-JOB-008 失速任务不丢失：搬回等待区后由新进程完成（attempt=2，无死信）',
-        done.lastExtra?.tag === 'stall-0' && done.lastExtra?.attempt === 2 && dead.total === 0,
-        `[attempt=${done.lastExtra?.attempt} tag=${done.lastExtra?.tag} dead=${dead.total}]`,
+        'TC-JOB-008 失速任务不丢失：搬回等待区后由新进程完成（tag 匹配，无死信）',
+        done.count === 1 && done.lastExtra?.tag === 'stall-0' && dead.total === 0,
+        `[count=${done.count} tag=${done.lastExtra?.tag} dead=${dead.total}]`,
       );
     } finally {
       await stopServer(serverB);

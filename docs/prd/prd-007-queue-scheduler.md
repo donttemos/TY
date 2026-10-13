@@ -76,13 +76,13 @@ async dailySettle() { ... }
 
 ## 7. 验收标准（AC）
 
-> 七条中六条已验收，一条重启恢复演练待补（2026-10-13）。现有证据：`@fw/queue` 单测 135/135（覆盖率 93.1%/86.6%，门禁 85/85/65/85）、`apps/example-api/scripts/smoke-queue.mjs` 27/27（含真实 Redis 的 bullmq 阶段）、`apps/admin-web` mock 冒烟 57/57；这些结果不包含真实进程重启恢复演练。
+> 八条中八条已验收（2026-10-13）。现有证据：`@fw/queue` 单测 135/135（覆盖率 93.1%/86.6%，门禁 85/85/65/85）、`apps/example-api/scripts/smoke-queue.mjs` **31/31**（含真实 Redis 的 bullmq 阶段与失速恢复演练阶段 F）、`apps/admin-web` mock 冒烟 57/57。
 
 - [x] 同一份 Job 代码在 memory 与 bullmq 两种驱动下行为一致（切换仅改配置）。—— AC-001：同一套退避序列（bullmq 经 `settings.backoffStrategy` 复用任务内序列）；冒烟阶段 A / D 用同一组 demo 任务在两驱动下断言一致行为，切换仅改 `MQ_DRIVER`。
 - [x] 集群 3 实例下，定时任务只在其中 1 个实例执行（分布式锁生效）。—— TC-JOB-002：单测用三个调度器共享同一守卫存储断言 `runs=1 / lockedOut=2`；锁复用 `@fw/cache` CacheService（redis 驱动天然分布式），HTTP 层无法在同一进程内制造多副本，故以单测承载。
 - [x] 人为让任务抛异常，观察到按配置序列退避重试后进 dead-letter，且可手动重放成功。—— TC-JOB-003/004/005：默认最多重试 3 次（1s/5s/30s）；memory 与 bullmq 双驱动单测 + 冒烟（失败 2 次退避后成功、`PermanentJobError` 不重试直接死信、重放接口返回成功且重新执行）。
 - [x] 同一 `idempotencyKey` 重复 dispatch，实际只执行一次。—— TC-JOB-006：单测（显式键 / 载荷哈希键 / 失败不置位）+ 冒烟（两次派发 count=1、`idempotentSkipped≥1`、不同键互不影响）。
-- [ ] 使用 bullmq 时，服务重启后未完成的任务可恢复；memory 不承诺重启不丢。—— TC-JOB-008：bullmq 任务由 Redis 持有并依赖失速检测（stalled interval）恢复；memory 驱动 `close()` 返回在途数并放回进程内队列，但退出后不持久化。现有证据为停机行为单测和真实 Redis 冒烟，仍须在真实 Redis 上执行杀进程、重启、确认任务恢复的演练。
+- [x] 使用 bullmq 时，服务重启后未完成的任务可恢复；memory 不承诺重启不丢。—— TC-JOB-008：真实 Redis 演练通过（smoke-queue 阶段 F，2026-10-13）：在途任务执行中 SIGKILL 消费进程，重启后由失速检测搬回等待区并完成（恢复窗口 ≈ lockDuration 30s + MQ_STALLED_MS 检测间隔），任务不丢失、无死信。演练同时暴露并修复两个框架缺陷：① `register()` 未把默认队列告知驱动，新消费进程在首次 dispatch 前不建消费器、失速检查器不存在（在途任务永远无人恢复）；② `getQueue → ensureWorker` 自递归死锁与同队列重复建 3 个消费器的并发竞态。
 - [x] 队列积压时按配置限速，下游不被打垮。—— TC-JOB-007：令牌桶限速冒烟（`MQ_RATE_LIMIT=5` 下 10 任务耗时 1045ms ≥ 800ms）+ 并发上限冒烟（`MQ_CONCURRENCY=2` 下峰值 ≤ 2）；双驱动单测覆盖。
 - [x] 后台队列页可查看积压、暂停队列、重放失败任务。—— T-M7-06：`/system/queue` 页（积压总览/暂停恢复/死信重放与清理/cron 手动触发），mock 冒烟 17 项断言含 `system:queue:*` 双向越权拦截；生产端点 `/api/v1/admin/queue/*` 受 RBAC 保护（冒烟断言未携带凭证返回 401）。
 

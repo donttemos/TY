@@ -75,6 +75,12 @@
 | | `MQ_DEAD_LETTER_MAX` | 否 | 1000 | 死信保留上限 |
 | | `MQ_SHUTDOWN_TIMEOUT` | 否 | 30 | 等待在途任务的停机超时，单位秒 |
 | | `MQ_STALLED_MS` | 否 | 30000 | bullmq 失速检测间隔，单位毫秒；0 表示用 bullmq 默认值。消费进程被强杀后，在途任务最长等这么久被搬回等待区重试 |
+| 多租户 | `TENANT_ENABLED` | 否 | false | 多租户总开关；false 时全部接口按单租户运行（解析零开销短路），与 M7 行为一致 |
+| | `TENANT_ORDER` | 否 | `subdomain,header,jwt` | 租户解析回退顺序（`subdomain`/`header`/`jwt` 的子序列，逗号分隔）；未列出的来源即关闭，非法取值启动即失败 |
+| | `TENANT_HEADER_NAME` | 否 | `x-tenant-id` | 请求头来源的头部名（小写） |
+| | `TENANT_BASE_DOMAIN` | 否 | 空 | 子域名解析基准域名（如 `example.com`）；未配置时 subdomain 来源关闭 |
+| | `TENANT_JWT_CLAIM` | 否 | `tenantId` | JWT claim 来源的字段名（取 access token 载荷） |
+| | `TENANT_CACHE_TTL` | 否 | 60 | `tenants` 表查询结果的内存缓存 TTL，单位秒；租户停用/换库等管理操作最多延迟一个 TTL 生效 |
 | 日志 | `LOG_LEVEL` | 否 | info | 级别 |
 | | `LOG_FORMAT` | 否 | json | 容器环境固定 json |
 | 追踪 | `OTEL_ENABLED` | 否 | false | M8 起支持 |

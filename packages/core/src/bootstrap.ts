@@ -4,6 +4,7 @@
  * @author donttemo
  * @created 2026-10-09
  * @modified 2026-10-13 donttemo NestFactory.create 传 abortOnError:false，避免装配失败被静默终止（无日志）
+ * @modified 2026-10-13 donttemo M8：新增 beforeListen 钩子——多租户等 express 级中间件在 listen 前注册（顺序：trace → beforeListen 注册的中间件 → 路由）
  * @module core
  * @since v0.1.0
  */
@@ -26,6 +27,11 @@ export interface BootstrapOptions {
   readinessProbes?: Array<{ name: string; check: () => Promise<boolean> }>;
   /** 覆盖监听端口（默认取 APP_PORT） */
   port?: number;
+  /**
+   * 监听前的装配钩子（M8）：用于注册 express 级中间件（如 @fw/tenant 的租户解析）。
+   * 在 trace 中间件之后、路由与 listen 之前执行；容器已完成初始化，可 app.get() 取服务实例。
+   */
+  beforeListen?: (app: INestApplication) => void | Promise<void>;
 }
 
 /** bootstrap 返回值 */
@@ -70,6 +76,7 @@ export async function bootstrap(rootModule: Type, options: BootstrapOptions = {}
   // 我们的处理器会通过 app.close() 触发 onModuleDestroy / beforeApplicationShutdown 钩子
 
   const port = options.port ?? env.APP_PORT;
+  await options.beforeListen?.(app);
   const server = (await app.listen(port)) as Server;
   setupGracefulShutdown({ app, server, timeoutSeconds: env.SHUTDOWN_TIMEOUT, logger });
 

@@ -246,9 +246,9 @@ gantt
 - [x] T-M7-05 幂等、限速与优雅停机（`idempotencyKey` + `@Idempotent` 载荷哈希推导，成功才置位；令牌桶限速 + 并发上限；停机先停调度再等在途，超时 memory 重新入队 / bullmq 交失速检测恢复；`/metrics/queue` Prometheus 文本 + `/ready` queue 探针）
 - [x] T-M7-06 队列管理页与指标（后端 `/api/v1/admin/queue/*` 11 端点 + `system:queue:list|manage` 权限；admin-web `/system/queue` 页：积压总览卡 / 队列明细 / 死信重放清理 / cron 快照与手动触发；mock `/admin/queue/*` 端点与 C-06 §3.8 契约；CI 新增 M7 冒烟步骤）
 
-**Backlog**：M8 全部任务；M3 遗留项④（refresh 过期记录定时清理——M7 已提供 cron 能力，具体清理任务移入 M8）。
+**Backlog**：M8 全部任务；~~M3 遗留项④（refresh 过期记录定时清理）~~——**已完成（2026-10-13）**：example-api `auth.refresh-cleanup` 定时任务（`@Cron('0 3 * * *')` 加分布式锁，过期 30 天清理，`/api/v1/auth-maintenance/refresh-cleanup` 快照端点），冒烟阶段 A 覆盖注册与手动触发。
 
-**M7 验收待补（TC-JOB-008）**：在真实 Redis 上派发在途任务，终止消费进程并重启，观察 BullMQ 失速恢复后任务完成且没有丢失；memory 驱动不承诺跨进程持久化。
+**M7 验收待补（TC-JOB-008）——已完成（2026-10-13）**：真实 Redis 失速恢复演练通过并固化进 `smoke-queue.mjs` 阶段 F（31/31），恢复窗口 ≈ lockDuration 30s + `MQ_STALLED_MS` 检测间隔；演练暴露并修复「register 未建消费器」「ensureWorker 自递归死锁与重复建」两个框架缺陷，记录见 `docs/94-queue-stall-drill.md`。memory 驱动不承诺跨进程持久化。
 
 > **v0.1.0 遗留项（不阻塞发布）**：① ~~`@nestjs/core <=11.1.17` 与 `file-type` 的 3 项 moderate 依赖漏洞需随 NestJS 10 → 11 升级解决~~ → **✅ 已闭环（2026-10-13）**：全仓升 NestJS **11.2.7**（Express 5.2.1 / `@types/express` 5 / file-type 21.3.4 / multer 2.4.0），`pnpm audit --prod` **零漏洞**；② ~~dev 工具链大版本升级（vitest 2→3、tinypool 1→2、happy-dom 15→20、vite 5→6）~~ → **✅ 已闭环（2026-10-13）**：vitest **4.1.11** / vite **8.3.4**（rolldown + oxc）/ happy-dom **21.0.1** / plugin-vue 6 / vue-tsc 3 / unplugin-vue-components 32，`tinypool` 随 vitest 4 整条链路消失；**全仓 `pnpm audit`（含 dev）零漏洞**，全套门禁复跑通过（框架包 366/366、example-api 50/50、admin-web 29+40）；③ ~~`braces` 暂无可用补丁版本~~ → **✅ 已消除（2026-10-13）**：`braces` 随 vite 8 不再进入依赖树，无需补丁。
 

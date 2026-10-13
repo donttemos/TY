@@ -417,6 +417,8 @@ export class PrismaAuthStore implements AuthStore {
   private toAuthUser(row: UserRow): AuthUser {
     return {
       id: row.id,
+      // M8：bigint → 十进制字符串，与 @fw/logger 请求上下文 tenantId 同构（守卫直接比较）
+      tenantId: row.tenantId?.toString(),
       username: row.username,
       phone: row.phone,
       email: row.email,

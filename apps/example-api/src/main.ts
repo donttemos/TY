@@ -1,13 +1,16 @@
 /*
  * @file 应用启动入口
  * @description 动态 import 根模块：让 FwCoreModule.forRoot() 的配置校验错误能被本文件的 catch 捕获并打印人话提示，而不是堆栈崩溃。
+ *   M8：多租户中间件经 bootstrap beforeListen 钩子以 app.use 注册（顺序 trace → tenant → 路由）。
  * @author donttemo
  * @created 2026-10-09
+ * @modified 2026-10-13 donttemo M8 接入 TenantModule（beforeListen 注册租户中间件）
  * @module example-api
  * @since v0.1.0
  */
 import { writeFileSync, unlinkSync } from 'node:fs';
 import { bootstrap } from '@fw/core';
+import { TENANT_MIDDLEWARE } from '@fw/tenant';
 
 /** 启动失败时的退出码 */
 const EXIT_FAILURE = 1;
@@ -17,7 +20,12 @@ const PID_FILE = process.env.FW_PID_FILE ?? '';
 
 async function main(): Promise<void> {
   const { AppModule } = await import('./app.module.js');
-  const { server } = await bootstrap(AppModule);
+  const { server } = await bootstrap(AppModule, {
+    // 多租户（M8）：TENANT_ENABLED=false 时中间件零开销短路；启用时未携带有效租户标识的请求直接 403
+    beforeListen: (app) => {
+      app.use(app.get(TENANT_MIDDLEWARE));
+    },
+  });
   // 暴露 PID 供外部信号脚本（默认关闭，避免污染生产部署）
   if (PID_FILE) {
     writeFileSync(PID_FILE, String(process.pid));
