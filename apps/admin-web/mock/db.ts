@@ -6,6 +6,8 @@
  *   令牌为 mock JWT（base64 三段式，非签名校验），仅用于前端链路验证；refresh 轮换语义与后端一致（复用即失效）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-13 donttemo M7：新增队列管理页数据源（system:queue:* 权限点、/system/queue 菜单、
+ *   队列统计 / 死信 / 定时任务快照的内存状态，与 @fw/queue 的 QueueStats / DeadLetterRecord / CronSnapshot 同形）
  * @module admin-web/mock
  */
 
@@ -123,6 +125,65 @@ export interface MockSession {
   current: boolean;
 }
 
+/** 队列统计明细（与 @fw/queue 的 QueueStatsItem 同形） */
+export interface MockQueueStatsItem {
+  name: string;
+  waiting: number;
+  active: number;
+  completed: number;
+  deadLetter: number;
+  backlog: number;
+  concurrency: number;
+  rateLimit: number;
+}
+
+/** 死信记录（与 @fw/queue 的 DeadLetterRecord 同形） */
+export interface MockQueueDeadLetter {
+  id: string;
+  name: string;
+  queue: string;
+  payload: unknown;
+  attemptsMade: number;
+  reason: string;
+  failedAt: string;
+  enqueuedAt: string;
+}
+
+/** 定时任务快照（与 @fw/queue 的 CronSnapshot 同形） */
+export interface MockQueueCron {
+  name: string;
+  expression: string;
+  lock: boolean;
+  nextRunAt: string | null;
+  runs: number;
+  lockedOut: number;
+  lastResult: 'ok' | 'error' | null;
+  lastRunAt: string | null;
+}
+
+/** 队列指标计数器 */
+export interface MockQueueCounters {
+  dispatched: number;
+  succeeded: number;
+  failed: number;
+  deadLettered: number;
+  idempotentSkipped: number;
+  timedOut: number;
+  cronTicked: number;
+  cronLockedOut: number;
+}
+
+/** 队列运行时状态（mock 内存态；运维动作直接改写本对象） */
+export interface MockQueueState {
+  driver: 'memory';
+  paused: boolean;
+  consuming: boolean;
+  counters: MockQueueCounters;
+  queues: MockQueueStatsItem[];
+  deadLetters: MockQueueDeadLetter[];
+  crons: MockQueueCron[];
+}
+
 /** mock JWT 载荷 */
 export interface MockTokenPayload {
   sub: string;
@@ -147,6 +208,7 @@ export interface MockDb {
   dictItems: MockDictItem[];
   auditLogs: MockAuditLog[];
   orders: MockOrder[];
+  queue: MockQueueState;
   sessions: MockSession[];
   /** refresh token 明文 → 会话 id（mock 专用；真实后端只存哈希） */
   refreshTokens: Record<string, string>;
@@ -182,6 +244,9 @@ const PERMISSIONS: MockPermission[] = [
   { id: 'p-audit-read', code: 'audit:read', name: '审计日志查询', type: 'api', module: 'audit' },
   { id: 'p-order-read', code: 'order:read', name: '订单查询', type: 'menu', module: 'order' },
   { id: 'p-order-refund', code: 'order:refund', name: '订单退款', type: 'button', module: 'order' },
+  // M7（PRD-007 FR-09）：队列管理页权限点，与 C-08 契约 QUEUE_PERMISSIONS 同源
+  { id: 'p-queue-list', code: 'system:queue:list', name: '队列状态查看', type: 'api', module: 'queue' },
+  { id: 'p-queue-manage', code: 'system:queue:manage', name: '队列运维操作', type: 'api', module: 'queue' },
 ];
 
 /** 普通用户角色默认权限（刻意不含 role:read / audit:read / user:assign-role，用于验证越权拦截） */
@@ -196,6 +261,7 @@ const MENUS: MockMenu[] = [
   { id: 'm-system-menus', parentId: 'm-system', name: '菜单管理', path: '/system/menus', component: 'system/menus', icon: 'menu', permissionCode: 'menu:read', visible: true, sort: 3 },
   { id: 'm-system-dict', parentId: 'm-system', name: '字典管理', path: '/system/dict', component: 'system/dict', icon: 'collection', permissionCode: 'dict:read', visible: true, sort: 4 },
   { id: 'm-system-audit', parentId: 'm-system', name: '审计日志', path: '/system/audit-logs', component: 'system/audit-logs', icon: 'file-text', permissionCode: 'audit:read', visible: true, sort: 5 },
+  { id: 'm-system-queue', parentId: 'm-system', name: '队列管理', path: '/system/queue', component: 'system/queue', icon: 'clock', permissionCode: 'system:queue:list', visible: true, sort: 6 },
   { id: 'm-order', parentId: '0', name: '订单中心', path: '/order', component: 'layout/blank', icon: 'shopping', permissionCode: 'order:read', visible: true, sort: 3 },
   { id: 'm-order-list', parentId: 'm-order', name: '订单列表', path: '/order/list', component: 'demo/orders', icon: 'list', permissionCode: 'order:read', visible: true, sort: 1 },
 ];
@@ -283,6 +349,61 @@ function seedAuditLogs(): MockAuditLog[] {
   return logs;
 }
 
+/**
+ * 队列运行时状态（演示用初始值；运维动作在 handlers 中直接改写）
+ * @returns 队列状态
+ */
+function seedQueue(): MockQueueState {
+  const base = Date.UTC(2026, 9, 13, 2, 0, 0);
+  return {
+    driver: 'memory',
+    paused: false,
+    consuming: true,
+    counters: { dispatched: 128, succeeded: 119, failed: 9, deadLettered: 3, idempotentSkipped: 4, timedOut: 1, cronTicked: 12, cronLockedOut: 0 },
+    queues: [
+      { name: 'default', waiting: 2, active: 1, completed: 96, deadLetter: 2, backlog: 3, concurrency: 10, rateLimit: 0 },
+      { name: 'exports', waiting: 0, active: 0, completed: 18, deadLetter: 1, backlog: 0, concurrency: 4, rateLimit: 5 },
+    ],
+    deadLetters: [
+      {
+        id: 'job-dl-0001',
+        name: 'demo.permanent',
+        queue: 'default',
+        payload: { reason: '参数非法' },
+        attemptsMade: 1,
+        reason: '参数非法：订单号格式不合法',
+        failedAt: new Date(base + 3_600_000).toISOString(),
+        enqueuedAt: new Date(base + 3_590_000).toISOString(),
+      },
+      {
+        id: 'job-dl-0002',
+        name: 'order.timeout',
+        queue: 'default',
+        payload: { orderId: 'o-0007' },
+        attemptsMade: 4,
+        reason: '下游超时：调用风控服务 3 次均失败',
+        failedAt: new Date(base + 7_200_000).toISOString(),
+        enqueuedAt: new Date(base + 7_190_000).toISOString(),
+      },
+      {
+        id: 'job-dl-0003',
+        name: 'report.export',
+        queue: 'exports',
+        payload: { month: '2026-09' },
+        attemptsMade: 4,
+        reason: '对象存储写入失败：AccessDenied',
+        failedAt: new Date(base + 10_800_000).toISOString(),
+        enqueuedAt: new Date(base + 10_790_000).toISOString(),
+      },
+    ],
+    crons: [
+      { name: 'demo.tick', expression: '*/5 * * * * *', lock: true, nextRunAt: new Date(base + 11_000_000).toISOString(), runs: 9, lockedOut: 0, lastResult: 'ok', lastRunAt: new Date(base + 10_995_000).toISOString() },
+      { name: 'demo.nightly', expression: '0 3 * * *', lock: true, nextRunAt: new Date(base + 14_400_000).toISOString(), runs: 1, lockedOut: 0, lastResult: 'ok', lastRunAt: new Date(base + 3_600_000).toISOString() },
+      { name: 'order.settle', expression: '0 2 * * *', lock: true, nextRunAt: new Date(base + 13_200_000).toISOString(), runs: 2, lockedOut: 0, lastResult: 'error', lastRunAt: new Date(base + 10_000_000).toISOString() },
+    ],
+  };
+}
+
 /** 构建内存数据库（幂等重置，供 mock server 复用） */
 export function createDb(): MockDb {
   return {
@@ -299,6 +420,7 @@ export function createDb(): MockDb {
     dictItems: DICT_ITEMS.map((d) => ({ ...d })),
     auditLogs: seedAuditLogs(),
     orders: seedOrders(),
+    queue: seedQueue(),
     sessions: [],
     refreshTokens: {},
     usedRefreshTokens: new Set<string>(),

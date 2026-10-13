@@ -1,6 +1,8 @@
 # PRD-007 · 队列与定时任务
 
-> 里程碑：M7 ｜ 状态：草案 ｜ 优先级：P2 ｜ 依赖：M1、M4 ｜ 负责人：待定 ｜ 更新：2026-10-09
+> 里程碑：M7 ｜ 状态：**已完成（2026-10-13，未发版）** ｜ 优先级：P2 ｜ 依赖：M1、M4 ｜ 负责人：donttemo ｜ 更新：2026-10-13
+>
+> 变更记录：2026-10-13 donttemo M7 全量交付并勾选全部 AC——新增实现记录（§10），Kafka 保持接口预留（M8 触发）。
 
 ## 1. 背景与目标
 
@@ -73,13 +75,15 @@ async dailySettle() { ... }
 
 ## 7. 验收标准（AC）
 
-- [ ] 同一份 Job 代码在 memory 与 bullmq 两种驱动下行为一致（切换仅改配置）。
-- [ ] 集群 3 实例下，定时任务只在其中 1 个实例执行（分布式锁生效）。
-- [ ] 人为让任务抛异常，观察到 3 次指数退避重试后进 dead-letter，且可手动重放成功。
-- [ ] 同一 `idempotencyKey` 重复 dispatch，实际只执行一次。
-- [ ] 服务重启后，未完成的任务被重新执行，无丢失。
-- [ ] 队列积压时按配置限速，下游不被打垮。
-- [ ] 后台队列页可查看积压、暂停队列、重放失败任务。
+> 全部勾选（2026-10-13）。证据：`@fw/queue` 单测 135/135（覆盖率 93.1%/86.6%，门禁 85/85/65/85）、`apps/example-api/scripts/smoke-queue.mjs` 27/27（含真实 Redis 的 bullmq 阶段）、`apps/admin-web` mock 冒烟 57/57。
+
+- [x] 同一份 Job 代码在 memory 与 bullmq 两种驱动下行为一致（切换仅改配置）。—— AC-001：同一套退避序列（bullmq 经 `settings.backoffStrategy` 复用任务内序列）；冒烟阶段 A / D 用同一组 demo 任务在两驱动下断言一致行为，切换仅改 `MQ_DRIVER`。
+- [x] 集群 3 实例下，定时任务只在其中 1 个实例执行（分布式锁生效）。—— TC-JOB-002：单测用三个调度器共享同一守卫存储断言 `runs=1 / lockedOut=2`；锁复用 `@fw/cache` CacheService（redis 驱动天然分布式），HTTP 层无法在同一进程内制造多副本，故以单测承载。
+- [x] 人为让任务抛异常，观察到 3 次指数退避重试后进 dead-letter，且可手动重放成功。—— TC-JOB-003/004/005：memory 与 bullmq 双驱动单测 + 冒烟（失败 2 次退避后成功、`PermanentJobError` 不重试直接死信、重放接口返回成功且重新执行）。
+- [x] 同一 `idempotencyKey` 重复 dispatch，实际只执行一次。—— TC-JOB-006：单测（显式键 / 载荷哈希键 / 失败不置位）+ 冒烟（两次派发 count=1、`idempotentSkipped≥1`、不同键互不影响）。
+- [x] 服务重启后，未完成的任务被重新执行，无丢失。—— bullmq 持久化 + memory 驱动 `close()` 返回在途数并重新入队（单测「shutdown 返回在途数」与「停机超时重新入队」断言）；任务级续跑依赖 bullmq 的失速检测（stalled interval）。
+- [x] 队列积压时按配置限速，下游不被打垮。—— TC-JOB-007：令牌桶限速冒烟（`MQ_RATE_LIMIT=5` 下 10 任务耗时 1045ms ≥ 800ms）+ 并发上限冒烟（`MQ_CONCURRENCY=2` 下峰值 ≤ 2）；双驱动单测覆盖。
+- [x] 后台队列页可查看积压、暂停队列、重放失败任务。—— T-M7-06：`/system/queue` 页（积压总览/暂停恢复/死信重放与清理/cron 手动触发），mock 冒烟 17 项断言含 `system:queue:*` 双向越权拦截；生产端点 `/api/v1/admin/queue/*` 受 RBAC 保护（冒烟断言未携带凭证返回 401）。
 
 ## 8. 依赖与风险
 
@@ -91,5 +95,11 @@ async dailySettle() { ... }
 
 | 问题 | 建议 | 负责人 | 结论时间 |
 |---|---|---|---|
-| Kafka 适配何时做？ | 接口预留，M8 或按项目需求触发 | 待定 | M8 评审时 |
-| 是否需要 DAG 工作流编排？ | 首版不做，用「任务链」（一个 Job dispatch 下一个）替代 | 待定 | M7 评审前 |
+| Kafka 适配何时做？ | 接口预留（`JobDriverName` 保留 `kafka` 字面量，`QueueModule` 工厂对非法值启动即报错），M8 或按项目需求触发 | donttemo | M8 评审时 |
+| 是否需要 DAG 工作流编排？ | 首版不做，用「任务链」（一个 Job dispatch 下一个）替代 | donttemo | M7 评审前（结论：不做） |
+
+## 10. 实现记录（2026-10-13）
+
+- 交付物：`packages/queue`（`@fw/queue`，单测 135 / 覆盖率 lines 94.96% / branches 86.57%）、`docs/contracts/queue.ts`（C-08）、example-api `demo-queue` 模块与 `scripts/smoke-queue.mjs`（27/27）、admin-web `/system/queue` 页与 mock `/queue/*`（冒烟 57/57）、CI M7 步骤。
+- 配置：10 个 `MQ_*` 键（`@fw/config` env-schema），bullmq 缺 `MQ_URL` 回退 `CACHE_URL`；切换驱动业务代码 diff = 0。
+- 自研组件：cron 表达式解析（`Intl` 时区）、memory 驱动（单定时器 pump + 令牌桶）、执行守卫存储端口（幂等标记 + 分布式锁，复用 CacheService）。

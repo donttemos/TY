@@ -6,6 +6,7 @@
  *   变更规则：破坏性变更（改签名 / 改字段语义）须写 ADR 或追加变更记录 → L0 裁决 → 当天内全线同步。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-13 donttemo M7：新增 §3.8 队列管理端点与类型（与 C-08 Job 契约同源，PRD-007 FR-09）
  * @module docs/contracts
  */
 
@@ -301,3 +302,111 @@ export const BIZ_CODE = {
  * 2. 字典权限点（dict:read/create/update/delete）后端 seed 暂缺，mock 已按 API 规格 §3.6 补齐；
  * 3. /auth/sessions 为 M5 新增建议接口，待 L2 实现（未实现前个人中心「登录设备」在真实后端下为空列表）。
  */
+
+// ==================== M7 队列管理（PRD-007 FR-09 / C-08 Job 契约，§3.8） ====================
+
+/**
+ * 队列管理端点（真实后端：/api/v1/admin/queue/*，由 @fw/queue QueueAdminController 提供；
+ * 查看类需 system:queue:list，变更类需 system:queue:manage，与 C-08 QUEUE_PERMISSIONS 同源）：
+ * GET  /queue/stats                       —— 队列状态与积压
+ * GET  /queue/metrics                     —— 指标快照（成功率、平均耗时、幂等跳过、cron 抢锁失败）
+ * GET  /queue/handlers                    —— 已注册任务名
+ * GET  /queue/crons                       —— 定时任务快照
+ * POST /queue/crons/:name/tick            —— 手动触发定时任务（仍走分布式锁）
+ * GET  /queue/dead-letters                —— 死信列表（可按 queue 过滤）
+ * POST /queue/dead-letters/:id/requeue    —— 重放单条死信
+ * DELETE /queue/dead-letters              —— 清理死信（可按 queue 过滤）
+ * POST /queue/pause ｜ /queue/resume      —— 暂停 / 恢复消费
+ * DELETE /queue/drain                     —— 清空等待中的任务（可按 queue 过滤）
+ */
+
+/** 队列驱动名（MQ_DRIVER；kafka 仅预留，M8 落地） */
+export type QueueDriverName = 'memory' | 'bullmq';
+
+/** 单队列统计明细（与 C-08 QueueStatsItem 同源） */
+export interface QueueStatsItem {
+  name: string;
+  waiting: number;
+  active: number;
+  completed: number;
+  deadLetter: number;
+  backlog: number;
+  concurrency: number;
+  rateLimit: number;
+}
+
+/** GET /queue/stats 响应 */
+export interface QueueStats {
+  driver: QueueDriverName;
+  paused: boolean;
+  consuming: boolean;
+  queues: QueueStatsItem[];
+  totals: { waiting: number; active: number; completed: number; deadLetter: number; backlog: number };
+}
+
+/** GET /queue/metrics 响应（successRate / avgDurationMs 为派生值） */
+export interface QueueMetrics {
+  driver: QueueDriverName;
+  dispatched: number;
+  succeeded: number;
+  failed: number;
+  deadLettered: number;
+  idempotentSkipped: number;
+  timedOut: number;
+  cronTicked: number;
+  cronLockedOut: number;
+  successRate: number;
+  avgDurationMs: number;
+}
+
+/** 死信记录（与 C-08 DeadLetterRecord 同源） */
+export interface DeadLetterRecord {
+  id: ID;
+  name: string;
+  queue: string;
+  payload: unknown;
+  attemptsMade: number;
+  reason: string;
+  failedAt: string;
+  enqueuedAt: string;
+}
+
+/** GET /queue/dead-letters 响应 */
+export interface DeadLetterListResult {
+  total: number;
+  items: DeadLetterRecord[];
+}
+
+/** 定时任务快照（与 C-08 CronSnapshot 同源） */
+export interface CronSnapshot {
+  name: string;
+  expression: string;
+  lock: boolean;
+  nextRunAt: string | null;
+  runs: number;
+  lockedOut: number;
+  lastResult: 'ok' | 'error' | null;
+  lastRunAt: string | null;
+}
+
+/** GET /queue/crons 响应 */
+export interface CronListResult {
+  enabled: boolean;
+  items: CronSnapshot[];
+}
+
+/** GET /queue/handlers 响应 */
+export interface QueueHandlersResult {
+  names: string[];
+}
+
+/** POST /queue/crons/:name/tick 响应 */
+export interface CronTickResult {
+  results: Array<{ name: string; acquired: boolean }>;
+}
+
+/** POST /queue/dead-letters/:id/requeue 响应 */
+export interface DeadLetterRequeueResult {
+  id: ID;
+  requeued: boolean;
+}

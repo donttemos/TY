@@ -253,3 +253,96 @@ export interface SetUserStatusResult {
 
 /** 用户状态枚举（演示订单等复用） */
 export const USER_STATUS = { DISABLED: 0, ENABLED: 1 } as const;
+
+// ---------- M7 队列管理（C-06 契约 §3.8 / C-08 Job 契约） ----------
+
+/** 队列驱动名 */
+export type QueueDriverName = 'memory' | 'bullmq';
+
+/** 单队列统计明细 */
+export interface QueueStatsItem {
+  name: string;
+  waiting: number;
+  active: number;
+  completed: number;
+  deadLetter: number;
+  backlog: number;
+  concurrency: number;
+  rateLimit: number;
+}
+
+/** 队列统计（driver / paused / consuming / 各队列明细 / 合计） */
+export interface QueueStats {
+  driver: QueueDriverName;
+  paused: boolean;
+  consuming: boolean;
+  queues: QueueStatsItem[];
+  totals: { waiting: number; active: number; completed: number; deadLetter: number; backlog: number };
+}
+
+/** 队列指标快照 */
+export interface QueueMetrics {
+  driver: QueueDriverName;
+  dispatched: number;
+  succeeded: number;
+  failed: number;
+  deadLettered: number;
+  idempotentSkipped: number;
+  timedOut: number;
+  cronTicked: number;
+  cronLockedOut: number;
+  successRate: number;
+  avgDurationMs: number;
+}
+
+/** 死信记录 */
+export interface DeadLetterRecord {
+  id: ID;
+  name: string;
+  queue: string;
+  payload: unknown;
+  attemptsMade: number;
+  reason: string;
+  failedAt: string;
+  enqueuedAt: string;
+}
+
+/** 死信列表结果 */
+export interface DeadLetterListResult {
+  total: number;
+  items: DeadLetterRecord[];
+}
+
+/** 定时任务快照 */
+export interface CronSnapshot {
+  name: string;
+  expression: string;
+  lock: boolean;
+  nextRunAt: string | null;
+  runs: number;
+  lockedOut: number;
+  lastResult: 'ok' | 'error' | null;
+  lastRunAt: string | null;
+}
+
+/** 定时任务列表结果 */
+export interface CronListResult {
+  enabled: boolean;
+  items: CronSnapshot[];
+}
+
+/** 已注册任务名 */
+export interface QueueHandlersResult {
+  names: string[];
+}
+
+/** 定时任务手动触发结果 */
+export interface CronTickResult {
+  results: Array<{ name: string; acquired: boolean }>;
+}
+
+/** 死信重放结果 */
+export interface DeadLetterRequeueResult {
+  id: ID;
+  requeued: boolean;
+}

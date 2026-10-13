@@ -231,11 +231,26 @@ gantt
 - [x] T-M6-05 dry-run、diff 与覆盖策略（`writer.ts`：默认跳过已存在文件并提示 `--force`、`--dry` 与真实生成同源、脏工作区告警、校验失败回滚含清理新建文件与空目录）
 - [x] T-M6-06 模板定制与文档（`templates/codegen/README.md` 定制说明；项目根同名模板优先 + `codegen.config.json` 的 `vars`/`typeOverrides`；`--all`/`--only`/`--app`/`--web`/`--schema` 与交互式选择）
 
-**Backlog**：M7–M8 全部任务。
+**Done**（M7 队列与定时任务，2026-10-13）
+
+> M7 已完成实现与验证，未发版（不计入 v0.1.0）。交付 `packages/queue`（`@fw/queue`）：
+> 单测 **135/135**、覆盖率 **lines 94.96% / functions 90.83% / statements 93.14% / branches 86.57%**（门禁 85/85/65/85）；
+> C-08 Job 契约冻结于 `docs/contracts/queue.ts`；`example-api` 队列冒烟 **27/27**（`scripts/smoke-queue.mjs` 五阶段，
+> 含真实 Redis 的 bullmq 驱动全链路）；`admin-web` vue-tsc ✓、单测 **29/29**、mock 冒烟 **57/57**（新增队列管理 17 项），
+> bundle gzip **311.5 kB**（门禁 600 kB）；CI 纳入 `@fw/queue` 构建与覆盖率门禁 + M7 冒烟步骤。PRD-007 §7 七条 AC 全部满足。
+
+- [x] T-M7-01 Job 抽象与 memory 驱动（`JobRecord` 统一抽象 + `QueueDriverPort` 端口；memory 驱动进程内零依赖：单定时器 pump + 优先级 + 延时/`runAt` + 退避重排 + 并发信号量 + 令牌桶 + 优雅停机重新入队；自研 5/6 段 cron 解析，`Intl` 时区）
+- [x] T-M7-02 bullmq 驱动与切换（懒加载 + optional peer + 可操作报错；`settings.backoffStrategy` 复用任务内退避序列保证双驱动语义一致；`UnrecoverableError` 表达终态失败；支持结构桩注入供单测覆盖；`MQ_DRIVER` 一改即切，业务代码 diff = 0）
+- [x] T-M7-03 cron 调度与分布式锁（`CronScheduler` 单一定时器驱动全部条目；`@Cron` 方法装饰器 + 启动期自动扫描；执行守卫端口复用 `@fw/cache` CacheService——redis 驱动天然集群单跑，进程内守卫启动期显式告警；`tick(name)` 手动触发仍走锁；三实例共享锁单测 TC-JOB-002）
+- [x] T-M7-04 重试退避、死信与重放（默认退避 `1000,5000,30000`；`PermanentJobError` 终态失败不重试；死信归档/查询/单条重放/批量清理 + 可插拔告警回调，回调异常不影响队列）
+- [x] T-M7-05 幂等、限速与优雅停机（`idempotencyKey` + `@Idempotent` 载荷哈希推导，成功才置位；令牌桶限速 + 并发上限；停机先停调度再等在途，超时 memory 重新入队 / bullmq 交失速检测恢复；`/metrics/queue` Prometheus 文本 + `/ready` queue 探针）
+- [x] T-M7-06 队列管理页与指标（后端 `/api/v1/admin/queue/*` 11 端点 + `system:queue:list|manage` 权限；admin-web `/system/queue` 页：积压总览卡 / 队列明细 / 死信重放清理 / cron 快照与手动触发；mock `/queue/*` 端点与 C-06 §3.8 契约；CI 新增 M7 冒烟步骤）
+
+**Backlog**：M8 全部任务；M3 遗留项④（refresh 过期记录定时清理——M7 已提供 cron 能力，具体清理任务移入 M8）。
 
 > **v0.1.0 遗留项（不阻塞发布）**：① ~~`@nestjs/core <=11.1.17` 与 `file-type` 的 3 项 moderate 依赖漏洞需随 NestJS 10 → 11 升级解决~~ → **✅ 已闭环（2026-10-13）**：全仓升 NestJS **11.2.7**（Express 5.2.1 / `@types/express` 5 / file-type 21.3.4 / multer 2.4.0），`pnpm audit --prod` **零漏洞**；② ~~dev 工具链大版本升级（vitest 2→3、tinypool 1→2、happy-dom 15→20、vite 5→6）~~ → **✅ 已闭环（2026-10-13）**：vitest **4.1.11** / vite **8.3.4**（rolldown + oxc）/ happy-dom **21.0.1** / plugin-vue 6 / vue-tsc 3 / unplugin-vue-components 32，`tinypool` 随 vitest 4 整条链路消失；**全仓 `pnpm audit`（含 dev）零漏洞**，全套门禁复跑通过（框架包 366/366、example-api 50/50、admin-web 29+40）；③ ~~`braces` 暂无可用补丁版本~~ → **✅ 已消除（2026-10-13）**：`braces` 随 vite 8 不再进入依赖树，无需补丁。
 
-> **M3 遗留项（已登记，不阻塞 M3 验收）**：① `apikey`/`session`/`oauth2` 端到端路由（M5 接入后台模板时补）；② ~~权限缓存换 Redis 多实例共享~~（**M4 已完成**：`CacheBackedAuthCache` 适配器把 `AUTH_CACHE` 端口接到 `CacheService`，鉴权业务代码 diff = 0）；③ `dataScope` 的 `org`/`org_below` 两档（M8）；④ refresh 过期记录定时清理（M7）。
+> **M3 遗留项（已登记，不阻塞 M3 验收）**：① `apikey`/`session`/`oauth2` 端到端路由（M5 接入后台模板时补）；② ~~权限缓存换 Redis 多实例共享~~（**M4 已完成**：`CacheBackedAuthCache` 适配器把 `AUTH_CACHE` 端口接到 `CacheService`，鉴权业务代码 diff = 0）；③ `dataScope` 的 `org`/`org_below` 两档（M8）；④ refresh 过期记录定时清理（**M7 已具备 cron 能力，具体清理任务移入 M8 backlog**）。
 
 ## 4. 节奏与会议
 

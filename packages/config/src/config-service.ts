@@ -3,6 +3,7 @@
  * @description 类型安全的点路径读取（如 get('db.driver')）；内部持有已校验的 Env，全进程共享一个实例即可。
  * @author donttemo
  * @created 2026-10-09
+ * @modified 2026-10-13 donttemo M7 补齐 mq 配置域（连接/前缀/并发/尝试/退避/超时/cron/限速/死信/停机）
  * @module config
  * @since v0.1.0
  */
@@ -36,7 +37,19 @@ export interface AppConfig {
     passwordPolicy: Env['AUTH_PASSWORD_POLICY'];
     allowRegister: boolean;
   };
-  mq: { driver: Env['MQ_DRIVER'] };
+  mq: {
+    driver: Env['MQ_DRIVER'];
+    url: string | undefined;
+    prefix: string;
+    concurrency: number;
+    maxAttempts: number;
+    backoffMs: string;
+    jobTimeoutSeconds: number;
+    cronEnabled: boolean;
+    rateLimit: number;
+    deadLetterMax: number;
+    shutdownTimeoutSeconds: number;
+  };
   shutdown: { timeoutSeconds: number };
 }
 
@@ -83,7 +96,19 @@ function toView(env: Env): AppConfig {
       passwordPolicy: env.AUTH_PASSWORD_POLICY,
       allowRegister: env.AUTH_ALLOW_REGISTER,
     },
-    mq: { driver: env.MQ_DRIVER },
+    mq: {
+      driver: env.MQ_DRIVER,
+      url: env.MQ_URL,
+      prefix: env.MQ_PREFIX,
+      concurrency: env.MQ_CONCURRENCY,
+      maxAttempts: env.MQ_MAX_ATTEMPTS,
+      backoffMs: env.MQ_BACKOFF,
+      jobTimeoutSeconds: env.MQ_JOB_TIMEOUT,
+      cronEnabled: env.MQ_CRON_ENABLED,
+      rateLimit: env.MQ_RATE_LIMIT,
+      deadLetterMax: env.MQ_DEAD_LETTER_MAX,
+      shutdownTimeoutSeconds: env.MQ_SHUTDOWN_TIMEOUT,
+    },
     shutdown: { timeoutSeconds: env.SHUTDOWN_TIMEOUT },
   };
 }

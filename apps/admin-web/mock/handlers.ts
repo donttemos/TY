@@ -6,6 +6,8 @@
  *   设计目标：mock 与真实后端响应结构零差异，切真实 API 只改 VITE_API_BASE_URL。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-13 donttemo M7：新增队列管理端点（/admin/queue/*：状态、指标、处理器、cron 快照与手动触发、
+ *   死信列表/重放/清理、暂停恢复、清空等待），查看类校验 system:queue:list、变更类校验 system:queue:manage
  * @module admin-web/mock
  */
 
@@ -1152,6 +1154,188 @@ export async function handleMockRequest(
       send(res, CODE.OK, 'ok', { id: order.id }, traceId);
       return { handled: true };
     }
+  }
+
+  // ---------- M7 队列管理（PRD-007 FR-09 / C-06 契约 §3.8） ----------
+  // 查看类需 system:queue:list，变更类需 system:queue:manage（与 C-08 契约 QUEUE_PERMISSIONS 同源）
+  if (path === '/admin/queue/stats' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'system:queue:list');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const queue = database.queue;
+    const totals = queue.queues.reduce(
+      (acc, item) => ({
+        waiting: acc.waiting + item.waiting,
+        active: acc.active + item.active,
+        completed: acc.completed + item.completed,
+        deadLetter: acc.deadLetter + item.deadLetter,
+        backlog: acc.backlog + item.backlog,
+      }),
+      { waiting: 0, active: 0, completed: 0, deadLetter: 0, backlog: 0 },
+    );
+    send(res, CODE.OK, 'ok', { driver: queue.driver, paused: queue.paused, consuming: queue.consuming && !queue.paused, queues: queue.queues, totals }, traceId);
+    return { handled: true };
+  }
+
+  if (path === '/admin/queue/metrics' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'system:queue:list');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const counters = database.queue.counters;
+    const executed = counters.succeeded + counters.failed;
+    send(
+      res,
+      CODE.OK,
+      'ok',
+      {
+        driver: database.queue.driver,
+        ...counters,
+        successRate: executed === 0 ? 0 : Number((counters.succeeded / executed).toFixed(6)),
+        avgDurationMs: executed === 0 ? 0 : 42,
+      },
+      traceId,
+    );
+    return { handled: true };
+  }
+
+  if (path === '/admin/queue/handlers' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'system:queue:list');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    send(res, CODE.OK, 'ok', { names: ['demo.echo', 'demo.flaky', 'demo.permanent', 'demo.slow', 'demo.idempotent', 'order.timeout'] }, traceId);
+    return { handled: true };
+  }
+
+  if (path === '/admin/queue/crons' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'system:queue:list');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    send(res, CODE.OK, 'ok', { enabled: true, items: database.queue.crons }, traceId);
+    return { handled: true };
+  }
+
+  const cronTickMatch = /^\/admin\/queue\/crons\/([\w.-]+)\/tick$/.exec(path);
+  if (cronTickMatch && method === 'POST') {
+    const perm = requirePermission(database, ctx, 'system:queue:manage');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const name = decodeURIComponent(cronTickMatch[1] as string);
+    const cron = database.queue.crons.find((c) => c.name === name);
+    if (!cron) {
+      send(res, CODE.NOT_FOUND, `定时任务不存在：${name}`, null, traceId);
+      return { handled: true };
+    }
+    // mock 单实例：加锁条目也能取到锁；真实多副本下由分布式锁决定 acquired
+    cron.runs += 1;
+    cron.lastResult = 'ok';
+    cron.lastRunAt = new Date().toISOString();
+    database.queue.counters.cronTicked += 1;
+    send(res, CODE.OK, 'ok', { results: [{ name, acquired: true }] }, traceId);
+    return { handled: true };
+  }
+
+  if (path === '/admin/queue/dead-letters' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'system:queue:list');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const queueName = query.get('queue');
+    const items = queueName ? database.queue.deadLetters.filter((item) => item.queue === queueName) : database.queue.deadLetters;
+    send(res, CODE.OK, 'ok', { total: items.length, items }, traceId);
+    return { handled: true };
+  }
+
+  const requeueMatch = /^\/admin\/queue\/dead-letters\/([\w-]+)\/requeue$/.exec(path);
+  if (requeueMatch && method === 'POST') {
+    const perm = requirePermission(database, ctx, 'system:queue:manage');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const id = requeueMatch[1] as string;
+    const found = database.queue.deadLetters.find((item) => item.id === id);
+    if (!found) {
+      send(res, CODE.OK, 'ok', { id, requeued: false }, traceId);
+      return { handled: true };
+    }
+    database.queue.deadLetters = database.queue.deadLetters.filter((item) => item.id !== id);
+    database.queue.counters.dispatched += 1;
+    const target = database.queue.queues.find((item) => item.name === found.queue);
+    if (target) {
+      target.deadLetter = Math.max(0, target.deadLetter - 1);
+      target.waiting += 1;
+      target.backlog += 1;
+    }
+    send(res, CODE.OK, 'ok', { id, requeued: true }, traceId);
+    return { handled: true };
+  }
+
+  if (path === '/admin/queue/dead-letters' && method === 'DELETE') {
+    const perm = requirePermission(database, ctx, 'system:queue:manage');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const queueName = query.get('queue');
+    const before = database.queue.deadLetters.length;
+    database.queue.deadLetters = queueName ? database.queue.deadLetters.filter((item) => item.queue !== queueName) : [];
+    const removed = before - database.queue.deadLetters.length;
+    for (const item of database.queue.queues) {
+      if (!queueName || item.name === queueName) item.deadLetter = 0;
+    }
+    send(res, CODE.OK, 'ok', { removed }, traceId);
+    return { handled: true };
+  }
+
+  if (path === '/admin/queue/pause' && method === 'POST') {
+    const perm = requirePermission(database, ctx, 'system:queue:manage');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    database.queue.paused = true;
+    send(res, CODE.OK, 'ok', { paused: true }, traceId);
+    return { handled: true };
+  }
+
+  if (path === '/admin/queue/resume' && method === 'POST') {
+    const perm = requirePermission(database, ctx, 'system:queue:manage');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    database.queue.paused = false;
+    send(res, CODE.OK, 'ok', { resumed: true }, traceId);
+    return { handled: true };
+  }
+
+  if (path === '/admin/queue/drain' && method === 'DELETE') {
+    const perm = requirePermission(database, ctx, 'system:queue:manage');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const queueName = query.get('queue');
+    let removed = 0;
+    for (const item of database.queue.queues) {
+      if (queueName && item.name !== queueName) continue;
+      removed += item.waiting;
+      item.waiting = 0;
+      item.backlog = item.active;
+    }
+    send(res, CODE.OK, 'ok', { removed }, traceId);
+    return { handled: true };
   }
 
   // 未命中：404

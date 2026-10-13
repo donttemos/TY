@@ -2,13 +2,15 @@
  * @file admin-web mock 全链路冒烟脚本
  * @description 不等后端的独立验证（PRD-005 验收 / TC-WEB）：启动 vite dev server（自动挂载 C-06 mock），
  *   以真实 HTTP 走完 认证（登录/me/错误码/禁用账号）→ 菜单 → 字典 → 用户 CRUD → 越权（3002）→
- *   无感刷新（轮换 + 旧 token 失效）→ 角色/菜单树/审计/订单 → 登出 全链路，并校验 C-06 契约关键字段；
+ *   无感刷新（轮换 + 旧 token 失效）→ 角色/菜单树/审计/订单 → 队列管理（M7：状态/指标/cron 触发/死信
+ *   重放/暂停恢复/清空/越权）→ 登出 全链路，并校验 C-06 契约关键字段；
  *   末尾若存在 dist 产物则执行 bundle 体积门禁（gzip 总量）。任一断言失败即非零退出。
  *   运行：pnpm smoke（cwd 需为 apps/admin-web）。
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo 修 bundle 门禁统计缺陷：vendor-element-plus 由「取最后一个匹配文件」改为累加，
  *   否则 rolldown（vite 8）产物顺序变化后只量到 CSS 文件，门禁形同失效
+ * @modified 2026-10-13 donttemo M7：新增队列管理冒烟段（/queue/* 全端点 + system:queue:* 越权拦截）
  * @module admin-web/scripts
  */
 
@@ -255,6 +257,66 @@ async function main() {
 
     const orders = await api('GET', '/orders?page=1&pageSize=5', { token: newAccess });
     check('订单演示域可查', orders.body?.code === 0 && Array.isArray(orders.body?.data?.items), `total=${orders.body?.data?.total}`);
+
+    // ---------- M7 队列管理 ----------
+    phase('队列管理（M7 / system:queue:*）');
+    const menusAgain = await api('GET', '/auth/menus', { token: newAccess });
+    const systemNode2 = (menusAgain.body?.data ?? []).find((m) => m.path === '/system');
+    const queueMenu = systemNode2?.children?.find((m) => m.path === '/system/queue');
+    check('系统管理含「队列管理」子菜单', Boolean(queueMenu), queueMenu ? `component=${queueMenu.component}` : '未找到');
+    check('队列菜单权限码 system:queue:list', queueMenu?.permissionCode === 'system:queue:list');
+
+    const queueStats = await api('GET', '/admin/queue/stats', { token: newAccess });
+    const stats = queueStats.body?.data;
+    check('队列状态可查（driver / 明细 / 合计）', queueStats.body?.code === 0 && stats?.driver === 'memory' && Array.isArray(stats?.queues) && typeof stats?.totals?.backlog === 'number', `queues=${stats?.queues?.length} backlog=${stats?.totals?.backlog}`);
+
+    const queueMetrics = await api('GET', '/admin/queue/metrics', { token: newAccess });
+    const qm = queueMetrics.body?.data;
+    check('指标快照含成功率与计数', queueMetrics.body?.code === 0 && typeof qm?.successRate === 'number' && typeof qm?.deadLettered === 'number' && typeof qm?.cronTicked === 'number', `successRate=${qm?.successRate} deadLettered=${qm?.deadLettered}`);
+
+    const queueHandlers = await api('GET', '/admin/queue/handlers', { token: newAccess });
+    check('已注册任务名非空', Array.isArray(queueHandlers.body?.data?.names) && queueHandlers.body.data.names.length > 0, `${queueHandlers.body?.data?.names?.length} 个`);
+
+    const cronsBefore = await api('GET', '/admin/queue/crons', { token: newAccess });
+    const cronItems = cronsBefore.body?.data?.items ?? [];
+    check('定时任务快照（表达式 / 加锁 / 执行计数）', Array.isArray(cronItems) && cronItems.length >= 3 && cronItems.every((c) => typeof c.expression === 'string' && typeof c.lock === 'boolean' && typeof c.runs === 'number'), `${cronItems.length} 条`);
+    const tickRunsBefore = cronItems.find((c) => c.name === 'demo.tick')?.runs ?? 0;
+
+    const ticked = await api('POST', '/admin/queue/crons/demo.tick/tick', { token: newAccess });
+    check('手动触发定时任务（acquired=true）', ticked.body?.code === 0 && ticked.body?.data?.results?.[0]?.acquired === true, `acquired=${ticked.body?.data?.results?.[0]?.acquired}`);
+
+    const cronsAfter = await api('GET', '/admin/queue/crons', { token: newAccess });
+    const tickRunsAfter = (cronsAfter.body?.data?.items ?? []).find((c) => c.name === 'demo.tick')?.runs ?? 0;
+    check('触发后执行计数增加', tickRunsAfter === tickRunsBefore + 1, `runs=${tickRunsBefore}→${tickRunsAfter}`);
+
+    const deadList = await api('GET', '/admin/queue/dead-letters', { token: newAccess });
+    const dead = deadList.body?.data;
+    check('死信列表（total 与明细字段）', deadList.body?.code === 0 && typeof dead?.total === 'number' && Array.isArray(dead?.items) && dead.items.every((d) => typeof d.attemptsMade === 'number' && typeof d.reason === 'string'), `total=${dead?.total}`);
+
+    const requeued = await api('POST', '/admin/queue/dead-letters/job-dl-0001/requeue', { token: newAccess });
+    check('死信重放成功', requeued.body?.code === 0 && requeued.body?.data?.requeued === true);
+    const requeuedMissing = await api('POST', '/admin/queue/dead-letters/job-dl-9999/requeue', { token: newAccess });
+    check('重放不存在的死信返回 requeued=false（非报错）', requeuedMissing.body?.code === 0 && requeuedMissing.body?.data?.requeued === false);
+
+    const pausedRes = await api('POST', '/admin/queue/pause', { token: newAccess });
+    const statsPaused = await api('GET', '/admin/queue/stats', { token: newAccess });
+    check('暂停消费后 stats.paused=true', pausedRes.body?.code === 0 && statsPaused.body?.data?.paused === true);
+
+    const resumedRes = await api('POST', '/admin/queue/resume', { token: newAccess });
+    const statsResumed = await api('GET', '/admin/queue/stats', { token: newAccess });
+    check('恢复消费后 stats.paused=false', resumedRes.body?.code === 0 && statsResumed.body?.data?.paused === false);
+
+    const drained = await api('DELETE', '/admin/queue/drain', { token: newAccess });
+    check('清空等待队列返回移除数', drained.body?.code === 0 && typeof drained.body?.data?.removed === 'number', `removed=${drained.body?.data?.removed}`);
+
+    const purged = await api('DELETE', '/admin/queue/dead-letters', { token: newAccess });
+    const deadAfterPurge = await api('GET', '/admin/queue/dead-letters', { token: newAccess });
+    check('清理死信后列表为空', purged.body?.code === 0 && typeof purged.body?.data?.removed === 'number' && deadAfterPurge.body?.data?.total === 0, `removed=${purged.body?.data?.removed}`);
+
+    const aliceQueueStats = await api('GET', '/admin/queue/stats', { token: aliceToken });
+    check('alice 无 system:queue:list → 3002', aliceQueueStats.body?.code === 3002, `code=${aliceQueueStats.body?.code}`);
+    const alicePause = await api('POST', '/admin/queue/pause', { token: aliceToken });
+    check('alice 无 system:queue:manage → 3002', alicePause.body?.code === 3002, `code=${alicePause.body?.code}`);
 
     const logout = await api('POST', '/auth/logout', { token: newAccess });
     check('登出成功', logout.body?.code === 0);

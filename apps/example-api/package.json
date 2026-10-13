@@ -22,6 +22,7 @@
     "@fw/core": "workspace:*",
     "@fw/db": "workspace:*",
     "@fw/logger": "workspace:*",
+    "@fw/queue": "workspace:*",
     "@nestjs/common": "^11.2.7",
     "@nestjs/core": "^11.2.7",
     "@nestjs/platform-express": "^11.2.7",

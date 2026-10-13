@@ -1,6 +1,8 @@
 # 通用应用框架 · API 文档
 
-> 版本 v0.1 ｜ 状态：草案 ｜ 关联：[架构设计](./20-architecture.md) ｜ [数据字典](./30-data-dictionary.md) ｜ [PRD-001](./prd/prd-001-core-skeleton.md) 更新：2026-10-09
+> 版本 v0.1 ｜ 状态：草案 ｜ 关联：[架构设计](./20-architecture.md) ｜ [数据字典](./30-data-dictionary.md) ｜ [PRD-001](./prd/prd-001-core-skeleton.md) 更新：2026-10-13
+>
+> 变更记录：2026-10-13 donttemo M7：§3.8 按实现定稿（`/admin/queue/*` + `system:queue:*`，原 `/jobs` + `job:*` 方案废止，理由见 §3.8 说明）。
 >
 > 约定：接口由代码装饰器自动生成 OpenAPI 3.1 文档（`GET /docs`），本文件定义**规范与清单**，实现必须与本文件一致（CI 校验 spec 与路由一致）。
 
@@ -175,13 +177,26 @@
 
 ### 3.8 任务与队列（PRD-007）
 
+> M7 实现定稿（2026-10-13）：路径前缀冻结为 `/api/v1/admin/queue`（C-08 `QUEUE_ADMIN_PATHS`），
+> 权限码为 `system:queue:list`（查看）/ `system:queue:manage`（变更），与原规划的 `/jobs` + `job:*` 方案不同——
+> 队列运维是系统级能力而非业务资源，与既有系统管理域（`system:*`）对齐。类型契约见 `docs/contracts/queue.ts` 与 `api-web.ts` §3.8。
+> 异步业务进度（如审计导出）沿用「业务表存 jobId + 自查进度」模式，不入本组端点。
+
 | 方法 | 路径 | 权限点 | 说明 |
 |---|---|---|---|
-| GET | `/jobs` | `job:read` | 任务列表（按 `name / status`） |
-| GET | `/jobs/:id` | `job:read` | 详情（payload、attempts、last_error） |
-| POST | `/jobs/:id/retry` | `job:retry` | 重放失败任务 |
-| POST | `/jobs/pause` / `/jobs/resume` | `job:manage` | 暂停 / 恢复队列 |
-| GET | `/jobs/:id/progress` | `job:read` | 异步任务进度（如导出） |
+| GET | `/admin/queue/stats` | `system:queue:list` | 队列状态与积压：`driver / paused / consuming / queues[]（waiting/active/completed/deadLetter/backlog/concurrency/rateLimit）/ totals` |
+| GET | `/admin/queue/metrics` | `system:queue:list` | 指标快照：入队/成功/失败/死信/幂等跳过/超时/cron 触发与抢锁失败计数 + `successRate / avgDurationMs` |
+| GET | `/admin/queue/handlers` | `system:queue:list` | 已注册任务名（排查「任务未注册」） |
+| GET | `/admin/queue/crons` | `system:queue:list` | 定时任务快照：`enabled / items[]（expression/lock/nextRunAt/runs/lockedOut/lastResult）` |
+| POST | `/admin/queue/crons/:name/tick` | `system:queue:manage` | 手动触发定时任务（仍走分布式锁），返回 `results[{ name, acquired }]` |
+| GET | `/admin/queue/dead-letters` | `system:queue:list` | 死信列表（可按 `queue` 过滤），返回 `{ total, items[] }` |
+| POST | `/admin/queue/dead-letters/:id/requeue` | `system:queue:manage` | 重放单条死信，返回 `{ id, requeued }`（不存在时 `requeued=false` 而非报错） |
+| DELETE | `/admin/queue/dead-letters` | `system:queue:manage` | 清理死信（可按 `queue` 过滤），返回 `{ removed }` |
+| POST | `/admin/queue/pause` / `/admin/queue/resume` | `system:queue:manage` | 暂停 / 恢复消费 |
+| DELETE | `/admin/queue/drain` | `system:queue:manage` | 清空等待中的任务（可按 `queue` 过滤），返回 `{ removed }` |
+
+> 运维侧另有两个免认证只读端点：`GET /metrics/queue`（Prometheus 文本，含积压 gauge，命中 `/metrics` 前缀豁免）与
+> `/ready` 的 `queue` 检查项（驱动可用性）。业务侧派发 API 不走 HTTP——业务代码直接注入 `QueueService.dispatch()`（见 PRD-007 §6）。
 
 ### 3.9 租户（PRD-008，M8）
 

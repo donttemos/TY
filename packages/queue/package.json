@@ -1,0 +1,54 @@
+{
+  "name": "@fw/queue",
+  "version": "0.1.0",
+  "description": "队列与定时任务：统一 Job 抽象、memory/bullmq 双驱动、@JobHandler/@Cron、重试退避、死信重放、幂等、限速与优雅停机（PRD-007）",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@fw/auth": "workspace:*",
+    "@fw/cache": "workspace:*",
+    "@fw/config": "workspace:*",
+    "@fw/core": "workspace:*",
+    "@fw/logger": "workspace:*",
+    "@nestjs/common": "^11.2.7",
+    "@nestjs/core": "^11.2.7",
+    "reflect-metadata": "^0.2.2"
+  },
+  "peerDependencies": {
+    "bullmq": "^6.0.0",
+    "ioredis": "^5.4.1"
+  },
+  "peerDependenciesMeta": {
+    "bullmq": {
+      "optional": true
+    },
+    "ioredis": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^11.2.7",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^4.1.11",
+    "bullmq": "^6.3.14",
+    "ioredis": "^5.4.1",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.11"
+  }
+}

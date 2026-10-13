@@ -5,6 +5,7 @@
  * @created 2026-10-09
  * @modified 2026-10-13 donttemo AUTH_ALLOW_REGISTER 默认改 false（与部署手册/「默认安全」一致）
  * @modified 2026-10-13 donttemo M4 新增 9 个 CACHE_* 键（前缀/TTL/容量/降级/空值/抖动/锁/慢操作/大key）
+ * @modified 2026-10-13 donttemo M7 新增 10 个 MQ_* 键（连接/前缀/并发/尝试/退避/超时/cron/限速/死信上限/停机等待）
  * @module config
  * @since v0.1.0
  */
@@ -22,7 +23,7 @@ export const CACHE_DRIVER_VALUES = ['memory', 'redis', 'redis-cluster'] as const
 export const AUTH_STRATEGY_VALUES = ['jwt', 'session', 'oauth2', 'apikey'] as const;
 /** 密码强度策略可选值（PRD-003 FR-07） */
 export const AUTH_PASSWORD_POLICY_VALUES = ['low', 'medium', 'high'] as const;
-/** 队列驱动可选值（M7 起生效） */
+/** 队列驱动可选值（M7 起生效；`kafka` 仅预留驱动端口，M8 落地，故暂不入枚举——非法取值启动即失败） */
 export const MQ_DRIVER_VALUES = ['memory', 'bullmq'] as const;
 
 /** 空字符串视为未设置（.env 里 `DB_URL=` 留空等价于注释掉） */
@@ -111,6 +112,26 @@ export const envSchema = z.object({
   AUTH_API_KEYS: z.string().default('').describe('API Key 列表'),
   /** 队列驱动 */
   MQ_DRIVER: z.enum(MQ_DRIVER_VALUES).default('memory').describe('队列驱动'),
+  /** 队列 Redis 连接串（bullmq 驱动；留空时回退 CACHE_URL，两者都为空则启动失败） */
+  MQ_URL: optionalUrl().describe('队列 Redis 连接串（bullmq）'),
+  /** 队列名前缀；留空时自动使用 `fw:<APP_ENV>`（避免多应用/多环境串队列） */
+  MQ_PREFIX: z.string().default('').describe('队列名前缀'),
+  /** 每队列并发处理数 */
+  MQ_CONCURRENCY: z.coerce.number().int().min(1).max(1000).default(10).describe('每队列并发数'),
+  /** 单个任务最大执行次数（含首次）：4 = 首次 + 3 次重试，与 PRD-007 TC-JOB-003 对齐 */
+  MQ_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(4).describe('单个任务最大执行次数（含首次）'),
+  /** 重试退避序列（毫秒，逗号分隔）：第 n 次重试前等待第 n 项，超出取最后一项 */
+  MQ_BACKOFF: z.string().default('1000,5000,30000').describe('重试退避序列（毫秒，逗号分隔）'),
+  /** 单个任务执行超时（秒）：超时按失败处理并记录，进入重试链路 */
+  MQ_JOB_TIMEOUT: z.coerce.number().int().min(1).max(3600).default(60).describe('单任务执行超时（秒）'),
+  /** 是否启用 cron 定时任务调度 */
+  MQ_CRON_ENABLED: boolString(true).describe('是否启用定时任务调度（MQ_CRON_ENABLED）'),
+  /** 每队列每秒最大处理数：0 = 不限速 */
+  MQ_RATE_LIMIT: z.coerce.number().int().min(0).max(100000).default(0).describe('每队列每秒处理上限（0=不限速）'),
+  /** 死信保留上限（超出丢弃最旧），防止内存无限增长 */
+  MQ_DEAD_LETTER_MAX: z.coerce.number().int().min(1).max(1000000).default(1000).describe('死信保留上限'),
+  /** 优雅停机等待在途任务的超时（秒）；超时未完成的任务重新入队 */
+  MQ_SHUTDOWN_TIMEOUT: z.coerce.number().int().min(1).max(300).default(30).describe('队列优雅停机等待超时（秒）'),
   /** 优雅停机等待在途请求的超时（秒） */
   SHUTDOWN_TIMEOUT: z.coerce.number().int().min(1).max(300).default(10).describe('优雅停机超时（秒）'),
   /** 慢查询告警阈值（毫秒，M2 起由 @fw/db 消费） */

@@ -23,6 +23,7 @@ export const KNOWN_SYSTEM_PATHS: readonly string[] = [
   '/system/menus',
   '/system/dict',
   '/system/audit-logs',
+  '/system/queue',
   '/order/list',
 ];
 
