@@ -309,6 +309,21 @@ async function main() {
     roleCodeChange.status === 400 && roleCodeChange.body.code === 1004,
     `http=${roleCodeChange.status} code=${roleCodeChange.body.code}`);
 
+  // 回归（真机事故）：roleIds:[""] 曾被无校验写库，用户角色集被替换成无效关联、权限归零。
+  // 写库前校验必须把它变成明确的 1001，且既有角色原样保留。
+  const badRoleIds = await call(`/api/v1/users/${probeUserId}`, {
+    method: 'PUT', token, body: { roleIds: [''] },
+  });
+  check('PUT /users/:id 拒绝空串角色 ID（roleIds:[""] 曾静默摧毁 admin 角色）',
+    badRoleIds.status === 400 && badRoleIds.body.code === 1001,
+    `http=${badRoleIds.status} code=${badRoleIds.body.code}`);
+  const badRoleIdsUnknown = await call(`/api/v1/users/${probeUserId}`, {
+    method: 'PUT', token, body: { roleIds: ['00000000-0000-0000-0000-000000000000'] },
+  });
+  check('PUT /users/:id 拒绝不存在的角色 ID',
+    badRoleIdsUnknown.status === 400 && badRoleIdsUnknown.body.code === 1001,
+    `http=${badRoleIdsUnknown.status} code=${badRoleIdsUnknown.body.code}`);
+
   const adminScopeChange = await call(`/api/v1/roles/${adminRole.id}`, {
     method: 'PUT', token, body: { dataScope: 'self' },
   });
@@ -325,6 +340,14 @@ async function main() {
     method: 'PUT', token, body: { permissionIds: probePermId ? [probePermId] : [] },
   });
   check('PUT /roles/:id/permissions 授权（复制前的准备）', isOk(granted.status), `http=${granted.status}`);
+
+  // 与 roleIds 同源的写库前校验：空串/失效权限点 ID 会被静默写进 role_permission
+  const badPermIds = await call(`/api/v1/roles/${roleId}/permissions`, {
+    method: 'PUT', token, body: { permissionIds: [''] },
+  });
+  check('PUT /roles/:id/permissions 拒绝空串权限点 ID',
+    badPermIds.status === 400 && badPermIds.body.code === 1001,
+    `http=${badPermIds.status} code=${badPermIds.body.code}`);
 
   const copied = await call(`/api/v1/roles/${roleId}/copy`, { method: 'POST', token });
   const copiedId = copied.body.data?.id;
@@ -473,10 +496,13 @@ async function main() {
       `http=${res.status} code=${res.body.code}`);
   }
 
+  // dict:read 是刻意授予普通角色的例外（seed.ts USER_ROLE_CODES）：全站状态列 / 下拉走 useDict，
+  // 缺它普通用户只能看到原始值（0/1）而非「启用/禁用」。此处正向守住该设计决策——
+  // 谁把 dict:read 从 user 角色挪走，这条断言就红。写操作（dict:write）仍一律 3002，见上方循环。
   const aliceDict = await call('/api/v1/dict/user_status', { token: aliceToken });
-  check('alice 读字典 → 403/3002（dict:read 未授予）',
-    aliceDict.status === 403 && aliceDict.body.code === 3002,
-    `http=${aliceDict.status} code=${aliceDict.body.code}`);
+  check('alice 读字典 → 200（dict:read 按 PRD-005 FR-07 授予普通角色，状态列依赖）',
+    aliceDict.status === 200 && aliceDict.body.code === 0 && Array.isArray(aliceDict.body.data),
+    `http=${aliceDict.status} code=${aliceDict.body.code} 项数=${(aliceDict.body.data ?? []).length}`);
 
   console.log(`\n结果：${pass}/${total} 通过`);
   if (pass !== total) process.exitCode = 1;

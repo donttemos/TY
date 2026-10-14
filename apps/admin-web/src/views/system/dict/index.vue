@@ -2,8 +2,13 @@
  * @file 字典管理页
  * @description PRD-005 FR-07：左侧分类列表 + 右侧字典项维护（CrudTable）；useDict 全局消费，
  *   维护后主动失效字典缓存，页面即时刷新。字典项颜色供 StatusTag 使用。
+ *   权限：后端字典域只有 dict:read / dict:write 两个权限码（packages/auth/src/constants.ts 的 PERM），
+ *   故 CrudTable 必须用 permissionActions 覆盖默认推导的 dict:create/update/delete（这些码不存在，
+ *   会让新建/编辑/删除按钮永不渲染）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 修复字典项维护按钮永不渲染（权限码推导与后端 dict:write 不匹配），
+ *   并给分类的新建/编辑/删除补 v-permission="'dict:write'"
  * @module admin-web/views
 -->
 
@@ -151,7 +156,7 @@ function handleItemSaved(): void {
     <div class="fw-card fw-dict-side">
       <div class="fw-flex-between" style="margin-bottom: 12px">
         <span class="fw-text-secondary">字典分类</span>
-        <el-button link type="primary" @click="openCreateCategory">+ 新建</el-button>
+        <el-button v-permission="'dict:write'" link type="primary" @click="openCreateCategory">+ 新建</el-button>
       </div>
       <ul class="fw-dict-categories">
         <li
@@ -164,8 +169,8 @@ function handleItemSaved(): void {
           <span class="fw-dict-category-name">{{ category.name }}</span>
           <span class="fw-dict-category-code">{{ category.code }}</span>
           <span class="fw-dict-category-actions" @click.stop>
-            <el-button link type="primary" size="small" @click="openEditCategory(category)">编辑</el-button>
-            <el-button link type="danger" size="small" @click="handleDeleteCategory(category)">删除</el-button>
+            <el-button v-permission="'dict:write'" link type="primary" size="small" @click="openEditCategory(category)">编辑</el-button>
+            <el-button v-permission="'dict:write'" link type="danger" size="small" @click="handleDeleteCategory(category)">删除</el-button>
           </span>
         </li>
       </ul>
@@ -182,7 +187,7 @@ function handleItemSaved(): void {
           :form-fields="itemFormFields"
           :filters="itemFilters"
           :form-defaults="{ categoryId: activeCategory }"
-          permission="dict"
+          :permission-actions="{ create: 'dict:write', update: 'dict:write', delete: 'dict:write' }"
           :pagination="false"
           create-title="新建字典项"
           @refresh="handleItemSaved"

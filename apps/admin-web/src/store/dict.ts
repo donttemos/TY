@@ -4,6 +4,8 @@
  *   同一编码全局只拉一次；字典管理页维护后调用 invalidate 主动失效。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 无 dict:read 权限时短路（不发请求）：后端 GET /dict/:code 需要
+ *   dict:read，缺权限的角色会持续 3002 刷错误且标签永远不显示；短路后按「无字典」降级为显示原值
  * @module admin-web/store
  */
 
@@ -11,6 +13,7 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import * as dictApi from '@/api/dict';
 import type { DictItem } from '@/api/types';
+import { useUserStore } from './user';
 
 export const useDictStore = defineStore('dict', () => {
   /** 编码 → 字典项 */
@@ -20,6 +23,8 @@ export const useDictStore = defineStore('dict', () => {
 
   /** 取字典项（带缓存；未命中时拉接口） */
   async function load(code: string): Promise<DictItem[]> {
+    // 字典是 UI 枚举元数据，但仍受后端权限约束；无权限直接降级，避免用 3002 刷控制台
+    if (!useUserStore().hasPermission('dict:read')) return [];
     const hit = cache.value[code];
     if (hit) return hit;
     if (pending.has(code)) {

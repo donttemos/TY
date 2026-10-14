@@ -82,6 +82,7 @@ framework/
     85-parallel-workstreams.md # 并行开发工作线划分（契约 / 所有权 / 集成点）
     90-release-v0.1.0.md      # v0.1.0 发布验收报告
     95-doc-audit.md           # 文档一致性核对报告
+    99-admin-web-enhancement-and-fixes.md # 管理后台前端功能补充与缺陷修复方案
     adr/                      # 架构决策记录 0001–0010
     prd/                      # 按功能 / 迭代拆分的 PRD
 ```
@@ -153,6 +154,7 @@ fw gen crud order
 | [M8 三大关键演练与终验](./docs/96-m8-drills.md) | 数据库切换 / 规模演进 / 依赖故障降级三大演练的可复现结果（25/25）、PRD-008 §7 AC 逐条判定与遗留项 |
 | [压测基线报告](./docs/97-bench-baseline.md) | 登录 / 列表 / 写入三类场景的 QPS 与 P50/P95/P99 实测值、复现命令与性能基线对照 |
 | [规模化上线自检清单](./docs/98-scale-checklist.md) | 上线前 CheckList：连接池 / 缓存三防护 / 队列积压 / 慢 SQL / N+1 / 日志采样 / 容量与降级 |
+| [管理后台功能补充与缺陷修复方案](./docs/99-admin-web-enhancement-and-fixes.md) | 后台前端「文档已交付 vs 真机可用」逐页核对、待新增/完善模块、15 项缺陷（现象/触发条件/根因/修复后预期行为）、交互流程与数据展示规范、兼容性要求与验证证据 |
 | [Helm Chart 使用说明](./deploy/helm/fw-app/README.md) | Chart 目录结构、安装升级回滚、关键 values、探针与迁移 Job 语义、离线校验方式 |
 
 ## 路线图

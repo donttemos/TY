@@ -6,6 +6,8 @@
  *   视图未实现的菜单跳过（防死链）、visible 过滤与 reset。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 补 2 个回归护栏：visible 递归剪枝（隐藏子菜单不进侧边栏）、
+ *   component 归一化（生成器落库的 views/<model>/index 必须能解析到视图）
  * @module admin-web/store
  */
 
@@ -104,5 +106,31 @@ describe('权限路由生成', () => {
     permission.reset();
     expect(permission.menus).toHaveLength(0);
     expect(permission.routesAdded).toBe(false);
+  });
+
+  it('visibleMenus 递归剪枝：不可见子菜单不出现在侧边栏', () => {
+    const permission = usePermissionStore();
+    permission.menus = MENU_TREE;
+    const system = permission.visibleMenus().find((m) => m.id === 'm-system');
+    // m-hidden 为 visible=false，必须从侧边栏数据里剔除（否则点击落 404）
+    expect(system?.children.map((c) => c.id)).not.toContain('m-hidden');
+    expect(system?.children.map((c) => c.id)).toEqual(['m-users', 'm-roles', 'm-ghost']);
+  });
+
+  it('component 归一化：生成器写库的 views/<model>/index 也能解析到视图（M6 回归护栏）', () => {
+    const permission = usePermissionStore();
+    permission.menus = [
+      // prisma/seed/demo-item.seed.ts 实际落库值（相对 web/src，而非相对 views）
+      menu({ id: 'm-demo-items', name: 'DemoItem管理', path: '/demo-items', component: 'views/demo-item/index', permissionCode: 'demo-item:read' }),
+      // 单文件落盘（views/layout/blank.vue）
+      menu({ id: 'm-blank', name: '空布局', path: '/blank', component: 'layout/blank' }),
+    ];
+    useUserStore().permissions = ['demo-item:read'];
+
+    const routes = permission.generateRoutes();
+    const generated = routes.find((r) => r.path === '/demo-items');
+    expect(generated).toBeDefined();
+    expect(typeof generated?.component).toBe('function');
+    expect(routes.find((r) => r.path === '/blank')).toBeDefined();
   });
 });

@@ -4,6 +4,8 @@
  *   详情抽屉展示字段级 diff（before → after，敏感字段脱敏，见 DiffViewer）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 移除 exportable：后端 /audit-logs/export 尚未实现
+ *   （docs/40-api-spec.md §3.7 标注 Backlog），按钮点了无任何反应属死 UI
  * @module admin-web/views
 -->
 
@@ -91,7 +93,7 @@ function copyTraceId(traceId: string): void {
 
 <template>
   <div class="fw-page">
-    <CrudTable api="/audit-logs" :columns="columns" :search-form="searchForm" permission="audit" exportable>
+    <CrudTable api="/audit-logs" :columns="columns" :search-form="searchForm" permission="audit">
       <template #cell-user="{ row }">
         {{ userName(row.userId) }}
       </template>

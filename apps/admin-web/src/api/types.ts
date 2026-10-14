@@ -3,6 +3,7 @@
  * @description 与 docs/contracts/api-web.ts 逐字段对应；契约变更时两边同步改（契约只读，本文件为消费侧副本）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 新增 ProfileResult（GET / PUT /auth/profile，个人中心自助资料）
  * @module admin-web/api
  */
 
@@ -62,6 +63,15 @@ export interface MeResult {
   roles: string[];
   permissions: PermissionCode[];
   dataScope: DataScope;
+}
+
+/**
+ * 本人资料视图（GET / PUT /auth/profile）
+ * 与 MeResult 同构，另含手机 / 邮箱——个人中心回显与自助维护不需要 user:read 权限。
+ */
+export interface ProfileResult extends MeResult {
+  phone: string | null;
+  email: string | null;
 }
 
 /** 菜单节点（动态路由数据源） */

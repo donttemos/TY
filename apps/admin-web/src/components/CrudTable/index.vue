@@ -6,13 +6,19 @@
  *   内置表单弹窗（formFields 提供时）。新业务列表页 ≤ 80 行（PRD-005 AC）。
  *   权限：新建 = <permission>:create，编辑 = <permission>:update，删除 = <permission>:delete，
  *   导出 = <permission>:export；无权限按钮不渲染（v-permission），服务端仍独立校验。
+ *   可用 permissionActions 显式覆盖动作码（后端权限码不是「前缀 + 标准动作」时必填）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 修复 4 项缺陷：① 操作列只在 formFields/canDelete 命中时渲染，
+ *   使只挂 actions-extra 插槽的页面（审计日志「详情」）整列消失、字段级 diff 不可达 → 增加插槽探测；
+ *   ② 权限码无法覆盖，字典页推导出不存在的 dict:create/update/delete → 新增 permissionActions；
+ *   ③ number / 多选字段初值写成空串（el-input-number 告警、数组字段回显为空）→ 按类型初始化并保数组；
+ *   ④ 查询条件未按原型 §7 本地持久化 → 与列设置同策略落 localStorage
  * @module admin-web/components
 -->
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, useSlots } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, Search, Setting } from '@element-plus/icons-vue';
@@ -32,6 +38,11 @@ const props = withDefaults(
     searchForm?: SearchField[];
     /** 权限前缀，如 'user' → user:create / user:update / user:delete */
     permission?: string;
+    /**
+     * 显式覆盖动作权限码（优先于 permission 推导）。
+     * 后端权限码不等于「前端前缀 + create/update/delete」时必须指定，否则按钮永不渲染。
+     */
+    permissionActions?: Partial<Record<'create' | 'update' | 'delete' | 'export', string>>;
     /** 表单字段（提供则启用内置新增 / 编辑弹窗） */
     formFields?: FormField[];
     /** 弹窗标题（新建） */
@@ -78,6 +89,10 @@ const emit = defineEmits<{
 
 const route = useRoute();
 const user = useUserStore();
+const slots = useSlots();
+
+/** 页面是否挂了行操作扩展插槽（审计「详情」等无新增/删除权限的只读页依赖它渲染操作列） */
+const hasActionsSlot = computed(() => Boolean(slots['actions-extra']));
 
 /** 列表数据与状态 */
 const list = ref<Record<string, unknown>[]>([]);
@@ -94,6 +109,32 @@ const search = reactive<SearchModel>({});
 const expanded = ref(false);
 for (const field of props.searchForm ?? []) {
   if (field.defaultValue !== undefined) search[field.prop] = field.defaultValue;
+}
+
+/** 查询条件持久化（原型 §7：查询条件与列设置均按「用户 + 路由」维度本地持久化） */
+const searchStorageKey = computed(() => `fw_crud_search:${route.path}:${props.api}`);
+
+function loadSearchSettings(): void {
+  try {
+    const raw = localStorage.getItem(searchStorageKey.value);
+    if (!raw) return;
+    const saved = JSON.parse(raw) as SearchModel;
+    const allowed = new Set((props.searchForm ?? []).map((field) => field.prop));
+    for (const [key, value] of Object.entries(saved)) {
+      // 只恢复仍在查询区声明的字段，避免旧版本残留键偷偷带上查询条件
+      if (allowed.has(key)) search[key] = value;
+    }
+  } catch {
+    // 损坏的本地配置回退默认值
+  }
+}
+
+function saveSearchSettings(): void {
+  try {
+    localStorage.setItem(searchStorageKey.value, JSON.stringify(search));
+  } catch {
+    // 隐私模式下降级为仅内存
+  }
 }
 
 /** 列设置：可见性（按用户 + 路由 + 接口维度持久化，原型 §7） */
@@ -135,7 +176,10 @@ const editingId = ref<string | null>(null);
 const formDialogRef = ref<InstanceType<typeof FormDialog>>();
 
 /** 权限按钮（无 permission 前缀时全部放行） */
-function perm(code: string): PermissionCode | null {
+function perm(code: 'create' | 'update' | 'delete' | 'export'): PermissionCode | null {
+  // 显式覆盖优先：后端权限码常与「前缀 + 标准动作」不一致（如字典只有 dict:read / dict:write）
+  const override = props.permissionActions?.[code];
+  if (override) return override as PermissionCode;
   // 模板拼接结果在类型层面是 string，这里断言为 PermissionCode（<前缀>:<动作> 形状由调用方保证）
   return props.permission ? (`${props.permission}:${code}` as PermissionCode) : null;
 }
@@ -208,6 +252,7 @@ async function fetchList(): Promise<void> {
 /** 查询 / 重置 */
 function handleSearch(): void {
   page.value = 1;
+  saveSearchSettings();
   void fetchList();
 }
 
@@ -216,6 +261,7 @@ function handleReset(): void {
     search[field.prop] = field.defaultValue ?? (field.type === 'daterange' ? [] : '');
   }
   page.value = 1;
+  saveSearchSettings();
   void fetchList();
 }
 
@@ -252,7 +298,12 @@ function handleCreate(): void {
   dialogTitle.value = props.createTitle ?? '新建';
   editingId.value = null;
   for (const field of props.formFields ?? []) {
-    formModel[field.prop] = field.type === 'switch' ? false : '';
+    // 初值按控件类型给：number 必须留空（undefined），给 '' 会让 el-input-number 收到非法值；
+    // 多选控件（值为数组）必须是 []，否则提交成字符串、接口按数组校验时报 1001
+    if (field.type === 'switch') formModel[field.prop] = false;
+    else if (field.type === 'number') formModel[field.prop] = undefined;
+    else if (field.multiple) formModel[field.prop] = [];
+    else formModel[field.prop] = '';
   }
   // 预置固定值（如从属分类 id），字段配置中无需声明
   Object.assign(formModel, props.formDefaults ?? {});
@@ -265,12 +316,16 @@ async function handleEdit(row: Record<string, unknown>): Promise<void> {
   editingId.value = rowId(row);
   dialogTitle.value = (props.editTitle ?? '编辑 #{id}').replace('{id}', rowId(row));
   const fields = props.formFields ?? [];
-  for (const field of fields) formModel[field.prop] = '';
+  for (const field of fields) formModel[field.prop] = field.multiple ? [] : '';
   try {
     const detail = await request.get<Record<string, unknown>>(`${props.api}/${editingId.value}`);
     Object.assign(formModel, detail);
   } catch {
     Object.assign(formModel, row);
+  }
+  // 后端若把关联数组拆到别的字段（如 roleIds 缺失）也不至于渲染崩溃：非数组归一为 []
+  for (const field of fields) {
+    if (field.multiple && !Array.isArray(formModel[field.prop])) formModel[field.prop] = [];
   }
   dialogVisible.value = true;
 }
@@ -314,15 +369,29 @@ async function handleDelete(rows: Record<string, unknown>[]): Promise<void> {
   } catch {
     return;
   }
-  try {
-    for (const row of rows) {
+  // 后端未提供批量删除端点，逐条删除；任一条失败不中断其余，最后按成功/失败数给出可读结论，
+  // 并无论如何刷新列表与清空选择，避免出现「界面还显示已删数据」的假成功
+  let succeeded = 0;
+  let firstError: unknown = null;
+  for (const row of rows) {
+    try {
       await request.delete(`${props.api}/${rowId(row)}`);
+      succeeded += 1;
+    } catch (err) {
+      if (firstError === null) firstError = err;
     }
+  }
+  selectedRows.value = [];
+  void fetchList();
+  if (firstError === null) {
     ElMessage.success('删除成功');
-    selectedRows.value = [];
-    void fetchList();
-  } catch (err) {
-    ElMessage.error(err instanceof BizError ? describeBizError(err) : '删除失败，请重试');
+    return;
+  }
+  const reason = firstError instanceof BizError ? describeBizError(firstError) : '删除失败，请重试';
+  if (succeeded > 0) {
+    ElMessage.warning(`已删除 ${succeeded} 项，${rows.length - succeeded} 项失败：${reason}`);
+  } else {
+    ElMessage.error(reason);
   }
 }
 
@@ -368,6 +437,7 @@ defineExpose({ refresh });
 
 onMounted(() => {
   loadColumnSettings();
+  loadSearchSettings();
   void fetchList();
 });
 </script>
@@ -487,7 +557,11 @@ onMounted(() => {
           </template>
         </el-table-column>
       </template>
-      <el-table-column v-if="actions && (formFields?.length || canDelete())" label="操作" width="220" fixed="right">
+      <!--
+        操作列渲染条件必须包含 actions-extra 插槽：审计日志、只读业务页只挂该插槽（无 formFields
+        且无 delete 权限），早期条件会让整列消失、「详情」入口不可达。
+      -->
+      <el-table-column v-if="actions && (formFields?.length || canDelete() || hasActionsSlot)" label="操作" width="220" fixed="right">
         <template #default="{ row }">
           <div class="fw-table-actions">
             <el-button v-if="formFields?.length && canUpdate()" link type="primary" @click="handleEdit(row)">编辑</el-button>

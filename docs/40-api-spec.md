@@ -4,6 +4,9 @@
 >
 > 变更记录：2026-10-13 donttemo M7：§3.8 按实现定稿（`/admin/queue/*` + `system:queue:*`，原 `/jobs` + `job:*` 方案废止，理由见 §3.8 说明）。
 >
+> 变更记录：2026-10-14 donttemo 管理后台可达性修复：§3.2 新增 `GET` / `PUT /auth/profile`（`auth:me`，本人资料自助；
+> 原实现让个人中心借 `PUT /users/:id` 保存，普通角色必 `3002`）；§3.6 更正 `GET /dict/:code` 的权限点标注为 `dict:read`（原标「登录后」，与实现不符）。
+>
 > 约定：接口由代码装饰器自动生成 OpenAPI 3.1 文档（`GET /docs`），本文件定义**规范与清单**，实现必须与本文件一致（CI 校验 spec 与路由一致）。
 
 ## 1. 通用约定
@@ -116,7 +119,9 @@
 | POST | `/auth/refresh` | 公开（带 refresh） | 轮换 refresh，旧 refresh 立即失效 |
 | POST | `/auth/logout` | `auth:logout` | 登出，令牌进黑名单 |
 | GET | `/auth/me` | `auth:me` | 当前用户资料 + 角色 + 权限码列表 |
-| GET | `/auth/menus` | `auth:me` | 当前用户可见菜单树（后台动态路由数据源） |
+| GET | `/auth/profile` | `auth:me` | 本人资料（含 `phone` / `email`，个人中心回显；**不要求 `user:read`**） |
+| PUT | `/auth/profile` | `auth:me` | 自助更新本人资料：白名单 `nickname` / `phone` / `email`；`username` / `status` / `roleIds` 一律拒收（防自助提权）；手机/邮箱被占用返回 `1003` |
+| GET | `/auth/menus` | `auth:me` | 当前用户可见菜单树（后台动态路由数据源；**不按 `visible` 过滤**，由前端渲染时剪枝） |
 | POST | `/auth/change-password` | `auth:change-password` | 改密，成功后其它设备下线 |
 | GET | `/auth/sessions` | `auth:me` | 当前用户登录设备列表（一个刷新轮换族即一台设备） |
 | DELETE | `/auth/sessions/:id` | `auth:revoke-session` | 下线指定设备（仅限本人设备；整族撤销） |
@@ -130,7 +135,7 @@
 | GET | `/users` | `user:read` | 分页列表，支持 `keyword / status / role_id` |
 | GET | `/users/:id` | `user:read` | 详情（含角色与部门） |
 | POST | `/users` | `user:create` | 新建，密码走强校验 |
-| PUT | `/users/:id` | `user:update` | 更新资料 |
+| PUT | `/users/:id` | `user:update` | 更新资料（自助改本人资料请走 `PUT /auth/profile`，无需 `user:update`） |
 | DELETE | `/users/:id` | `user:delete` | 软删除（不可删内置管理员） |
 | PUT | `/users/:id/roles` | `user:assign-role` | 分配角色（全量覆盖） |
 | POST | `/users/:id/reset-password` | `user:reset-password` | 重置密码，返回一次性密码或触发重置流程 |
@@ -141,6 +146,11 @@
 > 部门集合由服务端按 `user_department` / `departments` 解析注入，**不接受客户端传参**（防越权放宽）；
 > 详情/写目标在范围外返回 `3002`（不泄露存在性）。用户无部门归属的 org 档按 `self` 收敛（fail-closed）。
 > 同一规则适用于 `GET /audit-logs`（按部门成员展开归属人集合）。
+
+> **角色分派入参校验（2026-10-14，`roleIds` / `permissionIds` 通用）**：分配类入参在写库前校验——
+> 空串、非字符串、不存在或已软删的 ID 一律返回 `1001`（消息列出未知 ID），且**整批拒绝**，
+> 既有关联原样保留。背景：分派是「先删后建」的全量覆盖，而 `user_role.role_id` 为裸 `String` 且无外键，
+> 无效 ID 会被静默写库，把用户角色集替换成无效关联、权限聚合归零（表现为全站 3002 且无从溯源）。
 
 ### 3.4 角色与权限（PRD-003）
 
@@ -173,7 +183,7 @@
 | POST / PUT / DELETE | `/dict/categories[/:id]` | `dict:write` | 分类维护（删除连带其下字典项；软删同时释放编码唯一键） |
 | GET | `/dict/items` | `dict:read` | 字典项列表（按 `category_id`） |
 | POST / PUT / DELETE | `/dict/items[/:id]` | `dict:write` | 字典项维护 |
-| GET | `/dict/:code` | 登录后 | 按分类编码取字典项，供前端 `useDict()` 消费；编码不存在返回空数组而非报错 |
+| GET | `/dict/:code` | `dict:read` | 按分类编码取字典项，供前端 `useDict()` 消费；编码不存在返回空数组而非报错。**前端在无 `dict:read` 时短路不发请求并降级显示原始值**（此前误标「登录后」，与实现不符） |
 
 ### 3.7 审计日志（PRD-003）
 

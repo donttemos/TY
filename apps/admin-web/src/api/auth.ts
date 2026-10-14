@@ -3,11 +3,13 @@
  * @description 登录 / 刷新 / 登出 / 当前用户 / 菜单树 / 改密 / 登录设备。刷新由请求层无感执行，此处仅暴露登出等业务动作。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 新增本人资料自助端点（GET / PUT /auth/profile）：
+ *   原先个人中心借 PUT /users/:id 保存资料，该端点需 user:update，普通角色保存必 3002
  * @module admin-web/api
  */
 
 import { request } from '@/utils/request';
-import type { LoginResult, LoginSession, MeResult, MenuNode } from './types';
+import type { LoginResult, LoginSession, MeResult, MenuNode, ProfileResult } from './types';
 
 /** 账号密码登录 */
 export function login(account: string, password: string): Promise<LoginResult> {
@@ -37,6 +39,16 @@ export function changePassword(oldPassword: string, newPassword: string): Promis
 /** 登录设备列表（个人中心） */
 export function fetchSessions(): Promise<LoginSession[]> {
   return request.get<LoginSession[]>('/auth/sessions');
+}
+
+/** 本人资料（含手机 / 邮箱，个人中心回显；仅需 auth:me，不依赖 user:read） */
+export function fetchProfile(): Promise<ProfileResult> {
+  return request.get<ProfileResult>('/auth/profile');
+}
+
+/** 更新本人资料（服务端只接受 nickname / phone / email，其余字段一律拒绝） */
+export function updateProfile(data: { nickname?: string; phone?: string; email?: string }): Promise<ProfileResult> {
+  return request.put<ProfileResult>('/auth/profile', data);
 }
 
 /** 下线指定设备 */

@@ -6,6 +6,8 @@
  *   服务端仍强制校验）。生产管理面在 /api/v1/admin/queue，与后端 @fw/queue 的 QueueAdminController 同源。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 补「暂停 / 恢复消费」的按钮级权限（system:queue:manage）：
+ *   此前该按钮未做控制，只读角色（仅 system:queue:list）能点到并吃 3002
  * @module admin-web/views
 -->
 
@@ -163,7 +165,11 @@ function formatPayload(payload: unknown): string {
           </p>
         </div>
         <div class="fw-queue-actions">
-          <el-button :loading="acting === 'toggle'" @click="toggleConsume()">{{ stats?.paused ? '恢复消费' : '暂停消费' }}</el-button>
+          <el-button
+            v-permission="'system:queue:manage'"
+            :loading="acting === 'toggle'"
+            @click="toggleConsume()"
+          >{{ stats?.paused ? '恢复消费' : '暂停消费' }}</el-button>
           <el-button :loading="acting === 'drain'" v-permission="'system:queue:manage'" @click="drain()">清空等待</el-button>
           <el-button :loading="loading" type="primary" @click="loadAll()">刷新</el-button>
         </div>

@@ -7,6 +7,7 @@
  *   改密成功后作废旧会话并为当前设备签发新令牌（其它设备下线，PRD-003 FR-01）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo assignUserRoles / grantRolePermissions 写库前校验 ID 集合（assertRoleIds / assertPermissionIds），杜绝空串或失效 ID 静默写库导致权限归零
  * @module @fw/auth
  */
 
@@ -392,12 +393,13 @@ export class AuthService {
   /**
    * 全量覆盖用户角色（角色变更后按 user 标签失效权限缓存，保证即时生效）
    * @param userId 用户 ID
-   * @param roleIds 角色 ID 列表
+   * @param roleIds 角色 ID 列表（必须先过 assertRoleIds 校验）
    * @param operator 操作人（审计）
    * @param ip 来源 IP
    * @returns 生效后的权限码
    */
   async assignUserRoles(userId: ID, roleIds: ID[], operator: ID, ip: string): Promise<{ permissions: string[] }> {
+    await this.assertRoleIds(roleIds);
     await this.deps.store.replaceUserRoles(userId, roleIds);
     await this.deps.permissions.invalidateUser(userId);
     const context = await this.deps.permissions.getUserContext(userId);
@@ -414,9 +416,33 @@ export class AuthService {
   }
 
   /**
+   * 校验待分配的角色 ID 集合：非空串、全部存在且未删除
+   *
+   * 存在意义（真机事故复盘）：`replaceUserRoles` 是「先删后建」的全量覆盖，
+   * 入参若含空串或已不存在的 ID 会被静默写库——用户的角色集随即被替换成
+   * 「无效关联」，权限聚合直接归零，表现为全站 3002 且无从溯源。
+   * 校验放在写库前，把「静默数据损坏」变成「明确 1001」。
+   *
+   * @param roleIds 待分配的角色 ID 列表
+   * @throws BizError 1001 含空串 / 非字符串 / 不存在或已删除的 ID
+   */
+  async assertRoleIds(roleIds: ID[]): Promise<void> {
+    const ids = [...new Set(roleIds)];
+    const malformed = ids.filter((id) => typeof id !== 'string' || id.length === 0);
+    if (malformed.length > 0) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'roleIds 含无效的角色 ID（空串或非字符串）');
+    }
+    const known = new Set((await this.deps.store.listRoles()).map((role) => role.id));
+    const unknown = ids.filter((id) => !known.has(id));
+    if (unknown.length > 0) {
+      throw new BizError(ErrorCode.BAD_REQUEST, `角色不存在或已删除：${unknown.join('、')}`);
+    }
+  }
+
+  /**
    * 全量覆盖角色权限（角色权限变更即时生效：失效持有该角色用户的缓存）
    * @param roleId 角色 ID
-   * @param permissionIds 权限点 ID 列表
+   * @param permissionIds 权限点 ID 列表（必须先过 assertPermissionIds 校验）
    * @param operator 操作人（审计）
    * @param ip 来源 IP
    * @returns 受影响用户数
@@ -427,6 +453,7 @@ export class AuthService {
     operator: ID,
     ip: string,
   ): Promise<{ affectedUsers: number }> {
+    await this.assertPermissionIds(permissionIds);
     await this.deps.store.replaceRolePermissions(roleId, permissionIds);
     const affected = await this.deps.store.listUserIdsByRoleId(roleId);
     await this.deps.permissions.invalidateUsers(affected);
@@ -441,6 +468,26 @@ export class AuthService {
     });
     logger.info('角色权限已变更，相关用户缓存已失效', { roleId, affectedUsers: affected.length });
     return { affectedUsers: affected.length };
+  }
+
+  /**
+   * 校验待授权的权限点 ID 集合：非空串、全部存在且未删除
+   * 与 assertRoleIds 同源——`replaceRolePermissions` 同样是先删后建，
+   * 无效 ID 会静默写进 role_permission，让角色拿到查不到的权限点。
+   * @param permissionIds 待授权的权限点 ID 列表
+   * @throws BizError 1001 含空串 / 非字符串 / 不存在或已删除的 ID
+   */
+  async assertPermissionIds(permissionIds: ID[]): Promise<void> {
+    const ids = [...new Set(permissionIds)];
+    const malformed = ids.filter((id) => typeof id !== 'string' || id.length === 0);
+    if (malformed.length > 0) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'permissionIds 含无效的权限点 ID（空串或非字符串）');
+    }
+    const known = new Set((await this.deps.store.listPermissions()).map((permission) => permission.id));
+    const unknown = ids.filter((id) => !known.has(id));
+    if (unknown.length > 0) {
+      throw new BizError(ErrorCode.BAD_REQUEST, `权限点不存在或已删除：${unknown.join('、')}`);
+    }
   }
 
   /**

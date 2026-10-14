@@ -7,6 +7,8 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo M7：新增 §3.8 队列管理端点与类型（与 C-08 Job 契约同源，PRD-007 FR-09）
+ * @modified 2026-10-14 donttemo 新增 §3.2 的 GET / PUT /auth/profile 类型（ProfileResult / ProfileUpsertInput）：
+ *   非破坏性新增（追加响应字段与端点），后端 example-api 与前端 mock 已同时实现，避免「mock 全绿、真机 404」
  * @module docs/contracts
  */
 
@@ -75,6 +77,23 @@ export interface MeResult {
   roles: string[];
   permissions: PermissionCode[];
   dataScope: DataScope;
+}
+
+/**
+ * 本人资料响应（GET / PUT /auth/profile）
+ * 与 MeResult 同构，另含手机 / 邮箱；两者只需 `auth:me`，**不依赖 `user:read`**
+ * （个人中心自服务：原先借 PUT /users/:id 保存，普通角色必 3002）。
+ */
+export interface ProfileResult extends MeResult {
+  phone: string | null;
+  email: string | null;
+}
+
+/** PUT /auth/profile 入参：服务端白名单，传其它字段一律 1001 */
+export interface ProfileUpsertInput {
+  nickname?: string;
+  phone?: string;
+  email?: string;
 }
 
 /** 菜单节点（C-05 MenuNode；permissionCode 为 null 表示登录即可见） */

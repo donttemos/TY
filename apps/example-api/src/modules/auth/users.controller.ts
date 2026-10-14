@@ -212,6 +212,8 @@ export class UsersController {
       email: body.email,
       nickname: body.nickname,
     });
+    // 建号即带角色同样要过校验：replaceUserRoles 先删后建，空串/失效 ID 会静默写库
+    if (body.roleIds?.length) await this.auth.assertRoleIds(body.roleIds);
     if (body.roleIds?.length) await this.store.replaceUserRoles(created.id, body.roleIds);
 
     this.audit.record({

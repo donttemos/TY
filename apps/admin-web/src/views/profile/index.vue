@@ -1,9 +1,12 @@
 <!--
  * @file 个人中心
- * @description 三个页签（PRD-005 FR-03）：基本资料（昵称 / 手机 / 邮箱，PUT /users/:id）、
+ * @description 三个页签（PRD-005 FR-03）：基本资料（昵称 / 手机 / 邮箱）、
  *   修改密码（POST /auth/change-password，成功后其它设备下线需重新登录）、登录设备（会话查看与下线）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 修复自服务链路：资料读写改走 GET/PUT /auth/profile（需 auth:me），
+ *   不再借 GET/PUT /users/:id（需 user:read / user:update）——普通角色此前回显为空、保存必 3002；
+ *   另给「下线」按钮补 v-permission="'auth:revoke-session'"（普通角色无此权限，此前可点到并吃 3002）
  * @module admin-web/views
 -->
 
@@ -12,7 +15,6 @@ import { onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, type FormInstance } from 'element-plus';
 import { useUserStore } from '@/store/user';
-import * as userApi from '@/api/user';
 import { BizError, describeBizError } from '@/utils/biz-error';
 
 const router = useRouter();
@@ -51,9 +53,9 @@ onMounted(async () => {
   if (user.profile) {
     profileForm.nickname = user.profile.nickname ?? '';
   }
-  // 手机 / 邮箱以用户表为准（/auth/me 不含这两个字段）
+  // 手机 / 邮箱以本人资料端点为准（/auth/me 不含这两个字段；该端点只需 auth:me，无需 user:read）
   try {
-    const detail = await userApi.fetchUser(user.profile?.id ?? '');
+    const detail = await user.fetchProfile();
     profileForm.phone = detail.phone ?? '';
     profileForm.email = detail.email ?? '';
   } catch {
@@ -72,12 +74,11 @@ async function saveProfile(): Promise<void> {
   }
   profileSaving.value = true;
   try {
-    await userApi.updateUser(user.profile?.id ?? '', {
+    await user.updateProfile({
       nickname: profileForm.nickname,
       phone: profileForm.phone,
       email: profileForm.email,
     });
-    await user.loadProfile();
     ElMessage.success('资料已保存');
   } catch (err) {
     ElMessage.error(err instanceof BizError ? describeBizError(err) : '保存失败');
@@ -183,7 +184,7 @@ function formatTime(value: string): string {
             </el-table-column>
             <el-table-column label="操作" width="100" align="center">
               <template #default="{ row }">
-                <el-button v-if="!row.current" link type="danger" @click="revoke(row.id)">下线</el-button>
+                <el-button v-if="!row.current" v-permission="'auth:revoke-session'" link type="danger" @click="revoke(row.id)">下线</el-button>
               </template>
             </el-table-column>
           </el-table>

@@ -5,6 +5,7 @@
  *   字段 > 8 个建议改用抽屉（由 width/drawer  prop 控制）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 下拉支持 multiple（roleIds 等数组字段必须多选，否则回显为空、提交成字符串）
  * @module admin-web/components
 -->
 
@@ -130,10 +131,11 @@ defineExpose({ applyServerErrors });
               show-password
               :placeholder="field.placeholder ?? `请输入${field.label}`"
             />
-            <!-- 下拉 -->
+            <!-- 下拉（multiple 时值为数组，用于关联字段如 roleIds） -->
             <el-select
               v-else-if="field.type === 'select'"
               v-model="model[field.prop]"
+              :multiple="field.multiple"
               :placeholder="field.placeholder ?? '请选择'"
               clearable
               style="width: 100%"

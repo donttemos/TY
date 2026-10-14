@@ -5,13 +5,15 @@
  *   用户全程无感（TC-WEB-003）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 新增 updateProfile（本人资料自助，走 auth:me 端点）：
+ *   原实现让个人中心调 PUT /users/:id（需 user:update），普通角色保存必 3002
  * @module admin-web/store
  */
 
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import * as authApi from '@/api/auth';
-import type { LoginResult, LoginSession, MeResult, PermissionCode } from '@/api/types';
+import type { LoginResult, LoginSession, MeResult, PermissionCode, ProfileResult } from '@/api/types';
 import { tokenStore } from '@/utils/token';
 import { ensureFreshToken } from '@/utils/request';
 
@@ -91,6 +93,27 @@ export const useUserStore = defineStore('user', () => {
     sessions.value = await authApi.fetchSessions();
   }
 
+  /** 本人资料（含手机 / 邮箱；不依赖 user:read） */
+  function fetchProfile(): Promise<ProfileResult> {
+    return authApi.fetchProfile();
+  }
+
+  /** 更新本人资料（成功后同步头部昵称，无需整页刷新） */
+  async function updateProfile(patch: { nickname?: string; phone?: string; email?: string }): Promise<ProfileResult> {
+    const updated = await authApi.updateProfile(patch);
+    profile.value = {
+      id: updated.id,
+      username: updated.username,
+      nickname: updated.nickname,
+      avatar: updated.avatar,
+      roles: updated.roles,
+      permissions: updated.permissions,
+      dataScope: updated.dataScope,
+    };
+    permissions.value = updated.permissions;
+    return updated;
+  }
+
   /** 下线指定设备 */
   async function revokeSession(sessionId: string): Promise<void> {
     await authApi.revokeSession(sessionId);
@@ -115,6 +138,8 @@ export const useUserStore = defineStore('user', () => {
     logout,
     resetState,
     loadSessions,
+    fetchProfile,
+    updateProfile,
     revokeSession,
     changePassword,
   };

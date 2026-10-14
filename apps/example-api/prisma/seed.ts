@@ -17,6 +17,13 @@
  *   而此前种子从未创建它们，导致连 admin 角色都返回 3002「无操作权限」，该功能面在真实部署中不可达；
  *   ② dedicated 租户的独立库连接串不再写死 sqlite 路径：按 DB_DRIVER 或 SEED_DEDICATED_DB_URL 决定，
  *   非 sqlite 部署下留空（NULL），避免落一个在该部署中永远连不上的密文。
+ * @modified 2026-10-14 donttemo 管理后台前端可达性修复：① 补「队列管理」菜单（/system/queue，需
+ *   system:queue:list）——上一轮只补了权限点，菜单仍缺，而前端动态路由完全由菜单树生成，
+ *   结果 M7 队列管理页在真实部署里既无菜单也无路由（直输 URL 落 403）；
+ *   ② 移除死链菜单「订单中心」(/order → order/refund)：该视图与后端 /api/v1/orders 均不存在，
+ *   真实部署下必然点击落 404；演示用订单列表页只存在于前端 mock（dev/test），故整支移除，
+ *   真实部署的业务菜单示范由 /demo-items 承担（order:read / order:refund 权限点保留，供授权页与前端演示页使用）；
+ *   ③ 普通用户角色补 dict:read：状态列 / 下拉全站走 useDict，缺该权限时普通用户只能看到原始值（0/1）而非「启用/禁用」
  * @module example-api
  */
 
@@ -105,12 +112,15 @@ const GENERATED_PERMISSION_CODES: string[] = [
   'demo-item:delete',
 ];
 
-/** 普通用户角色默认持有的权限（刻意不含 role:read / audit:read / user:assign-role，用于验证越权拦截） */
+/** 普通用户角色默认持有的权限（刻意不含 role:read / audit:read / user:assign-role，用于验证越权拦截）
+ *  dict:read 是例外：全站状态列 / 下拉都走 useDict（PRD-005 FR-07），缺它会让普通用户只看到原始值，
+ *  故按「字典是 UI 枚举元数据」的口径授予；用户写操作（user:create/update/delete）仍一律不授。 */
 const USER_ROLE_CODES: string[] = [
   PERM.AUTH_LOGOUT,
   PERM.AUTH_ME,
   PERM.AUTH_CHANGE_PASSWORD,
   PERM.USER_READ,
+  PERM.DICT_READ,
 ];
 
 /** 菜单定义：name / path / component / icon / 所需权限码 / 排序 / 子菜单 */
@@ -147,19 +157,15 @@ const MENU_TREE: MenuSeed[] = [
       { name: '审计日志', path: '/system/audit-logs', component: 'system/audit-logs', icon: 'file-text', permissionCode: PERM.AUDIT_READ, sort: 3 },
       { name: '菜单管理', path: '/system/menus', component: 'system/menus', icon: 'menu', permissionCode: PERM.MENU_READ, sort: 4 },
       { name: '字典管理', path: '/system/dict', component: 'system/dict', icon: 'collection', permissionCode: PERM.DICT_READ, sort: 5 },
+      // M7 队列管理页（views/system/queue）：前端动态路由由菜单树生成，缺此条则页面不可达（直输 URL 落 403）
+      { name: '队列管理', path: '/system/queue', component: 'system/queue', icon: 'list', permissionCode: QUEUE_PERM_LIST, sort: 6 },
     ],
   },
-  {
-    name: '订单中心',
-    path: '/order',
-    component: 'layout/blank',
-    icon: 'shopping',
-    permissionCode: 'order:read',
-    sort: 3,
-    children: [
-      { name: '订单退款', path: '/order/refund', component: 'order/refund', icon: 'money', permissionCode: 'order:refund', sort: 1 },
-    ],
-  },
+  // 注意：历史种子在此挂了「订单中心 /order → 订单退款(order/refund)」，但 views/order/refund 视图
+  // 与后端 /api/v1/orders 端点都不存在 —— 该菜单在真实部署里必然死链（路由被静默跳过、点击落 404），
+  // 而演示用的订单列表页（apps/admin-web/src/views/demo/orders）与其 /orders 数据源只存在于前端 mock，
+  // 属 dev/test 演示资产。故整支移除：真实部署的业务菜单示范由「DemoItem管理(/demo-items，带真实后端端点)」承担。
+  // 若后续补真实订单模块，按 MENU_TREE 同格式追回即可（component 写 views 下相对路径）。
 ];
 
 /** 清场顺序：外键依赖倒序（关联表 → 主表 → 演示表 → 租户 → 字典） */

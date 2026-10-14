@@ -240,6 +240,43 @@ async function main() {
     const sessions = await api('GET', '/auth/sessions', { token: newAccess });
     check('登录设备列表可查', sessions.body?.code === 0 && Array.isArray(sessions.body?.data), `${sessions.body?.data?.length ?? 0} 个会话`);
 
+    // ---------- 个人资料自服务（GET / PUT /auth/profile） ----------
+    phase('个人资料自服务（/auth/profile，auth:me）');
+    const profile = await api('GET', '/auth/profile', { token: newAccess });
+    check('GET /auth/profile 返回手机与邮箱', profile.body?.code === 0 && 'phone' in (profile.body?.data ?? {}) && 'email' in (profile.body?.data ?? {}));
+
+    const savedProfile = await api('PUT', '/auth/profile', { token: newAccess, body: { nickname: '管理员改名', phone: '13800000001' } });
+    check('本人资料可自助保存', savedProfile.body?.code === 0 && savedProfile.body?.data?.nickname === '管理员改名', `code=${savedProfile.body?.code}`);
+
+    const duplicatePhone = await api('PUT', '/auth/profile', { token: newAccess, body: { phone: '13800000002' } });
+    check('手机号占用他人 → 409', duplicatePhone.body?.code === 1003, `code=${duplicatePhone.body?.code}`);
+
+    const emptyPatch = await api('PUT', '/auth/profile', { token: newAccess, body: {} });
+    check('空补丁 → 1001', emptyPatch.body?.code === 1001, `code=${emptyPatch.body?.code}`);
+
+    // 越权字段必须被忽略：传 status/roleIds 只应落空，账号状态与角色不受影响
+    const escalated = await api('PUT', '/auth/profile', { token: newAccess, body: { status: 0, roleIds: ['r-admin'] } });
+    const meAfterEscalate = await api('GET', '/auth/me', { token: newAccess });
+    check('自助接口不接收 status / roleIds（无提权面）', escalated.body?.code === 1001 && meAfterEscalate.body?.code === 0, `code=${escalated.body?.code}`);
+
+    const aliceProfile = await api('GET', '/auth/profile', { token: aliceToken });
+    check('alice（仅 auth:me + user:read）可读本人资料', aliceProfile.body?.code === 0, `code=${aliceProfile.body?.code}`);
+    const aliceSaved = await api('PUT', '/auth/profile', { token: aliceToken, body: { nickname: 'Alice 改' } });
+    check('alice 可自助保存本人资料（回归：原走 /users/:id 必 3002）', aliceSaved.body?.code === 0, `code=${aliceSaved.body?.code}`);
+
+    // 第二台设备登录（新会话族），用于验证「下线设备」的权限墙
+    await api('POST', '/auth/login', { body: { account: 'alice', password: 'Alice@123456' } });
+    const aliceSessions = await api('GET', '/auth/sessions', { token: aliceToken });
+    const aliceOtherSession = (aliceSessions.body?.data ?? []).find((s) => !s.current);
+    const aliceRevoke = aliceOtherSession
+      ? await api('DELETE', `/auth/sessions/${aliceOtherSession.id}`, { token: aliceToken })
+      : { body: null };
+    check(
+      'alice 无 auth:revoke-session → 3002（mock 与真机同源）',
+      aliceRevoke.body?.code === 3002,
+      `code=${aliceRevoke.body?.code ?? 'n/a'}`,
+    );
+
     // ---------- 其他域 ----------
     phase('角色 / 菜单树 / 审计 / 订单');
     const roles = await api('GET', '/roles', { token: newAccess });

@@ -6,20 +6,29 @@
  *   控制器只做入参校验与转发，业务规则全在 @fw/auth 的 AuthService。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 新增 PUT /auth/profile（本人资料自助维护，需 auth:me）：
+ *   管理后台「个人中心」原先只能借 PUT /users/:id 保存资料，而该端点需 user:update，
+ *   普通角色（仅 auth:me + user:read）改不了自己的资料 → 3002。此处只放开 nickname/phone/email，
+ *   username / status / roleIds 一律不收（防自助提权）。
+ * @modified 2026-10-14 donttemo 补 AuditService 注入：updateProfile 的 this.audit.record 缺字段，
+ *   构造函数没有 audit 依赖，tsc 直接报 TS2339（构建即失败）
  * @module example-api/auth
  */
 
-import { Body, Controller, Delete, Get, Inject, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Req } from '@nestjs/common';
 import { BizError, ErrorCode } from '@fw/core';
 import {
   Audit,
   AUTH_STORE,
+  AuditService,
   AuthService,
   CurrentUser,
   PERM,
   Permissions,
   Public,
   type AuthStore,
+  type AuthUser,
+  type MeResult,
   type MenuNode,
   type RequestUser,
 } from '@fw/auth';
@@ -47,6 +56,7 @@ export function clientUserAgent(request: Request): string | null {
 export class AuthController {
   constructor(
     private readonly auth: AuthService,
+    private readonly audit: AuditService,
     @Inject(AUTH_STORE) private readonly store: AuthStore,
     @Inject(ADMIN_STORE) private readonly admin: AdminStore,
   ) {}
@@ -110,6 +120,72 @@ export class AuthController {
   @Get('me')
   async me(@CurrentUser('id') userId: string): Promise<unknown> {
     return this.auth.me(userId);
+  }
+
+  /**
+   * 本人资料视图（GET / PUT /auth/profile 共用）
+   * /auth/me 只含身份与权限，不含手机 / 邮箱；个人中心回显需要它们，且不该要求 user:read，
+   * 故在此补齐（数据取自 AdminStore，与用户管理页同源，避免两处口径漂移）。
+   */
+  private async profileView(userId: string): Promise<MeResult & { phone: string | null; email: string | null }> {
+    const me = (await this.auth.me(userId)) as MeResult;
+    const detail = await this.admin.findUserListItemById(userId);
+    return { ...me, phone: detail?.phone ?? null, email: detail?.email ?? null };
+  }
+
+  /** 本人资料（个人中心回显；需 auth:me，不依赖 user:read） */
+  @Permissions(PERM.AUTH_ME)
+  @Get('profile')
+  async profile(@CurrentUser('id') userId: string): Promise<unknown> {
+    return this.profileView(userId);
+  }
+
+  /**
+   * 更新本人资料（个人中心自助）
+   * 白名单：nickname / phone / email。账号名是登录与审计锚点、status 与角色属管理面（PUT /users/:id），
+   * 一律不收，避免「自助改状态 / 加角色」的提权路径。
+   * phone / email 与其他账号冲突时 409（与建号唯一性策略一致，不指明冲突字段以避免枚举）。
+   */
+  @Permissions(PERM.AUTH_ME)
+  @Audit({ module: 'auth', action: 'update', targetType: 'user' })
+  @Put('profile')
+  async updateProfile(
+    @CurrentUser('id') userId: string,
+    @Body() body: { nickname?: string; phone?: string; email?: string },
+    @Req() request: Request,
+  ): Promise<unknown> {
+    const patch: Partial<AuthUser> = {};
+    if (body?.nickname !== undefined) patch.nickname = body.nickname;
+    if (body?.phone !== undefined) patch.phone = body.phone;
+    if (body?.email !== undefined) patch.email = body.email;
+    if (Object.keys(patch).length === 0) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'nickname / phone / email 至少传一个');
+    }
+
+    const before = await this.store.findUserById(userId);
+    if (!before) throw new BizError(ErrorCode.NOT_FOUND, '用户不存在');
+
+    for (const candidate of [patch.phone, patch.email]) {
+      if (candidate === undefined || candidate === null || candidate === '') continue;
+      const occupied = await this.store.findUserByAccount(candidate);
+      if (occupied && occupied.id !== userId) {
+        throw new BizError(ErrorCode.CONFLICT, '手机号或邮箱已被其他账号占用');
+      }
+    }
+
+    await this.store.updateUser(userId, patch);
+    this.audit.record({
+      userId,
+      module: 'user',
+      action: 'update',
+      targetType: 'user',
+      targetId: userId,
+      before: { nickname: before.nickname, phone: before.phone, email: before.email },
+      after: { nickname: patch.nickname ?? before.nickname, phone: patch.phone ?? before.phone, email: patch.email ?? before.email },
+      ip: clientIp(request),
+    });
+    // 返回与 GET /auth/profile 同构，前端保存后可直接刷新昵称，少一次往返
+    return this.profileView(userId);
   }
 
   /** 当前用户可见菜单树（后台动态路由数据源） */

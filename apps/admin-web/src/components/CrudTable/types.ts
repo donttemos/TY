@@ -3,8 +3,13 @@
  * @description 标准列表页四要素（原型 §6）：columns / searchForm / api / permission；
  *   formFields 可选，提供后组件内置新增 / 编辑弹窗（创建走 POST、编辑走 GET+PUT）。
  *   新增业务列表页只需一段配置（AC：代码 ≤ 80 行）。
+ *   permission 前缀推导的 `<前缀>:create|update|delete|export` 可用 permissionActions 覆盖：
+ *   后端权限码并非总是「前端名 + 标准动作」（如字典只有 dict:read / dict:write），
+ *   只写 permission 会让按钮因权限码不存在而永不渲染。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 新增 permissionActions 覆盖项与 FormField.multiple（多选下拉，
+ *   修复 roleIds 这类「值为数组」的字段被单选框渲染导致回显为空、提交成字符串的缺陷）
  * @module admin-web/components
  */
 
@@ -59,6 +64,8 @@ export interface FormField {
   /** 字典编码（dict-select） */
   dictCode?: string;
   placeholder?: string;
+  /** 多选（type=select，值为数组；roleIds / permissionIds 等关联字段必须开启） */
+  multiple?: boolean;
   /** 栅格占位（24 分栏，默认 12） */
   span?: number;
   /** 校验规则（el-form rules） */

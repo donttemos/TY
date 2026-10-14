@@ -8,6 +8,9 @@
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo M7：新增队列管理端点（/admin/queue/*：状态、指标、处理器、cron 快照与手动触发、
  *   死信列表/重放/清理、暂停恢复、清空等待），查看类校验 system:queue:list、变更类校验 system:queue:manage
+ * @modified 2026-10-14 donttemo 契约对齐（C-06）：新增 PUT /auth/profile（本人资料自助，校验 auth:me；
+ *   与后端 example-api 同构）；DELETE /auth/sessions/:id 补 auth:revoke-session 权限校验——
+ *   此前 mock 放行而真实后端 3002，属「本机过、真机挂」的隐性缺口
  * @module admin-web/mock
  */
 
@@ -402,23 +405,72 @@ export async function handleMockRequest(
   }
   const ctx = auth.ctx;
 
+  /** 本人资料视图：/auth/me 与 /auth/profile 共用；withContact 时附手机 / 邮箱 */
+  const meView = (withContact: boolean): Record<string, unknown> => ({
+    id: ctx.user.id,
+    username: ctx.user.username,
+    nickname: ctx.user.nickname,
+    avatar: ctx.user.avatar,
+    ...(withContact ? { phone: ctx.user.phone, email: ctx.user.email } : {}),
+    roles: ctx.roles.map((r) => r.code),
+    permissions: userPermissionCodes(database, ctx.user),
+    dataScope: ctx.roles.some((r) => r.dataScope === 'all') ? 'all' : 'self',
+  });
+
   // ---- 认证域 ----
   if (path === '/auth/me' && method === 'GET') {
-    send(
-      res,
-      CODE.OK,
-      'ok',
-      {
-        id: ctx.user.id,
-        username: ctx.user.username,
-        nickname: ctx.user.nickname,
-        avatar: ctx.user.avatar,
-        roles: ctx.roles.map((r) => r.code),
-        permissions: userPermissionCodes(database, ctx.user),
-        dataScope: ctx.roles.some((r) => r.dataScope === 'all') ? 'all' : 'self',
-      },
+    send(res, CODE.OK, 'ok', meView(false), traceId);
+    return { handled: true };
+  }
+  // 本人资料（个人中心回显；只需 auth:me，不依赖 user:read）
+  if (path === '/auth/profile' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'auth:me');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    send(res, CODE.OK, 'ok', meView(true), traceId);
+    return { handled: true };
+  }
+  if (path === '/auth/profile' && method === 'PUT') {
+    const perm = requirePermission(database, ctx, 'auth:me');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const patch: { nickname?: string; phone?: string; email?: string } = {};
+    if (typeof body.nickname === 'string') patch.nickname = body.nickname;
+    if (typeof body.phone === 'string') patch.phone = body.phone;
+    if (typeof body.email === 'string') patch.email = body.email;
+    if (Object.keys(patch).length === 0) {
+      send(res, CODE.BAD_REQUEST, 'nickname / phone / email 至少传一个', null, traceId);
+      return { handled: true };
+    }
+    for (const candidate of [patch.phone, patch.email]) {
+      if (!candidate) continue;
+      const occupied = database.users.find((u) => (u.phone === candidate || u.email === candidate) && u.id !== ctx.user.id);
+      if (occupied) {
+        send(res, CODE.CONFLICT, '手机号或邮箱已被其他账号占用', null, traceId);
+        return { handled: true };
+      }
+    }
+    Object.assign(ctx.user, patch);
+    database.auditLogs.push({
+      id: randomId('a'),
+      userId: ctx.user.id,
+      module: 'user',
+      action: 'update',
+      targetType: 'user',
+      targetId: ctx.user.id,
+      beforeValue: null,
+      afterValue: { ...patch },
+      ip: '127.0.0.1',
+      userAgent: 'mock',
       traceId,
-    );
+      createdAt: new Date().toISOString(),
+    });
+    // 与 GET /auth/profile 同构返回，前端保存后可直接刷新头部昵称
+    send(res, CODE.OK, 'ok', meView(true), traceId);
     return { handled: true };
   }
   if (path === '/auth/menus' && method === 'GET') {
@@ -479,6 +531,11 @@ export async function handleMockRequest(
     return { handled: true };
   }
   if (path.startsWith('/auth/sessions/') && method === 'DELETE') {
+    const perm = requirePermission(database, ctx, 'auth:revoke-session');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
     const sessionId = path.slice('/auth/sessions/'.length);
     const session = database.sessions.find((s) => s.id === sessionId && s.userId === ctx.user.id);
     if (!session) {

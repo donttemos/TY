@@ -5,6 +5,8 @@
  *   注意：菜单变更影响动态路由，保存后需重新登录生效（权限同源，见 store/permission）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 补按钮级权限：新建/新增子级 = menu:create，编辑 = menu:update，
+ *   删除 = menu:delete（此前仅页面级可见性由菜单树控制，只读角色仍能点到写操作并吃 3002）
  * @module admin-web/views
 -->
 
@@ -181,7 +183,7 @@ async function handleDelete(row: MenuManageItem): Promise<void> {
     <div class="fw-card">
       <div class="fw-flex-between" style="margin-bottom: 12px">
         <span class="fw-text-secondary">菜单树（动态路由数据源，/auth/menus 按权限下发）</span>
-        <el-button type="primary" @click="openCreate()">+ 新建菜单</el-button>
+        <el-button v-permission="'menu:create'" type="primary" @click="openCreate()">+ 新建菜单</el-button>
       </div>
       <el-table v-loading="loading" :data="treeData" row-key="id" border default-expand-all :tree-props="{ children: 'children' }">
         <el-table-column prop="name" label="名称" min-width="160" />
@@ -198,9 +200,9 @@ async function handleDelete(row: MenuManageItem): Promise<void> {
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
             <div class="fw-table-actions">
-              <el-button link type="primary" @click="openCreate(row.id)">新增子级</el-button>
-              <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
-              <el-button link type="danger" @click="handleDelete(row)">删除</el-button>
+              <el-button v-permission="'menu:create'" link type="primary" @click="openCreate(row.id)">新增子级</el-button>
+              <el-button v-permission="'menu:update'" link type="primary" @click="openEdit(row)">编辑</el-button>
+              <el-button v-permission="'menu:delete'" link type="danger" @click="handleDelete(row)">删除</el-button>
             </div>
           </template>
         </el-table-column>

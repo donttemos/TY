@@ -4,6 +4,7 @@
  *   刷新会话、登出黑名单、改密（其它设备下线 + 前后值审计）、me/菜单树、角色授权与权限缓存失效
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 补 assignUserRoles / grantRolePermissions 写库前 ID 校验的回归用例（真机事故：roleIds:[""] 静默写库）
  * @module @fw/auth
  */
 import { describe, expect, it } from 'vitest';
@@ -262,5 +263,40 @@ describe('AuthService · 查询与授权', () => {
     expect(result.permissions).toContain(PERM.USER_DELETE);
     const roles = await h.store.listRolesByUserId(seeded.normal.id);
     expect(roles.map((r) => r.code)).toEqual([ROLE.ADMIN]);
+  });
+
+  it('assignUserRoles 拒绝空串角色 ID（真机事故回归：roleIds:[""] 曾静默摧毁 admin 角色）', async () => {
+    const h = createHarness();
+    const seeded = await h.seed();
+    await expectCode(
+      h.service.assignUserRoles(seeded.normal.id, [''], seeded.admin.id, '10.0.0.1'),
+      ErrorCode.BAD_REQUEST,
+    );
+    // 校验不过则「先删后建」根本不能执行：既有角色必须原样保留
+    expect((await h.store.listRolesByUserId(seeded.normal.id)).map((r) => r.code)).toEqual([ROLE.USER]);
+  });
+
+  it('assignUserRoles 拒绝不存在的角色 ID（含混合合法 ID 的整批拒绝）', async () => {
+    const h = createHarness();
+    const seeded = await h.seed();
+    await expectCode(
+      h.service.assignUserRoles(seeded.normal.id, [seeded.userRole.id, 'no-such-role'], seeded.admin.id, '10.0.0.1'),
+      ErrorCode.BAD_REQUEST,
+    );
+    expect((await h.store.listRolesByUserId(seeded.normal.id)).map((r) => r.code)).toEqual([ROLE.USER]);
+  });
+
+  it('grantRolePermissions 拒绝空串与不存在的权限点 ID（同类写库前校验）', async () => {
+    const h = createHarness();
+    const seeded = await h.seed();
+    await expectCode(
+      h.service.grantRolePermissions(seeded.userRole.id, [''], seeded.admin.id, '10.0.0.1'),
+      ErrorCode.BAD_REQUEST,
+    );
+    await expectCode(
+      h.service.grantRolePermissions(seeded.userRole.id, ['no-such-perm'], seeded.admin.id, '10.0.0.1'),
+      ErrorCode.BAD_REQUEST,
+    );
+    expect(await h.store.listPermissionIdsByRoleId(seeded.userRole.id)).toEqual([]);
   });
 });

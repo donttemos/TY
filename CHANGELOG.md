@@ -14,6 +14,78 @@
 
 ## [Unreleased]
 
+### Fixed（管理后台前端：文档标注「已交付」但真机不可用/不可点的 15 项缺陷，2026-10-14）
+
+> 逐页核对 [PRD-005](./docs/prd/prd-005-admin-template.md) + [原型 §3 页面清单](./docs/25-ui-prototype.md) 与 `apps/admin-web/src`，
+> 发现上一轮的验收是**在 mock 上完成的**：mock 自建了一套后端并不存在的权限码（`dict:create/update/delete`），
+> 菜单形状也与后端种子不同（mock 有队列管理、有订单列表，种子没有；种子却有一条指向不存在视图的死链菜单）。
+> 结果是 6 项 P0 里 5 项只在真机暴露。本轮全部按「前端 + 后端小改 + 种子」三层修复，并补冒烟回归。
+> 完整清单（现象 / 触发条件 / 根因 / 修复后预期行为 / 交互与数据展示要求 / 兼容性）见
+> **[管理后台功能补充与缺陷修复方案](./docs/99-admin-web-enhancement-and-fixes.md)**。
+
+- **`CrudTable` 操作列整列消失（审计「详情」不可达）**：`v-if` 只认 `formFields`/`canDelete()`，而审计页无表单、
+  `audit:delete` 权限码不存在 → 字段级 diff 入口永久消失（违反 PRD-005 AC6）。改为同时探测 `actions-extra` 插槽。
+- **字典项维护按钮永不渲染**：`permission="dict"` 推导出 `dict:create/update/delete`，后端权限常量只有 `dict:read`/`dict:write`。
+  新增 `permissionActions` 显式覆盖动作码，字典项与分类统一绑定 `dict:write`。
+- **生成器产出页面菜单不可达**：`fw gen crud` 写库 `component: 'views/<model>/index'`（相对 `web/src`），
+  而前端只按「views 相对路径」拼候选 → 解析失败被静默跳过。解析前归一化（`src/`、`views/` 前缀与 `.vue` 后缀），
+  两种约定同时兼容；并加单测护栏。
+- **真机队列管理页不可达**：M7 只补了 `system:queue:list/manage` 权限点，未补 `/system/queue` 菜单，
+  而动态路由完全由菜单树生成 → 无菜单即无路由。种子补菜单（`docs/99` §3 BUG-04）。
+- **个人中心保存资料必失败**：前端借 `PUT /users/:id`（需 `user:update`）保存、`GET /users/:id`（需 `user:read`）回显，
+  普通角色（仅 `auth:me`+`user:read`）回显为空且保存 `3002`。新增 `GET/PUT /api/v1/auth/profile`（仅需 `auth:me`）：
+  GET 回显 `phone`/`email`，PUT 白名单只收 `nickname/phone/email`（`username`/`status`/`roleIds` 拒收，防自助提权），
+  手机/邮箱冲突 `1003`；mock 与 C-06 契约同步。
+- **越权按钮可点**（用户页分配角色/重置密码/启用禁用、菜单页增删改、字典分类增删改、队列暂停恢复、个人中心下线设备）：
+  按服务端真实权限码补齐 `v-permission`，无权限不渲染。
+- **用户表单 `roleIds` 类型错**：数组字段被渲染成单选 → 编辑回显为空、提交成字符串（服务端要求字符串数组 `1001`）。
+  新增 `FormField.multiple`，`roleIds` 改多选；`number` 字段初值由空串改 `undefined`。
+- **`keep-alive :include="[]"` 恒不缓存**（与组件注释矛盾，切回标签重复请求）：改为 `:max="12"` LRU，键取 `fullPath`。
+- **隐藏菜单仍出现在侧边栏**：后端 `/auth/menus` 不按 `visible` 过滤，前端只过滤了顶层 → `visibleMenus()` 改递归剪枝。
+- **死 UI「导出」**：审计页 `/audit-logs/export` 未实现（api-spec 已标 Backlog）却挂了按钮；用户页只弹提示。
+  后端就绪前移除按钮，`CrudTable` 的 `export` 事件钩子保留。
+- **字典标签在无 `dict:read` 角色下净失败**：`/dict/:code` 实际需 `dict:read`（api-spec 原标「登录后」）。前端无权限时
+  短路不发请求并降级显示原值；普通用户角色补 `dict:read`；api-spec §3.6 标注更正。
+- **死链菜单「订单退款」**：种子指向不存在的 `views/order/refund`，且后端无 `/api/v1/orders`（订单页仅存在于 mock）。
+  移除该菜单整支，业务菜单示范由 `/demo-items` 承担（`order:read`/`order:refund` 权限点保留）。
+- **批量删除假成功**：逐条删除但只 `catch` 首个错误、失败也弹「删除成功」且不刷新。改为累计成功/失败数并区分
+  `success`/`warning`，无论成败都刷新列表并清空选择。
+- **真机/mock 契约漂移**：mock 新增 `GET/PUT /auth/profile`；`DELETE /auth/sessions/:id` 补 `auth:revoke-session` 校验
+  （此前 mock 放行、真机 `3002`）。
+
+### Added（管理后台前端：方案文档与验证）
+
+- 新增 **[管理后台功能补充与缺陷修复方案](./docs/99-admin-web-enhancement-and-fixes.md)**：逐页现状核对、待新增模块
+  （租户管理页 / 异步导出任务中心 / 403 整页视图）与待完善模块（字典消费、工作台三态、菜单图标与权限码选择器、审计模块字典化）、
+  15 项缺陷表、交互流程与数据展示规范、兼容性要求、验证证据与遗留项。
+- `apps/admin-web/scripts/smoke-mock.mjs`：新增「个人资料自服务」冒烟段 8 条断言（含 `409`/`1001`/越权字段拒收/
+  「alice 可自助保存」回归）；冒烟总数 57 → **65（全通过）**。
+- `apps/admin-web/src/store/__tests__/permission.test.ts`：新增 2 条回归护栏（`visibleMenus` 递归剪枝、
+  生成器 `views/<model>/index` 可解析）；单测 **31 通过**。
+- `docs/40-api-spec.md` §3.2 新增 `GET`/`PUT /auth/profile`；`docs/contracts/api-web.ts` 新增
+  `ProfileResult` / `ProfileUpsertInput`。
+
+### Fixed（角色/权限分派缺写库前校验：`roleIds:[""]` 静默写库可致用户权限归零，2026-10-14）
+
+> 真机写端验收时，验收脚本取「admin 角色 id」的表达式失效返回空串，`PUT /users/:id` 载荷变成
+> `{"roleIds":["","<探针角色>"]}`——接口返回 `code:0`，随后 admin 对**所有**端点返回 3002。
+> 根因是产品缺陷而非脚本问题：`replaceUserRoles` / `replaceRolePermissions` 都是「先 deleteMany 再 create」的
+> 全量覆盖，**入参没有任何校验**；而 `user_role.role_id` 是裸 `String` 且 schema 无外键关系，
+> 空串在 SQLite / PostgreSQL 上都能静默插入。用户的角色集于是被替换成「无效关联」，
+> 权限聚合直接归零，且从接口侧完全看不出是数据损坏。同类风险同样存在于角色授权（`permissionIds`）。
+
+- **`@fw/auth` `AuthService`**：新增 `assertRoleIds` / `assertPermissionIds`——非空串、去重、
+  全部存在且未软删（`listRoles()` / `listPermissions()` 走仓储层已过滤 `deleted_at`），
+  不过校验即抛 `1001` 并列出未知 ID；`assignUserRoles` 与 `grantRolePermissions` 在写库**前**调用，
+  把「静默数据损坏」变成「明确参数错误」。
+- **`example-api` `users.controller.ts`**：`POST /users` 建号即带角色的路径同样补校验
+  （原先直接调 `store.replaceUserRoles`，绕过了服务层）。
+- **回归护栏**：`packages/auth` 单测 +3（空串拒绝、不存在 ID 整批拒绝、写库不执行既有角色原样保留；
+  权限侧同源三例）；`smoke-admin.mjs` +3（`PUT /users/:id` 空串/不存在角色 ID → 1001，
+  `PUT /roles/:id/permissions` 空串权限点 ID → 1001）。
+- **真机修复**：备份三表后单事务重建 admin 角色关联、清除探针角色与测试残留，
+  并按 `auth:perm:*` 精准失效 Redis 权限缓存（不等 60s TTL）；修复后 27/27 验收全绿。
+
 ### Fixed（C-06 契约收口：前端按契约全量调用、后端只实现演示子集，接入真实 API 后 25 个端点集体 404，2026-10-14）
 
 > 域名上线后点管理后台页面，浏览器接连报 `Cannot GET /api/v1/auth/sessions`、`Cannot GET /api/v1/users/:id`、

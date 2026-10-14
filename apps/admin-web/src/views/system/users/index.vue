@@ -7,6 +7,11 @@
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo 导出提示从模板内联表达式改为具名 handleExport：vue-tsc 3 下
  *   模板内直接调用 ElMessage 会被解析为组件实例类型（TS2339），具名方法同时更易测试
+ * @modified 2026-10-14 donttemo 修复 2 处：①「分配角色 / 重置密码 / 启用禁用」三个行操作按钮未做
+ *   按钮级权限控制，普通角色（仅 user:read）能点到并吃 3002 → 按服务端真实权限码
+ *   user:assign-role / user:reset-password / user:update 加 v-permission；
+ *   ② 表单 roleIds 是 id 数组却被渲染成单选框，编辑时回显为空、提交成字符串（服务端要求字符串数组）
+ *   → 字段改多选（multiple: true）
  * @module admin-web/views
 -->
 
@@ -19,7 +24,7 @@ import * as userApi from '@/api/user';
 import * as roleApi from '@/api/role';
 import { useDictStore } from '@/store/dict';
 import { BizError, describeBizError } from '@/utils/biz-error';
-import type { CrudColumn, FormField, SearchField, SearchModel } from '@/components/CrudTable/types';
+import type { CrudColumn, FormField, SearchField } from '@/components/CrudTable/types';
 import type { RoleListItem, UserListItem } from '@/api/types';
 
 const dictStore = useDictStore();
@@ -48,7 +53,7 @@ const formFields: FormField[] = [
   { prop: 'phone', label: '手机', type: 'input' },
   { prop: 'email', label: '邮箱', type: 'input' },
   { prop: 'status', label: '状态', type: 'dict-select', dictCode: 'user_status', span: 12 },
-  { prop: 'roleIds', label: '角色', type: 'select', options: [], span: 12 },
+  { prop: 'roleIds', label: '角色', type: 'select', options: [], multiple: true, span: 12 },
 ];
 
 const crudRef = ref<InstanceType<typeof CrudTable>>();
@@ -144,11 +149,6 @@ function handleRefresh(): void {
   crudRef.value?.refresh();
   void dictStore.invalidate();
 }
-
-/** 导出：演示环境仅提示已发起（真实实现走 C-06 契约的导出端点） */
-function handleExport(payload: { search: SearchModel; sort: string | null }): void {
-  ElMessage.info(`导出已发起（演示环境）：${JSON.stringify(payload.search)}`);
-}
 </script>
 
 <template>
@@ -163,8 +163,6 @@ function handleExport(payload: { search: SearchModel; sort: string | null }): vo
       create-title="新建用户"
       edit-title="编辑用户 #{id}"
       selection
-      exportable
-      @export="handleExport"
       @refresh="handleRefresh"
     >
       <template #cell-roles="{ row }">
@@ -180,9 +178,9 @@ function handleExport(payload: { search: SearchModel; sort: string | null }): vo
         {{ formatTime(row.createdAt) }}
       </template>
       <template #actions-extra="{ row }">
-        <el-button link type="primary" @click="openAssign(row)">分配角色</el-button>
-        <el-button link type="warning" @click="handleResetPassword(row)">重置密码</el-button>
-        <el-button link :type="row.status === 1 ? 'danger' : 'success'" @click="toggleStatus(row)">
+        <el-button v-permission="'user:assign-role'" link type="primary" @click="openAssign(row)">分配角色</el-button>
+        <el-button v-permission="'user:reset-password'" link type="warning" @click="handleResetPassword(row)">重置密码</el-button>
+        <el-button v-permission="'user:update'" link :type="row.status === 1 ? 'danger' : 'success'" @click="toggleStatus(row)">
           {{ row.status === 1 ? '禁用' : '启用' }}
         </el-button>
       </template>
