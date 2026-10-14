@@ -214,6 +214,12 @@
 - 修复动态路由子路径拼接缺陷：菜单全路径（如 `/system/users`）曾直接作为子路由相对路径，导致 `/system` 下的用户页拼成 `/system/system/users` 无法命中；现按父级前缀换算相对路径（单测回归护栏）。
 - 修复 CrudTable 非分页接口响应兼容：接口约定返回裸数组，现兼容误包 `{ items }` 的响应，避免 el-table 拿到非数组崩溃。
 
+### Fixed（v0.2.0 发布前验收修复，2026-10-14）
+
+- **CI 纳入 `@fw/tenant`**：M8 T-M8-01 新增该包时漏加构建与覆盖率循环（`@fw/transport` / `@fw/telemetry` 已纳入），干净环境下 `example-api` 取不到其 `dist` 会构建失败；同时补入「M8 多租户端到端冒烟」步骤（`smoke-tenant.mjs`）。详见 [v0.2.0 发布验收报告](./docs/90-release-v0.2.0.md) §5 F2-01/F2-03。
+- **`@fw/tenant` 覆盖率补齐**：`tenant.middleware.ts`（9.52%）与 `tenant.module.ts`（46.15%）原仅由端到端冒烟覆盖，包整体 lines 71.42% / functions 56% 低于 85% 门禁；补中间件 9 项 + 模块装配 5 项单测后达 **99% statements / 98.9% lines**（用例 19 → 33）。
+- **应用自报版本**：`apps/example-api` 的 `/api/v1/demo/ok` 返回值由 `framework: 'v0.1.0'` 更新为 `'v0.2.0'`。
+
 ## [0.1.0] - 2026-10-13
 
 > 首个可运行版本。含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层。

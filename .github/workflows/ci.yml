@@ -18,6 +18,9 @@
 #   端到端冒烟步骤（本地 mock OTLP 收集器；未启用/全采/跨服务同 traceId/采样门控/错误全采/配置守卫）
 # @modified 2026-10-14 donttemo M8 T-M8-07/08：新增 Helm Chart 渲染与清单校验步骤、M8 三大关键演练步骤
 #   （演练的远程库段落由 SMOKE_DB_SWITCH 门控、真实 Redis 段落由 SMOKE_REDIS_URL 门控，CI 未设置则跳过）
+# @modified 2026-10-14 donttemo v0.2.0 发布前修订（验收发现并修复）：补入 @fw/tenant——M8 T-M8-01 新增该包时
+#   漏加构建与覆盖率循环，CI 干净环境下 example-api 会取不到其 dist 而构建失败；同时新增 M8 多租户端到端
+#   冒烟步骤（smoke-tenant.mjs），此前多租户仅有单测与本地冒烟、无 CI 门禁
 # @module ci
 
 name: CI
@@ -51,7 +54,7 @@ jobs:
       - name: 构建全部包
         run: |
           pnpm --filter @fw/db exec prisma generate --schema prisma/test-schema.prisma
-          for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/transport @fw/telemetry; do
+          for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/tenant @fw/transport @fw/telemetry; do
             pnpm --filter $pkg run build
           done
           pnpm --filter example-api run build
@@ -61,7 +64,7 @@ jobs:
       # @fw/cli 的生成器测试自带临时工程与回滚断言（PRD-006 FR-07/08），不依赖真实数据库
       - name: 单元测试（SQLite）
         run: |
-          for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/transport @fw/telemetry; do
+          for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/tenant @fw/transport @fw/telemetry; do
             pnpm --filter $pkg run test:coverage
           done
 
@@ -103,6 +106,13 @@ jobs:
       - name: M7 队列端到端冒烟（SQLite）
         working-directory: apps/example-api
         run: node scripts/smoke-queue.mjs
+
+      # M8 多租户端到端冒烟：三级回退解析 + fail-closed + dedicated 独立库路由 + 数据权限四档
+      # （PRD-008 FR-01~05 / TC-TNT-001~004）；脚本自带服务生命周期（端口 3300），
+      # 复用上一步已迁移/播种的 SQLite 库，独立库文件由脚本自建
+      - name: M8 多租户端到端冒烟（SQLite）
+        working-directory: apps/example-api
+        run: node scripts/smoke-tenant.mjs
 
       # M8 传输层切换端到端冒烟：in-process 往返/统计/就绪探针/错误传播 + 配置守卫（PRD-008 FR-06 / TC-TNT-005）
       # 脚本自带服务生命周期（端口 3400/3401，分阶段以不同 TRANSPORT_* 配置起停）；
