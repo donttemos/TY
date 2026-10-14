@@ -192,6 +192,22 @@ async function main() {
     check('用户分页结构', list.body?.code === 0 && Array.isArray(listData?.items) && typeof listData?.total === 'number', `total=${listData?.total}`);
     check('列表项含 roleIds（C-06 契约字段）', listData?.items?.every((u) => Array.isArray(u.roleIds)));
 
+    // BUG-15：列表排序参数（api-spec §1.5）—— mock 必须与真实后端同语义，否则 dev 全绿、真机 400
+    const sortedList = await api('GET', '/users?page=1&pageSize=20&sort=username:asc', { token: adminToken });
+    const sortedNames = (sortedList.body?.data?.items ?? []).map((u) => u.username);
+    const sortedAscending = sortedNames.every((name, index) => index === 0 || sortedNames[index - 1] <= name);
+    check('用户列表 sort=username:asc 生效（升序，长度 ≥ 2）',
+      sortedList.body?.code === 0 && sortedNames.length >= 2 && sortedAscending,
+      `names=${JSON.stringify(sortedNames)}`);
+
+    const badSortField = await api('GET', '/users?sort=password:desc', { token: adminToken });
+    check('未知排序字段 → 1001（与后端白名单同语义，不静默忽略）',
+      badSortField.body?.code === 1001, `code=${badSortField.body?.code}`);
+
+    const badSortDir = await api('GET', '/users?sort=username:up', { token: adminToken });
+    check('非法排序方向 → 1001（与后端同语义）',
+      badSortDir.body?.code === 1001, `code=${badSortDir.body?.code}`);
+
     const smokeName = `smoke_${Date.now().toString(36)}`;
     const created = await api('POST', '/users', { token: adminToken, body: { username: smokeName, password: 'Smoke@123456', nickname: '冒烟用户', roleIds: [] } });
     check('新建用户', created.body?.code === 0 && Boolean(created.body?.data?.id), `code=${created.body?.code}`);

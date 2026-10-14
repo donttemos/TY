@@ -12,6 +12,8 @@
  *   user:assign-role / user:reset-password / user:update 加 v-permission；
  *   ② 表单 roleIds 是 id 数组却被渲染成单选框，编辑时回显为空、提交成字符串（服务端要求字符串数组）
  *   → 字段改多选（multiple: true）
+ * @modified 2026-10-14 donttemo BUG-15：开启服务端排序的列（账号 / 昵称 / 状态 / 最近登录 / 创建时间），
+ *   字段名由组件按 api-spec §1.5 转 snake_case 发送；后端白名单与此一致
  * @module admin-web/views
 -->
 
@@ -30,14 +32,14 @@ import type { RoleListItem, UserListItem } from '@/api/types';
 const dictStore = useDictStore();
 
 const columns: CrudColumn[] = [
-  { prop: 'username', label: '账号', minWidth: 120 },
-  { prop: 'nickname', label: '昵称', minWidth: 100 },
+  { prop: 'username', label: '账号', minWidth: 120, sortable: true },
+  { prop: 'nickname', label: '昵称', minWidth: 100, sortable: true },
   { prop: 'phone', label: '手机', minWidth: 120 },
   { prop: 'email', label: '邮箱', minWidth: 160 },
   { prop: 'roleIds', label: '角色', minWidth: 140, slot: 'roles' },
-  { prop: 'status', label: '状态', width: 90, align: 'center', slot: 'status' },
-  { prop: 'lastLoginAt', label: '最近登录', width: 180, slot: 'lastLoginAt' },
-  { prop: 'createdAt', label: '创建时间', width: 180, slot: 'createdAt' },
+  { prop: 'status', label: '状态', width: 90, align: 'center', slot: 'status', sortable: true },
+  { prop: 'lastLoginAt', label: '最近登录', width: 180, slot: 'lastLoginAt', sortable: true },
+  { prop: 'createdAt', label: '创建时间', width: 180, slot: 'createdAt', sortable: true },
 ];
 
 const searchForm: SearchField[] = [

@@ -33,6 +33,14 @@ export interface CrudColumn {
   showOverflowTooltip?: boolean;
   /** 排序（服务端排序，透传 sort 参数） */
   sortable?: boolean;
+  /**
+   * 服务端排序字段名（BUG-15）
+   *
+   * api-spec §1.5 约定 `sort=<snake_case 字段>:<asc|desc>`，而列 prop 通常是 camelCase；
+   * 未配置时由 prop 自动转 snake_case（`createdAt` → `created_at`）；
+   * 若某列需要按「非展示字段」排序（如按 id 排序但展示序号），在此显式声明。
+   */
+  sortField?: string;
   /** 自定义单元格插槽名（默认取 prop） */
   slot?: string;
   /** 列设置默认隐藏（用户可自行打开） */

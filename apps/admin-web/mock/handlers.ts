@@ -13,6 +13,9 @@
  *   此前 mock 放行而真实后端 3002，属「本机过、真机挂」的隐性缺口
  * @modified 2026-10-14 donttemo GET /auth/menus 去掉 visible 过滤，与真实后端行为对齐（后端只按权限码
  *   过滤，可见性由前端 visibleMenus() 剪枝）—— 原 mock 过滤会让前端剪枝在 dev 下永不执行
+ * @modified 2026-10-14 donttemo BUG-15：GET /users 支持 `sort`（白名单解析 + 未知字段/非法方向 400 +
+ *   默认 createdAt desc + id asc tie-breaker），与 example-api 的 parseSortQuery 同语义 —— mock 若放宽
+ *   校验即产生「dev 全绿、真机 400」的假绿
  * @module admin-web/mock
  */
 
@@ -376,6 +379,100 @@ function paginate<T>(items: T[], page: number, pageSize: number): { items: T[]; 
   return { items: items.slice(start, start + pageSize), total, page, pageSize, hasMore: start + pageSize < total };
 }
 
+/**
+ * 用户列表排序白名单（BUG-15，与 example-api 的 USER_SORT_FIELDS 逐项一致）
+ *
+ * mock 必须与真实后端**零差异**：一旦 mock 放宽了这里，就会出现「dev 全绿、真机 400」。
+ */
+const MOCK_USER_SORT_FIELDS: Record<string, string> = {
+  id: 'id',
+  username: 'username',
+  nickname: 'nickname',
+  status: 'status',
+  created_at: 'createdAt',
+  updated_at: 'updatedAt',
+  last_login_at: 'lastLoginAt',
+};
+
+/** 单次请求允许的最大排序字段数（与后端 SORT_QUERY_MAX_ITEMS 对齐） */
+const MOCK_SORT_MAX_ITEMS = 5;
+
+/**
+ * 解析 sort 查询参数（BUG-15）——与后端 `parseSortQuery` 同语义：
+ * 未知字段 / 非法方向 / 超出上限一律返回 `error`（由调用方回 400/1001），**不静默忽略**。
+ * 空串或未传返回空数组（调用方回落默认排序）。
+ */
+function parseMockSort(
+  raw: string | null,
+  fields: Record<string, string>,
+): { items: Array<[string, 'asc' | 'desc']> } | { error: string } {
+  const source = (raw ?? '').trim();
+  if (source === '') return { items: [] };
+  const segments = source.split(',').map((segment) => segment.trim()).filter((segment) => segment !== '');
+  if (segments.length === 0) return { items: [] };
+  if (segments.length > MOCK_SORT_MAX_ITEMS) {
+    return { error: `sort 字段数超出上限（最多 ${MOCK_SORT_MAX_ITEMS} 个）` };
+  }
+
+  const items: Array<[string, 'asc' | 'desc']> = [];
+  const seen = new Map<string, number>();
+  for (const segment of segments) {
+    const separator = segment.indexOf(':');
+    const param = (separator === -1 ? segment : segment.slice(0, separator)).trim();
+    const rawDirection = (separator === -1 ? '' : segment.slice(separator + 1)).trim();
+    if (param === '') return { error: 'sort 字段名不能为空' };
+    const field = fields[param];
+    if (!field) return { error: `sort 字段不支持：${param}` };
+    let direction: 'asc' | 'desc' = 'asc';
+    if (rawDirection !== '') {
+      const lowered = rawDirection.toLowerCase();
+      if (lowered !== 'asc' && lowered !== 'desc') return { error: `sort 方向只能为 asc 或 desc：${param}` };
+      direction = lowered;
+    }
+    const previous = seen.get(field);
+    if (previous === undefined) {
+      seen.set(field, items.length);
+      items.push([field, direction]);
+    } else {
+      items[previous] = [field, direction];
+    }
+  }
+  return { items };
+}
+
+/**
+ * 应用排序（BUG-15）：未传排序时回落 `defaultField defaultDirection`；始终追加 `id asc` 作为
+ * tie-breaker，保证与后端一样在 `skip/take` 下结果稳定。
+ */
+function applyMockSort<T extends object>(
+  rows: T[],
+  entries: Array<[string, 'asc' | 'desc']>,
+  defaultField: string,
+  defaultDirection: 'asc' | 'desc',
+): T[] {
+  const effective: Array<[string, 'asc' | 'desc']> = entries.length ? entries : [[defaultField, defaultDirection]];
+  const ordered = effective.some(([field]) => field === 'id')
+    ? effective
+    : [...effective, ['id', 'asc'] as [string, 'asc' | 'desc']];
+
+  return [...rows].sort((a, b) => {
+    const left = a as unknown as Record<string, unknown>;
+    const right = b as unknown as Record<string, unknown>;
+    for (const [field, direction] of ordered) {
+      const leftValue = left[field];
+      const rightValue = right[field];
+      if (leftValue === rightValue) continue;
+      let diff: number;
+      if (leftValue === null || leftValue === undefined) diff = -1;
+      else if (rightValue === null || rightValue === undefined) diff = 1;
+      else if (typeof leftValue === 'number' && typeof rightValue === 'number') diff = leftValue - rightValue;
+      else diff = String(leftValue) < String(rightValue) ? -1 : String(leftValue) > String(rightValue) ? 1 : 0;
+      if (diff !== 0) return direction === 'desc' ? -diff : diff;
+    }
+    return 0;
+  });
+}
+
 /** 主处理器：返回 handled=false 时由中间件调用 next() 放行 */
 export async function handleMockRequest(
   req: IncomingMessage,
@@ -574,6 +671,13 @@ export async function handleMockRequest(
     if (status !== null && status !== '') items = items.filter((u) => String(u.status) === status);
     const roleId = query.get('role_id');
     if (roleId) items = items.filter((u) => u.roleIds.includes(roleId));
+    // 排序（BUG-15，与 example-api 同语义）：白名单外字段 / 非法方向一律 400/1001；未传按 createdAt desc
+    const parsedSort = parseMockSort(query.get('sort'), MOCK_USER_SORT_FIELDS);
+    if ('error' in parsedSort) {
+      send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
+      return { handled: true };
+    }
+    items = applyMockSort(items, parsedSort.items, 'createdAt', 'desc');
     const result = paginate(items, page, pageSize);
     send(res, CODE.OK, 'ok', { ...result, items: result.items.map(stripUser) }, traceId);
     return { handled: true };

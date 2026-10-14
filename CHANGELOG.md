@@ -16,7 +16,9 @@
 
 ### Added
 
-- **列表排序参数（api-spec §1.5 落地，BUG-15 后端部分）**：`@fw/db` 新增 `parseSortQuery()` / `parseSortItems()`，把 `sort=<snake_case 字段>:<asc|desc>`（多字段逗号分隔）解析为框架排序结构，并按**字段白名单**校验——未知字段 / 非法方向 / 超过 5 个字段一律 `400/1001`，**不静默忽略**（静默忽略会让客户端以为排序已生效，且任意 query 参数直入 orderBy 可推断未暴露字段）。`@fw/auth` 的 `UserQuery` 新增 `sort`，Prisma 与内存两套 store 均消费，并始终追加主键 tie-breaker，保证 `skip/take` 分页在同一排序键下稳定（TC-ORM-002）。`GET /api/v1/users` 已接线（白名单：`id` / `username` / `nickname` / `status` / `created_at` / `updated_at` / `last_login_at`）。验证：`@fw/db` 单测 83 通过（新增 13 条）、`@fw/auth` 111 通过、`example-api` `tsc` 0 错误、`smoke-auth` **28/28**（新增 3 条排序断言）。前端 `sortable` 接线与其余列表端点接入同批推进中。
+- **列表排序参数（api-spec §1.5 落地，BUG-15 后端部分）**：`@fw/db` 新增 `parseSortQuery()` / `parseSortItems()`，把 `sort=<snake_case 字段>:<asc|desc>`（多字段逗号分隔）解析为框架排序结构，并按**字段白名单**校验——未知字段 / 非法方向 / 超过 5 个字段一律 `400/1001`，**不静默忽略**（静默忽略会让客户端以为排序已生效，且任意 query 参数直入 orderBy 可推断未暴露字段）。`@fw/auth` 的 `UserQuery` 新增 `sort`，Prisma 与内存两套 store 均消费，并始终追加主键 tie-breaker，保证 `skip/take` 分页在同一排序键下稳定（TC-ORM-002）。`GET /api/v1/users` 已接线（白名单：`id` / `username` / `nickname` / `status` / `created_at` / `updated_at` / `last_login_at`）。验证：`@fw/db` 单测 83 通过（新增 13 条）、`@fw/auth` 111 通过、`example-api` `tsc` 0 错误、`smoke-auth` **28/28**（新增 3 条排序断言）。
+
+- **列表排序参数前端接线（BUG-15 前端部分）**：`CrudTable` 原先发出的是列 `prop` 原值（camelCase，如 `createdAt:asc`），与 api-spec §1.5 的 snake_case 约定不符——后端白名单会**拒绝**它，即「后端做完仍不可用」。现抽出可测纯函数 `buildSortParam()`（`toSnakeCase` + 列 `sortField` 显式覆盖），`CrudTable` 统一走它构造 `sort`；列类型新增 `sortField`（用于「展示字段 ≠ 排序字段」）。`users` 页为账号/昵称/状态/最近登录/创建时间 5 列开启 `sortable`（此前无任何页面启用，该路径从未被执行过）。**mock 同步真实后端语义**（同一白名单、未知字段/非法方向 `400/1001`、默认 `created_at desc` + `id asc` 次级键）——mock 放宽校验会产生「dev 全绿、真机 400」的假绿。验证：`vue-tsc` 0 错误、前端单测 **69** 通过（新增 9 条）、`smoke-mock` **68/68**（新增 3 条排序断言）。
 
 ## [0.3.0] - 2026-10-14
 

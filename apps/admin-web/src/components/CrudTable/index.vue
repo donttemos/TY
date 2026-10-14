@@ -14,6 +14,9 @@
  *   ② 权限码无法覆盖，字典页推导出不存在的 dict:create/update/delete → 新增 permissionActions；
  *   ③ number / 多选字段初值写成空串（el-input-number 告警、数组字段回显为空）→ 按类型初始化并保数组；
  *   ④ 查询条件未按原型 §7 本地持久化 → 与列设置同策略落 localStorage
+ * @modified 2026-10-14 donttemo BUG-15：排序参数对齐 api-spec §1.5 —— 原先直接发 `${prop}:${order}`
+ *   （camelCase，如 `createdAt:asc`），与后端约定的 snake_case 不符；改为经 resolveSortField()
+ *   转 snake_case（列配置可用 sortField 显式覆盖，用于展示字段 ≠ 排序字段的场景）
  * @module admin-web/components
 -->
 
@@ -28,6 +31,7 @@ import { request, BizError, describeBizError } from '@/utils/request';
 import { useUserStore } from '@/store/user';
 import type { PermissionCode } from '@/api/types';
 import type { CrudColumn, FormField, FormModel, PagePayload, SearchField, SearchModel } from './types';
+import { buildSortParam, type TableSortOrder } from './sort';
 
 const props = withDefaults(
   defineProps<{
@@ -276,9 +280,15 @@ function handleSizeChange(next: number): void {
   void fetchList();
 }
 
-/** 服务端排序（el-table custom） */
-function handleSortChange({ prop, order }: { prop: string; order: 'ascending' | 'descending' | null }): void {
-  sort.value = order ? `${prop}:${order === 'ascending' ? 'asc' : 'desc'}` : null;
+/**
+ * 服务端排序（el-table custom）
+ *
+ * 参数构造抽到 `./sort` 的纯函数（buildSortParam）：列 prop 通常是 camelCase，而 api-spec §1.5
+ * 约定 `sort=<snake_case 字段>:<asc|desc>`，转换必须在前端完成 —— 后端按白名单收 snake_case，
+ * 传 camelCase 会被 400 拒绝（不静默忽略）。
+ */
+function handleSortChange({ prop, order }: { prop: string; order: TableSortOrder }): void {
+  sort.value = buildSortParam(prop, order, props.columns);
   void fetchList();
 }
 
