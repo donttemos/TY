@@ -5,6 +5,8 @@
  *   刷新失败清令牌并跳登录；9003 读取 Retry-After 供页面倒计时。业务代码只面对解包后的 data。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 真机修复：API 基址增加同源 `/api/v1` 兜底。生产构建若缺
+ *   VITE_API_BASE_URL（.env.* 不进版本库），baseURL 会退化为 undefined，请求落到静态站被拒 405
  * @module admin-web/utils
  */
 
@@ -33,6 +35,17 @@ function ensureTraceId(config: InternalAxiosRequestConfig): string {
   return generated;
 }
 
+/**
+ * API 基址（含 /api/v1 前缀）。
+ *
+ * 生产构建应带 VITE_API_BASE_URL，但 `.env.*` 被 .gitignore 排除（仅保留 .env.example），
+ * 干净检出与服务器构建时该变量会**缺失** —— 此时 axios 的 baseURL 退化为 undefined，请求变成
+ * `/auth/login` 这类同源相对路径，被静态站接管，nginx 对静态资源拒绝 POST 并返回 **405 Not Allowed**。
+ * 真机部署（cs.donttemo.top）曾因此登录不可用。故此处按同源反代约定显式兜底 `/api/v1`，
+ * 使构建缺变量时仍可正常工作；需要指向异构网关时再由 env 覆盖。
+ */
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1';
+
 /** 执行刷新：双 token 轮换；失败即 rejected（调用方走跳登录） */
 function doRefresh(): Promise<string> {
   const refreshToken = tokenStore.getRefresh();
@@ -40,7 +53,7 @@ function doRefresh(): Promise<string> {
   // 用裸 axios 发刷新请求，避开实例拦截器造成递归
   return axios
     .post<{ code: number; message: string; data: { accessToken: string; refreshToken: string } | null }>(
-      `${import.meta.env.VITE_API_BASE_URL}/auth/refresh`,
+      `${API_BASE}/auth/refresh`,
       { refreshToken },
       { timeout: 15000 },
     )
@@ -70,7 +83,7 @@ export function ensureFreshToken(): Promise<string> {
 }
 
 const service: AxiosInstance = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL,
+  baseURL: API_BASE,
   timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 });

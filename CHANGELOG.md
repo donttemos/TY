@@ -14,6 +14,24 @@
 
 ## [Unreleased]
 
+### Fixed（HTTPS 上线后暴露：生产前端构建缺 API 基址导致登录 405，2026-10-14）
+
+> 域名 `cs.donttemo.top` 走 Let's Encrypt HTTPS 后，浏览器登录返回 **405 Not Allowed**。
+> 根因：`apps/admin-web/.env.production` 被 `.gitignore` 的 `.env.*` 规则排除，而 release 取自
+> `git archive`（只含跟踪文件）→ 服务器构建时 `VITE_API_BASE_URL` **缺失** → axios `baseURL` 退化为
+> `undefined` → 请求变成 `/auth/login` 同源相对路径，被静态站接管，nginx 对静态资源拒绝 POST。
+> 实测证据：部署产物中 `/api/v1` 出现 **0 次**，`POST /auth/login` 返回 405 而 `POST /api/v1/auth/login` 返回 201。
+
+- **`apps/admin-web/src/utils/request.ts`**：API 基址增加同源 `/api/v1` 兜底（`import.meta.env.VITE_API_BASE_URL ?? '/api/v1'`）。
+  这是本缺陷的**根因修复**——构建输入缺失时按同源反代约定工作，而不是静默产生错误请求路径。
+- **`apps/admin-web/src/utils/token.ts`**：令牌存储开关由「`VITE_API_BASE_URL` 是否已定义」改为专用
+  `VITE_AUTH_STORAGE`（**默认启用**，置 `none` 关闭）。原实现把无关变量当环境哨兵，同一根因下会**连带**
+  关闭令牌本地存储，表现为「记住我」失效、刷新页面即掉登录——即在 405 之外还埋了一个同源的次生缺陷。
+- **`apps/admin-web/env.d.ts` / `.env.example`**：声明并文档化 `VITE_AUTH_STORAGE`。
+- **`apps/admin-web/vitest.config.ts`**：移除已无必要的 `test.env` 注入（改用默认值后，测试不再依赖任何 env 变量）。
+- **`deploy/scripts/bare-metal-deploy.sh`**：前端构建**显式注入** `VITE_API_BASE_URL`（新增 `WEB_API_BASE`，默认 `/api/v1`），
+  并在构建后**断言产物确含该基址**——缺失即中止发布。这是一道新的发布闸门：杜绝「站点能打开但登不进去」的版本上线。
+
 ### Fixed（真机部署验证：2C2G 云服务器 + 1Panel + PostgreSQL，2026-10-14）
 
 > 在腾讯云 2C2G4M（Ubuntu 22.04 + 1Panel + PostgreSQL 18.6 + Redis 8.10）上完整跑通部署与端到端冒烟，

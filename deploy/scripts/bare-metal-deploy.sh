@@ -50,6 +50,10 @@ PRISMA_SCHEMA="${PRISMA_SCHEMA:-prisma/schema.prisma}"
 # /opt/1panel/www/sites/fw.example.com/index）。留空则跳过同步（前端由别处托管时使用）。
 WEB_SYNC_DIR="${WEB_SYNC_DIR:-}"
 
+# 前端构建期注入的 API 基址（含版本前缀）。.env.* 不进版本库，不能依赖它存在，
+# 故由发版脚本显式传入并在构建后断言产物确已包含（缺了会导致登录 405，见下方构建段）。
+WEB_API_BASE="${WEB_API_BASE:-/api/v1}"
+
 # corepack 缓存目录：与 server-bootstrap.sh 保持一致，复用其预热的 pnpm，避免重复下载
 export COREPACK_HOME="${COREPACK_HOME:-/usr/local/corepack}"
 
@@ -98,6 +102,8 @@ usage() {
   PRISMA_SCHEMA=...         Prisma schema 相对应用目录的路径（默认 prisma/schema.prisma；
                             接 PostgreSQL 时须置为 prisma/pg/schema.prisma，与 DB_DRIVER 配套）
   WEB_SYNC_DIR=...          前端产物同步目标（1Panel 静态站点根目录）；留空则跳过同步
+  WEB_API_BASE=...          前端构建期注入的 API 基址（默认 /api/v1，与后端控制器前缀一致）；
+                            异构网关（独立域名/独立前缀）时覆盖
   COREPACK_HOME=...         corepack 缓存目录（默认 /usr/local/corepack，与 server-bootstrap.sh 一致）
 
 示例：在 1Panel 服务器上接 PostgreSQL 发版
@@ -199,8 +205,18 @@ if [ "$SKIP_BUILD" = "0" ]; then
 
   log "构建框架包与应用"
   ( cd "$RELEASE_DIR" && pnpm --filter "example-api..." run build )
-  log "构建管理后台前端静态产物"
-  ( cd "$RELEASE_DIR" && pnpm --filter admin-web run build )
+  log "构建管理后台前端静态产物（注入 VITE_API_BASE_URL=$WEB_API_BASE）"
+  # 显式注入而非依赖 .env.production：`.env.*` 被 .gitignore 排除，release 取自 git archive，
+  # 服务器上根本不存在该文件。缺变量会让 axios 的 baseURL 退化为 undefined，请求变成
+  # /auth/login 这类同源相对路径被静态站接管，nginx 对静态资源拒绝 POST → 登录 405。
+  ( cd "$RELEASE_DIR" && VITE_API_BASE_URL="$WEB_API_BASE" pnpm --filter admin-web run build )
+
+  # 构建期断言：产物必须真的带上 API 基址。前面的注入与代码兜底都可能被后续改动破坏，
+  # 这里直接读产物做最后一道闸——缺了就中止发布，绝不把「能打开但登不进去」的版本发上线。
+  if ! grep -rq -- "$WEB_API_BASE" "$RELEASE_DIR/$WEB_DIR_REL/dist/assets/"; then
+    die "前端产物中未找到 API 基址 '$WEB_API_BASE'（$WEB_DIR_REL/dist/assets/）：登录请求会落到静态站并返回 405，已中止发布"
+  fi
+  log "已确认前端产物包含 API 基址 $WEB_API_BASE"
 
   # 补齐 workspace bin 链接（真机部署修复）。
   # pnpm 在 install 阶段创建 workspace 包的 bin 链接，而那一刻 packages/cli/dist/index.js 尚未构建，

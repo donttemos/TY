@@ -2,17 +2,30 @@
  * @file token 存储抽象
  * @description PRD-005 NFR：前端不长期驻留敏感信息——access token 仅存内存（刷新页面即失效，由 refresh 无感恢复），
  *   refresh token 存 localStorage（「记住我」关闭时退化为 sessionStorage，随会话销毁）。
- *   AUTH_STRATEGY=session（httpOnly Cookie）时本模块自动退化为空实现（令牌由浏览器携带），业务代码不感知差异。
+ *   AUTH_STRATEGY=session（httpOnly Cookie）时置 VITE_AUTH_STORAGE=none，本模块退化为空实现，
+ *   令牌由浏览器携带，业务代码不感知差异。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 真机修复：存储开关由「VITE_API_BASE_URL 是否已定义」改为专用
+ *   VITE_AUTH_STORAGE（默认启用）。原实现借用无关变量作哨兵，生产构建缺 .env.* 时会静默关闭
+ *   令牌存储，导致「记住我」失效、刷新即掉登录
  * @module admin-web/utils
  */
 
 const REFRESH_TOKEN_KEY = 'fw_admin_refresh_token';
 
-/** 是否启用本地存储：AUTH_STRATEGY=session 时令牌走 httpOnly Cookie，本地不落任何令牌 */
+/**
+ * 是否启用本地存储。
+ *
+ * 默认**启用**；AUTH_STRATEGY=session（httpOnly Cookie，令牌由浏览器携带）时置
+ * `VITE_AUTH_STORAGE=none` 关闭，本地不落任何令牌。
+ *
+ * 历史实现以「VITE_API_BASE_URL 是否已定义」作哨兵，属于**变量语义错配**：该变量来自不进版本库的
+ * `.env.*`（.gitignore 排除），生产构建缺失时会连带静默关闭令牌存储 —— 表现为「记住我」失效、
+ * 刷新页面即掉登录。真机部署曾踩到，故改用专用开关，默认值取「启用」而非「依赖某个外部变量存在」。
+ */
 function storageEnabled(): boolean {
-  return import.meta.env.VITE_API_BASE_URL !== undefined;
+  return import.meta.env.VITE_AUTH_STORAGE !== 'none';
 }
 
 let accessToken: string | null = null;
