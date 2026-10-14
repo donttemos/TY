@@ -25,9 +25,11 @@ FW_USER="${FW_USER:-fw}"
 APP_ROOT="${APP_ROOT:-/opt/fw}"
 SWAP_SIZE="${SWAP_SIZE:-2G}"          # 2C2G 建议 2G；构建峰值内存约 1.2~1.6G
 SWAP_FILE="${SWAP_FILE:-/swapfile}"
-NODE_VERSION="${NODE_VERSION:-22.22.2}"
+NODE_VERSION="${NODE_VERSION:-22.22.2}"   # 与本地开发运行时同版本；不要依赖镜像的 latest-v22.x
+                                          # 目录（实测该索引陈旧，仍指向 22.0.0，而 pnpm 11 要求 >= 22.13）
 PNPM_VERSION="${PNPM_VERSION:-11.6.0}"
 NODE_MIRROR="${NODE_MIRROR:-https://registry.npmmirror.com/-/binary/node}"
+NPM_MIRROR="${NPM_MIRROR:-https://registry.npmmirror.com}"
 COREPACK_HOME_DIR="${COREPACK_HOME_DIR:-/usr/local/corepack}"
 SKIP_SWAP="${SKIP_SWAP:-0}"
 
@@ -91,6 +93,8 @@ mkdir -p "$COREPACK_HOME_DIR"
 echo "export COREPACK_HOME=$COREPACK_HOME_DIR" > /etc/profile.d/node-corepack.sh
 chmod 644 /etc/profile.d/node-corepack.sh
 export COREPACK_HOME="$COREPACK_HOME_DIR"
+# corepack 自身也从 npm 源拉 pnpm：指向镜像，否则大陆机器上这一步会长时间卡住
+export COREPACK_NPM_REGISTRY="$NPM_MIRROR"
 
 corepack enable --install-directory /usr/local/bin || die "corepack enable 失败"
 # 非交互环境禁用下载确认提示（corepack 默认会 prompt，导致脚本挂起）
@@ -98,6 +102,17 @@ export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 corepack prepare "pnpm@${PNPM_VERSION}" --activate || die "corepack prepare pnpm@${PNPM_VERSION} 失败"
 info "pnpm -> $(COREPACK_HOME="$COREPACK_HOME_DIR" PNPM_HOME=/usr/local pnpm --version 2>/dev/null || echo '需在登录 shell 中确认')"
 chmod -R a+rX "$COREPACK_HOME_DIR"
+
+# ============ 2.5 npm/pnpm 走镜像（大陆服务器实测差异 20 倍）============
+# 实测（腾讯云 2C2G4M，2026-10-14）：registry.npmjs.org 约 0.86 MB/s（单包元数据 18s），
+# registry.npmmirror.com 约 18.7 MB/s。不换源时 `pnpm install` 会从分钟级变成小时级。
+# 写三处：Node 自身前缀（全局默认）+ root 与 fw 的 HOME（部署脚本与手工排障各会用到一个）。
+for rc in "$(dirname "$(dirname "$(readlink -f "$(command -v node)")")")/etc/npmrc" \
+          /root/.npmrc "$APP_ROOT/.npmrc"; do
+  mkdir -p "$(dirname "$rc")" 2>/dev/null || true
+  echo "registry=$NPM_MIRROR" > "$rc" 2>/dev/null || true
+done
+info "npm registry -> $(npm config get registry)"
 
 # ============ 3. 运行用户与目录骨架 ============
 if id "$FW_USER" >/dev/null 2>&1; then

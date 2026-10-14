@@ -202,6 +202,18 @@ if [ "$SKIP_BUILD" = "0" ]; then
   log "构建管理后台前端静态产物"
   ( cd "$RELEASE_DIR" && pnpm --filter admin-web run build )
 
+  # 补齐 workspace bin 链接（真机部署修复）。
+  # pnpm 在 install 阶段创建 workspace 包的 bin 链接，而那一刻 packages/cli/dist/index.js 尚未构建，
+  # 于是 apps/example-api/node_modules/.bin/fw 被静默跳过（仅留一条 WARN）；此后无论 install 还是
+  # install --force 都会判「Already up to date」不再补建 —— 结果是 pnpm run db:migrate（内部调 fw）
+  # 直接报 `fw: not found`，迁移与种子全部不可用。
+  # 修法：构建后删掉应用自身的 node_modules 再装一次。工作区内该目录只是一组软链，重建约 2 秒。
+  log "补齐 workspace bin 链接（fw CLI 首次 install 时尚无 dist，需重建）"
+  rm -rf "$RELEASE_DIR/$APP_DIR_REL/node_modules"
+  ( cd "$RELEASE_DIR" && pnpm install --frozen-lockfile )
+  [ -x "$RELEASE_DIR/$APP_DIR_REL/node_modules/.bin/fw" ] \
+    || die "fw CLI 未就位（$APP_DIR_REL/node_modules/.bin/fw）：db:migrate / db:seed 将不可用"
+
   # 前端产物同步到 1Panel 站点目录：OpenResty 在容器内看不到 /opt/fw，无法 root 到 release 软链
   if [ -n "$WEB_SYNC_DIR" ]; then
     [ -d "$WEB_SYNC_DIR" ] || die "WEB_SYNC_DIR 不存在：$WEB_SYNC_DIR（请先在 1Panel 创建静态站点，再填其站点根目录）"

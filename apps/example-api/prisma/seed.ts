@@ -12,6 +12,11 @@
  * @modified 2026-10-14 donttemo M8 T-M8-02：新增 dedicated 独立库租户（db_url_enc 密文）与 dedicatedadmin 账号
  * @modified 2026-10-14 donttemo M8 T-M8-04：新增组织架构种子（部门树 + user_department）与
  *   dept_leader(org_below) / dept_member(org) / self_updater(self) 三角色及示范账号（TC-TNT-004）
+ * @modified 2026-10-14 donttemo 真机部署修复（2C2G 云服务器 + PostgreSQL）：① 补种队列管理权限点
+ *   system:queue:list / system:queue:manage——M7 的 /api/v1/admin/queue/* 11 个端点全部由这两个权限守卫，
+ *   而此前种子从未创建它们，导致连 admin 角色都返回 3002「无操作权限」，该功能面在真实部署中不可达；
+ *   ② dedicated 租户的独立库连接串不再写死 sqlite 路径：按 DB_DRIVER 或 SEED_DEDICATED_DB_URL 决定，
+ *   非 sqlite 部署下留空（NULL），避免落一个在该部署中永远连不上的密文。
  * @module example-api
  */
 
@@ -20,15 +25,22 @@ import 'reflect-metadata';
 
 import { PrismaClient } from '@prisma/client';
 import { PERM, ROLE, PasswordService } from '@fw/auth';
+import { QUEUE_PERM_LIST, QUEUE_PERM_MANAGE } from '@fw/queue';
 import { seedDemoItemPermissions } from './seed/demo-item.seed.js';
 import { encryptDbUrl } from '../src/modules/tenant/db-url-crypto.js';
 
 /**
- * dedicated 租户独立库连接串（T-M8-02）：与主库同 schema 的独立 sqlite 文件，
- * 相对路径按 prisma/schema.prisma 所在目录解析（与主库 DB_URL 同一语义）。
- * 冒烟脚本按需重建该库结构（同 schema 的 db push）。
+ * dedicated 租户独立库连接串（T-M8-02）。相对路径按 prisma/schema.prisma 所在目录解析
+ * （与主库 DB_URL 同一语义）。
+ *
+ * ★ 真机部署修复：此前写死为 sqlite 文件 'file:./tenant-dedicated.db'，在 PostgreSQL/MySQL 部署下
+ *   会落一个「provider 与连接串不匹配、永远连不上」的密文（Prisma 在 generate 时已固定 provider）。
+ *   现改为：优先取环境变量 SEED_DEDICATED_DB_URL；未配置时仅当 DB_DRIVER 为 sqlite（或未设置，
+ *   与 env-schema 默认值一致）才回退到本地文件，否则留空——由运维为 dedicated 租户显式配置。
  */
-const DEDICATED_DB_URL = 'file:./tenant-dedicated.db';
+const DEDICATED_DB_URL =
+  process.env.SEED_DEDICATED_DB_URL ??
+  (!process.env.DB_DRIVER || process.env.DB_DRIVER === 'sqlite' ? 'file:./tenant-dedicated.db' : '');
 
 const prisma = new PrismaClient();
 const passwords = new PasswordService();
@@ -70,6 +82,10 @@ const FRAMEWORK_PERMISSIONS: PermissionSeed[] = [
   { code: PERM.MENU_UPDATE, name: '菜单修改', type: 'menu', module: 'menu' },
   { code: PERM.MENU_DELETE, name: '菜单删除', type: 'menu', module: 'menu' },
   { code: PERM.AUDIT_READ, name: '审计日志查询', type: 'api', module: 'audit' },
+  // M7 队列管理端点（@fw/queue 的 QueueAdminController，路径 /api/v1/admin/queue）的守卫权限。
+  // 真机部署修复：缺少这两点会让整个队列管理功能面对任何角色都返回 3002，必须随种子建出并授予 admin。
+  { code: QUEUE_PERM_LIST, name: '队列查看', type: 'api', module: 'queue' },
+  { code: QUEUE_PERM_MANAGE, name: '队列管理', type: 'api', module: 'queue' },
 ];
 
 /** 业务权限点：演示「未授权则菜单不可见 / 接口 3002」（PRD-003 FR-09） */
@@ -196,7 +212,8 @@ async function seedDepartments(): Promise<Map<string, string>> {
  * - acme（id '1'）：演示「子域名解析」与跨租户越权用例的第二个租户；
  * - off（id '2'）：停用租户，验证 fail-closed（403）；
  * - dedicated（id '3'）：独立库租户（T-M8-02），db_url_enc 存 AES-256-GCM 密文，
- *   指向 prisma/tenant-dedicated.db（与主库同 schema 的独立物理库）。
+ *   连接串由 SEED_DEDICATED_DB_URL 提供；sqlite 部署下默认指向 prisma/tenant-dedicated.db，
+ *   其他驱动下留 NULL（见文件顶部 DEDICATED_DB_URL 说明）。
  */
 async function seedTenants(): Promise<void> {
   const rows = [
@@ -208,8 +225,8 @@ async function seedTenants(): Promise<void> {
       code: 'dedicated',
       name: '独立库租户',
       isolation: 'dedicated',
-      // 连接串加密存储（T-M8-02）；相对路径按 schema 所在目录解析 → prisma/tenant-dedicated.db
-      dbUrlEnc: encryptDbUrl(DEDICATED_DB_URL),
+      // 连接串加密存储（T-M8-02）；未提供时留 NULL（非 sqlite 部署），见文件顶部说明
+      dbUrlEnc: DEDICATED_DB_URL ? encryptDbUrl(DEDICATED_DB_URL) : null,
       status: 1,
     },
   ];

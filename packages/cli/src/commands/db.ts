@@ -21,10 +21,19 @@ const execFileAsync = promisify(execFile);
 
 /** 项目 prisma 目录（相对 cwd） */
 const PRISMA_DIR = 'prisma';
-/** 迁移子目录 */
-const MIGRATIONS_DIR = path.join(PRISMA_DIR, 'migrations');
 /** 外部命令输出上限（migrate diff 的 SQL 可能较大，默认 1MB 不够） */
 const MAX_BUFFER = 32 * 1024 * 1024;
+
+/**
+ * 由 schema 文件推导迁移目录：Prisma 的规则是「schema 同级目录下的 migrations/」。
+ * 真机部署修复：此前固定读 prisma/migrations，导致 --schema=prisma/pg/schema.prisma 时
+ * 打印的迁移数量取自 sqlite 迁移目录（显示 4 个）而实际应用的是 pg 目录（1 个），误导排障。
+ * @param schemaFile schema 文件路径
+ * @returns 该 schema 对应的迁移目录
+ */
+function migrationsDirOf(schemaFile: string): string {
+  return path.join(path.dirname(schemaFile), 'migrations');
+}
 
 /** db 命令选项（CLI 传入） */
 export interface DbCommandOptions {
@@ -68,11 +77,15 @@ function assertProject(schemaFile: string): void {
   }
 }
 
-/** 列出已提交迁移（按目录名字典序 = 时间序），返回迁移名列表 */
-function listMigrations(): string[] {
-  if (!fs.existsSync(MIGRATIONS_DIR)) return [];
+/**
+ * 列出指定迁移目录下已提交的迁移（按目录名字典序 = 时间序），返回迁移名列表
+ * @param dir 迁移目录（由 migrationsDirOf 按 schema 推导）
+ * @returns 迁移名列表
+ */
+function listMigrations(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
   return fs
-    .readdirSync(MIGRATIONS_DIR, { withFileTypes: true })
+    .readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isDirectory() && /^\d{14}_/.test(e.name))
     .map((e) => e.name)
     .sort();
@@ -86,8 +99,9 @@ function listMigrations(): string[] {
 export async function runMigrate(options: DbCommandOptions = {}): Promise<void> {
   const schemaFile = options.schema ?? path.join(PRISMA_DIR, 'schema.prisma');
   assertProject(schemaFile);
-  const pending = listMigrations();
-  console.log(`[db:migrate] 共 ${pending.length} 个迁移，开始应用…`);
+  const migrationsDir = migrationsDirOf(schemaFile);
+  const pending = listMigrations(migrationsDir);
+  console.log(`[db:migrate] ${migrationsDir} 下共 ${pending.length} 个迁移，开始应用…`);
   const out = await prisma(['migrate', 'deploy', '--schema', schemaFile]);
   if (out.trim()) console.log(out);
   console.log('[db:migrate] 完成');
@@ -104,7 +118,8 @@ export async function runMigrate(options: DbCommandOptions = {}): Promise<void> 
 export async function runRollback(options: DbCommandOptions = {}): Promise<void> {
   const schemaFile = options.schema ?? path.join(PRISMA_DIR, 'schema.prisma');
   assertProject(schemaFile);
-  const migrations = listMigrations();
+  const migrationsDir = migrationsDirOf(schemaFile);
+  const migrations = listMigrations(migrationsDir);
   if (migrations.length === 0) {
     console.error('[db:rollback] 无迁移可回滚');
     process.exit(1);
@@ -115,17 +130,17 @@ export async function runRollback(options: DbCommandOptions = {}): Promise<void>
   const previous = kept.length >= 1 ? kept[kept.length - 1] : null;
 
   // diff 目标状态目录：放在 migrations 同级（放内部会被 --from-migrations 误扫为迁移目录，P3015）
-  const targetDir = path.join(PRISMA_DIR, '.fw-rollback-target');
+  const targetDir = path.join(path.dirname(schemaFile), '.fw-rollback-target');
   fs.rmSync(targetDir, { recursive: true, force: true });
   try {
     if (kept.length > 0) {
       fs.mkdirSync(targetDir, { recursive: true });
       // 只保留到 previous 为止的迁移（含更早，保证状态可复现）
       for (const name of kept) {
-        fs.cpSync(path.join(MIGRATIONS_DIR, name), path.join(targetDir, name), { recursive: true });
+        fs.cpSync(path.join(migrationsDir, name), path.join(targetDir, name), { recursive: true });
       }
       // migration_lock.toml 必须随行（Prisma 靠它识别 provider）
-      const lockSrc = path.join(MIGRATIONS_DIR, 'migration_lock.toml');
+      const lockSrc = path.join(migrationsDir, 'migration_lock.toml');
       if (fs.existsSync(lockSrc)) {
         fs.copyFileSync(lockSrc, path.join(targetDir, 'migration_lock.toml'));
       }
@@ -134,7 +149,7 @@ export async function runRollback(options: DbCommandOptions = {}): Promise<void>
     // 反向 diff：从「全部迁移的状态」回到「目标状态」
     const diffArgs = [
       'migrate', 'diff',
-      '--from-migrations', MIGRATIONS_DIR,
+      '--from-migrations', migrationsDir,
       kept.length > 0 ? '--to-migrations' : '--to-empty',
       ...(kept.length > 0 ? [targetDir] : []),
       '--script',
@@ -147,7 +162,7 @@ export async function runRollback(options: DbCommandOptions = {}): Promise<void>
     }
 
     // 落盘临时 SQL 供 db execute 执行（Prisma 的 db execute 只吃文件）
-    const sqlFile = path.join(MIGRATIONS_DIR, `${latest}.rollback.sql`);
+    const sqlFile = path.join(migrationsDir, `${latest}.rollback.sql`);
     fs.writeFileSync(sqlFile, rollbackSql, 'utf8');
     try {
       const out = await prisma(['db', 'execute', '--file', sqlFile, '--schema', schemaFile]);
@@ -159,7 +174,7 @@ export async function runRollback(options: DbCommandOptions = {}): Promise<void>
 
     // 清理 _prisma_migrations 记录，使该迁移可被再次应用（migrate deploy 幂等的前提）。
     // 表名小写无保留字冲突，三库通用（MySQL 反引号/PG 双引号/SQLite 均可省引号）
-    const deleteSql = path.join(MIGRATIONS_DIR, `${latest}.cleanup.sql`);
+    const deleteSql = path.join(migrationsDir, `${latest}.cleanup.sql`);
     fs.writeFileSync(deleteSql, `DELETE FROM _prisma_migrations WHERE migration_name = '${latest}';\n`, 'utf8');
     try {
       await prisma(['db', 'execute', '--file', deleteSql, '--schema', schemaFile]);
