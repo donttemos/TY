@@ -5,6 +5,10 @@
 # @modified 2026-10-13 donttemo NestJS 10 → 11 升级：overrides 说明同步（R-06 两项 moderate 随 @nestjs/core@11.2.7 修复）
 # @modified 2026-10-13 donttemo dev 工具链升级：overrides 说明同步（vitest/vite/happy-dom/tinypool/braces 五项随之清零，无需新增 override）
 
+# @modified 2026-10-14 donttemo v0.2.0 推送后首跑 CI 修复：allowBuilds 中 msgpackr-extract / protobufjs 曾是
+#   pnpm 自动写入的占位串「set this to true or false」（非布尔），在 pnpm 11 默认 strictDepBuilds=true 下
+#   于干净环境直接抛 ERR_PNPM_IGNORED_BUILDS 中断安装；改为显式 false（二者构建脚本非运行期必需）
+
 packages:
   - "packages/*"
   - "apps/*"
@@ -22,9 +26,13 @@ allowBuilds:
   '@prisma/client': true
   '@prisma/engines': true
   esbuild: true
-  msgpackr-extract: set this to true or false
+  # msgpackr-extract 是 msgpackr（bullmq 序列化）的可选原生加速绑定，缺失时回退纯 JS；
+  # protobufjs 的安装脚本仅服务于其 CLI 代码生成，运行期不需要。二者均显式禁止构建。
+  # 注意：pnpm 11 默认 strictDepBuilds=true，此处必须写明确布尔值——留占位/未决值会在
+  # 干净环境（CI）直接抛 ERR_PNPM_IGNORED_BUILDS 并中断安装。
+  msgpackr-extract: false
   prisma: true
-  protobufjs: set this to true or false
+  protobufjs: false
   vue-demi: false
 
 # 依赖漏洞修复（pnpm 11 起 overrides 写在 workspace 文件里，package.json 的 pnpm 字段已不再读取）
