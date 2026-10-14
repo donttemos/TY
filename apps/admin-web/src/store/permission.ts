@@ -12,6 +12,8 @@
  *   ② 后端 /auth/menus 未按 visible 过滤（permission.service 只过滤权限码），
  *   而侧边栏直接渲染子节点 → 隐藏菜单仍出现在侧边栏且点击落 404 → visibleMenus 改为递归剪枝；
  *   ③ KNOWN_SYSTEM_PATHS 与真实菜单路径漂移（缺生成器页面、含已废弃路径），影响 403/404 判定
+ * @modified 2026-10-14 donttemo 补充契约说明：generateRoutes 产出的记录**必须**由 router/inject.ts
+ *   挂到布局路由（Layout）之下，直接顶层 addRoute 会让功能页脱离侧边栏/顶栏（BUG-16）
  * @module admin-web/store
  */
 
@@ -71,6 +73,10 @@ export const usePermissionStore = defineStore('permission', () => {
   const menus = ref<MenuNode[]>([]);
   /** 动态路由是否已注入（守卫只注入一次） */
   const routesAdded = ref(false);
+  /** 当前菜单所属用户 id：登出后换号登录时据此判定「菜单与路由仍是上一个账号的」并重建 */
+  const menusOwnerId = ref<string | null>(null);
+  /** 已注入的动态路由名（换号时据此移除，保证未授权路径不再留在路由表） */
+  const injectedRouteNames = ref<string[]>([]);
 
   /** 拉取菜单树 */
   async function loadMenus(): Promise<MenuNode[]> {
@@ -88,8 +94,10 @@ export const usePermissionStore = defineStore('permission', () => {
   /**
    * 由菜单树生成路由记录
    * - 前端按 permissionCode 二次过滤（后端已过滤，双保险）；
-   * - 有 path 的目录节点（如 /system）生成 layout/blank 父路由，其子菜单挂为 children；
+   * - 有 path 的目录节点（如 /system）生成父路由，其子菜单挂为 children；
    * - component 解析失败（视图未实现）的菜单跳过，避免死链。
+   * 注意：返回的是**顶层记录**，调用方必须用 router/inject.ts 的 injectDynamicRoutes 挂到布局路由之下，
+   * 否则页面会脱离全局布局（无侧边栏 / 顶栏）。
    */
   function generateRoutes(): RouteRecordRaw[] {
     const user = useUserStore();
@@ -151,7 +159,10 @@ export const usePermissionStore = defineStore('permission', () => {
   function reset(): void {
     menus.value = [];
     routesAdded.value = false;
+    menusOwnerId.value = null;
+    // 刻意保留 injectedRouteNames：登出后换号登录时仍要凭它移除上一账号留下的路由记录，
+    // 否则被吊销的页面会继续留在路由表里（TC-WEB-001「未授权路径不进路由表」）
   }
 
-  return { menus, routesAdded, loadMenus, visibleMenus, generateRoutes, reset };
+  return { menus, routesAdded, menusOwnerId, injectedRouteNames, loadMenus, visibleMenus, generateRoutes, reset };
 });

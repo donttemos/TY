@@ -53,11 +53,41 @@
 - **真机/mock 契约漂移**：mock 新增 `GET/PUT /auth/profile`；`DELETE /auth/sessions/:id` 补 `auth:revoke-session` 校验
   （此前 mock 放行、真机 `3002`）。
 
+### Fixed（管理后台前端：路由与登录态生命周期 4 项缺陷，含反向验证，2026-10-14）
+
+> 用户在真机上报告「点进具体功能页后侧边栏消失」。顺着「布局是否在匹配链上」这条线索排查，
+> 一并暴露了 403 判定死代码、mock 行为与后端不一致、以及登出换号后仍是上一个账号的菜单/路由。
+> 四项均已修复并补 16 条护栏；**每条护栏都做过反向验证（撤掉修复后必须 FAIL）**，避免假绿。
+> 详见 [管理后台功能补充与缺陷修复方案](./docs/99-admin-web-enhancement-and-fixes.md) §3 BUG-16~19。
+
+- **点进具体功能页后侧边栏（连带顶栏、标签页）整块消失（P0）**：动态路由被 `router.addRoute(route)` 注册成**顶层记录**，
+  匹配链 `["/system","/system/users"]` 里没有布局路由 → 渲染的是 `views/layout/blank.vue`（只有一个 `<router-view/>`），
+  全局布局根本没挂载。新增 `src/router/inject.ts`，统一以 `router.addRoute('Layout', record)` 挂到具名布局路由之下，
+  匹配链变为 `Layout → /system → /system/users`；同路径记录去重（`/dashboard` 保留静态记录）；`/redirect` 一并移入布局内，
+  标签页「刷新」不再卸载外壳。
+- **无权限看不到 403，落的是 404（P1）**：兜底路由注册后 `router.resolve()` 对任何路径都有非空 `matched`，
+  故 `if (resolved.matched.length > 0) return true` 恒成立，其后的「已知系统路径 → 403」是**不可达死代码**。
+  抽出纯函数 `resolveFallback(path, matchedNames)` 按「是否命中兜底记录」判定，403 与 404 从此可区分（并可直接单测）。
+- **登出后换号登录，侧边栏与路由表仍是上一个账号的（P0）**：守卫判据只有 `!permission.routesAdded`，而 `routesAdded`
+  登出后从未复位（`permission.reset()` 在生产代码中**没有任何调用点**）→ 换号后「加载菜单 + 注入路由」整步被跳过；
+  且动态路由不会随登出出表。改为按「菜单所属用户 id」判定并重建（`menusOwnerId`），重建时先 `removeRoute` 移除上一轮注入的
+  记录，使上一个账号的路径彻底出表、直输 URL 落 403（对齐 `TC-WEB-001`）。
+- **mock 的 `GET /auth/menus` 多做了一层 `visible` 过滤（P2）**：真实后端只按权限码过滤、可见性由前端剪枝，
+  mock 抢先过滤会让前端剪枝路径在 dev 下**永不执行**（「mock 全绿、真机炸」的温床）。mock 与后端行为对齐；
+  `订单中心` 标注为 mock-only 演示菜单（生产种子已移除该分支）。
+- **换号后标签页仍列出上一个账号开过的标签（P2）**：标签持久化键 `fw_admin_tags` 被所有账号共用，
+  既不隔离也不清理。改为 `fw_admin_tags:<用户 id>` 并随登录用户切换（换号即读到该账号自己的集合）；
+  刻意不做旧键迁移（无法判断标签归属，迁移等于把上一个账号的标签泄露给新账号）。同时修正装配顺序：
+  `restore()` 须在持久化 watcher **之后**执行，否则初始状态不写回本地（刷新即丢标签）。
+
 ### Added（管理后台前端：方案文档与验证）
 
 - 新增 **[管理后台功能补充与缺陷修复方案](./docs/99-admin-web-enhancement-and-fixes.md)**：逐页现状核对、待新增模块
   （租户管理页 / 异步导出任务中心 / 403 整页视图）与待完善模块（字典消费、工作台三态、菜单图标与权限码选择器、审计模块字典化）、
-  15 项缺陷表、交互流程与数据展示规范、兼容性要求、验证证据与遗留项。
+  **19 项缺陷表**、交互流程与数据展示规范、兼容性要求、验证证据与遗留项。
+- 新增 `apps/admin-web/src/router/__tests__/layout-nesting.test.ts`：16 条路由/布局护栏 —— 匹配链必须含布局、
+  静态路由去重、`/redirect` 在布局内、公开页无外壳、**真实挂载出 `.fw-sidebar`**、换号后旧页面落 403、
+  `resolveFallback` 三个分支。前端单测 31 → **47**。
 - `apps/admin-web/scripts/smoke-mock.mjs`：新增「个人资料自服务」冒烟段 8 条断言（含 `409`/`1001`/越权字段拒收/
   「alice 可自助保存」回归）；冒烟总数 57 → **65（全通过）**。
 - `apps/admin-web/src/store/__tests__/permission.test.ts`：新增 2 条回归护栏（`visibleMenus` 递归剪枝、

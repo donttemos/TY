@@ -4,12 +4,17 @@
  *   标签列表按路由维度本地持久化，刷新浏览器后恢复。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo 存储键按用户隔离（`fw_admin_tags:<用户 id>`）：原先所有账号共用一个键，
+ *   登出换号后仍会列出上一个账号开过的标签（点进去落 403），且会把新账号的标签写进同一个键互相污染。
+ *   改为「存储键随当前用户变化」——切换账号即自动读取该账号自己的标签（首个账号视为空），无需登出侧改代码。
+ *   注：旧键 `fw_admin_tags` 不做迁移（无法判断标签属于哪个账号，迁移会把上一个账号的标签泄露给新账号）。
  * @module admin-web/layout
 -->
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { useUserStore } from '@/store/user';
 
 interface Tag {
   path: string;
@@ -17,16 +22,20 @@ interface Tag {
   affix: boolean;
 }
 
-const STORAGE_KEY = 'fw_admin_tags';
+const STORAGE_PREFIX = 'fw_admin_tags';
 
 const route = useRoute();
 const router = useRouter();
+const user = useUserStore();
 const tags = ref<Tag[]>([]);
 
-/** 从本地存储恢复标签 */
+/** 存储键：按登录用户隔离，换号即自动切到对方的标签集合 */
+const storageKey = computed(() => `${STORAGE_PREFIX}:${user.profile?.id ?? 'anonymous'}`);
+
+/** 从本地存储恢复该账号的标签 */
 function restore(): void {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey.value);
     tags.value = raw ? (JSON.parse(raw) as Tag[]) : [];
   } catch {
     tags.value = [];
@@ -43,15 +52,22 @@ function addCurrentTag(): void {
   }
 }
 
-watch(() => route.fullPath, addCurrentTag, { immediate: true });
+// 用户变化（登出换号）→ 换成该账号自己的标签，并把当前页入签
+watch(storageKey, () => {
+  restore();
+  addCurrentTag();
+});
+watch(() => route.fullPath, addCurrentTag);
 watch(tags, (value) => {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+    localStorage.setItem(storageKey.value, JSON.stringify(value));
   } catch {
     // 隐私模式下降级为仅内存
   }
 }, { deep: true });
 
+// 首屏装配：恢复该账号的标签 + 当前页入签。
+// 必须放在 watcher 注册**之后**，否则初始状态不会被写回本地（刷新后丢标签）。
 restore();
 addCurrentTag();
 

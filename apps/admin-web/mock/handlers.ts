@@ -11,6 +11,8 @@
  * @modified 2026-10-14 donttemo 契约对齐（C-06）：新增 PUT /auth/profile（本人资料自助，校验 auth:me；
  *   与后端 example-api 同构）；DELETE /auth/sessions/:id 补 auth:revoke-session 权限校验——
  *   此前 mock 放行而真实后端 3002，属「本机过、真机挂」的隐性缺口
+ * @modified 2026-10-14 donttemo GET /auth/menus 去掉 visible 过滤，与真实后端行为对齐（后端只按权限码
+ *   过滤，可见性由前端 visibleMenus() 剪枝）—— 原 mock 过滤会让前端剪枝在 dev 下永不执行
  * @module admin-web/mock
  */
 
@@ -475,7 +477,10 @@ export async function handleMockRequest(
   }
   if (path === '/auth/menus' && method === 'GET') {
     const codes = userPermissionCodes(database, ctx.user);
-    const tree = menuTree(database, (m) => m.visible && (m.permissionCode === null || codes.includes(m.permissionCode)));
+    // 与真实后端行为对齐：只按权限码过滤，**不**按 visible 过滤（可见性是前端职责，
+    // 侧边栏由 store/permission.ts 的 visibleMenus() 剪枝）。mock 若在此过滤 visible，
+    // 前端剪枝逻辑在 dev 下永不被触发，「隐藏菜单仍出现在侧边栏」类缺陷将只在真机暴露。
+    const tree = menuTree(database, (m) => m.permissionCode === null || codes.includes(m.permissionCode));
     send(res, CODE.OK, 'ok', tree, traceId);
     return { handled: true };
   }

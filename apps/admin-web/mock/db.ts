@@ -8,6 +8,8 @@
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo M7：新增队列管理页数据源（system:queue:* 权限点、/system/queue 菜单、
  *   队列统计 / 死信 / 定时任务快照的内存状态，与 @fw/queue 的 QueueStats / DeadLetterRecord / CronSnapshot 同形）
+ * @modified 2026-10-14 donttemo 标注「订单中心」为 mock-only 演示菜单（生产 seed 已移除该分支，后端无
+ *   /api/v1/orders 端点），避免后续误判为 mock 与生产菜单应该一致
  * @module admin-web/mock
  */
 
@@ -262,6 +264,8 @@ const MENUS: MockMenu[] = [
   { id: 'm-system-dict', parentId: 'm-system', name: '字典管理', path: '/system/dict', component: 'system/dict', icon: 'collection', permissionCode: 'dict:read', visible: true, sort: 4 },
   { id: 'm-system-audit', parentId: 'm-system', name: '审计日志', path: '/system/audit-logs', component: 'system/audit-logs', icon: 'file-text', permissionCode: 'audit:read', visible: true, sort: 5 },
   { id: 'm-system-queue', parentId: 'm-system', name: '队列管理', path: '/system/queue', component: 'system/queue', icon: 'clock', permissionCode: 'system:queue:list', visible: true, sort: 6 },
+  // 刻意保留的 mock-only 演示菜单：仅存在于 dev（mock 有 /orders 端点与 demo/orders 视图可跑通），
+  // 生产 seed 已整支移除该分支（后端无 /api/v1/orders，挂菜单必然死链）—— 属**有意**的 dev/prod 差异。
   { id: 'm-order', parentId: '0', name: '订单中心', path: '/order', component: 'layout/blank', icon: 'shopping', permissionCode: 'order:read', visible: true, sort: 3 },
   { id: 'm-order-list', parentId: 'm-order', name: '订单列表', path: '/order/list', component: 'demo/orders', icon: 'list', permissionCode: 'order:read', visible: true, sort: 1 },
 ];

@@ -1,13 +1,14 @@
 # 管理后台前端功能补充与缺陷修复方案
 
-> 版本 v0.3（待发布）｜ 状态：**已实施（前端 + 相关后端小改，含验证证据）** ｜ 关联：[PRD-005 管理后台模板](./prd/prd-005-admin-template.md) ｜ [原型与 UI 规范](./25-ui-prototype.md) ｜ [API 文档](./40-api-spec.md) ｜ [C-06 前端契约](./contracts/api-web.ts) ｜ [C-06 契约定稿记录](../CHANGELOG.md) ｜ 更新：2026-10-14 ｜ 负责人：donttemo
+> 版本 v0.4（待发布）｜ 状态：**已实施（前端 + 相关后端小改，含验证证据）** ｜ 关联：[PRD-005 管理后台模板](./prd/prd-005-admin-template.md) ｜ [原型与 UI 规范](./25-ui-prototype.md) ｜ [API 文档](./40-api-spec.md) ｜ [C-06 前端契约](./contracts/api-web.ts) ｜ [C-06 契约定稿记录](../CHANGELOG.md) ｜ 更新：2026-10-14 ｜ 负责人：donttemo
 >
 > 定位：本轮把管理后台前端从「文档标注已交付」拉到「**真机可用的同源状态**」。所有缺陷均在代码层复核过根因
-> （后端权限码常量、菜单种子、`import.meta.glob` 解析规则、mock 与真机差异），并按 PRD-005 的四个交付面
-> （页面清单 / 组件规范 / 交互规范 / 兼容要求）给出**修复后预期行为**与验证方式。
+> （后端权限码常量、菜单种子、`import.meta.glob` 解析规则、mock 与真机差异、路由注入与登录态生命周期），
+> 并按 PRD-005 的四个交付面（页面清单 / 组件规范 / 交互规范 / 兼容要求）给出**修复后预期行为**与验证方式。
 >
-> 一句话结论：**上一轮 6 项 P0 中，5 项属「前端权限码与后端常量不同源」与「菜单/路由数据源不一致」**——
-> 本地 mock 全绿、真机才炸（mock 自建了一套 `dict:create/update/delete`、`routesAdded` 解析规则也只覆盖 mock 的菜单形状）。
+> 一句话结论：**P0 缺陷集中在「路由与权限的数据源在前后端不同源」**——本地 mock 全绿、真机才炸。
+> v0.4 追加 4 项（BUG-16~19），其中 **BUG-16「点进功能页侧边栏消失」与 BUG-19「换号后仍是上一个账号的菜单」**
+> 属布局外壳与登录态生命周期，均已带**可失败的反向验证**。
 
 ## 1. 现状核对：文档承诺 vs 代码实现
 
@@ -15,6 +16,8 @@
 
 | 路由 | 页面 | 核对结论 | 说明 |
 |---|---|---|---|
+| （全局布局） | 侧边栏 + 顶栏 + 标签页 | ❌ **动态功能页会整块脱离外壳** | BUG-16 |
+| （登录态切换） | 登出 / 换号登录 | ❌ **侧边栏与路由表停留在上一个账号** | BUG-19 |
 | `/login` `/403` `/404` `/` `/profile` | 登录 / 错误页 / 工作台 / 个人中心 | ⚠️ 基本可用，**个人中心写入不可用** | 见 BUG-05 |
 | `/system/users` | 用户管理 | ⚠️ 可用但**越权按钮可点 + 角色字段类型错** | BUG-06 / BUG-07 |
 | `/system/roles` | 角色与权限 | ✅ 通过 | 权限树三层、数据范围四档、复制角色均与后端同源 |
@@ -68,16 +71,32 @@
 | **BUG-13** | **P2** | 批量删除**部分失败仍提示「删除成功」**且列表不刷新 | 选中多条，其中一条已被他人删除 | `handleDelete` 循环逐条删 + 单一 `catch`，首条成功即弹成功；失败时不刷新 | 逐条删除但**累计成功/失败数**：全成功 → `success`；部分成功 → `warning`「已删除 N 项，M 项失败：<原因>」；无论成败都刷新列表并清空选择 | ✅ |
 | **BUG-14** | **P2** | 接口 `3002` 只在列表区显示通用错误块，未按原型「整页无权限视图」处理 | 菜单可见但接口拒绝（权限刚被回收） | 未实现四态中的 403 态 | 见 N-03（整页替换 + 申请权限引导） | 🕐 待补 |
 | **BUG-15** | **P2** | 表格列排序点了不生效 | 配置了 `sortable: true` 的列（当前无页面启用） | 前端发 `sort=createdAt:asc`，而后端所有列表端点**都不读 `sort`**；且 api-spec §1.5 约定的是 `created_at:desc,id:asc`（snake_case） | 统一为 api-spec 约定（`<snake_case 字段>:asc\|desc`，多字段逗号分隔）并在后端列表端点消费；未实现前列表列不开放 `sortable` | 🕐 待补 |
+| **BUG-16** | **P0** | **点进任何具体功能页后侧边栏（连带顶栏、标签页）整块消失**，只剩一块裸内容区；点「系统管理 → 用户管理」必现 | 登录后点击侧边栏任意业务菜单（`/system/users`、`/system/roles`、`/demo-items`…）；工作台与个人中心正常 | `guard.ts` 用 `router.addRoute(route)` 把动态路由注册成**顶层记录**，匹配链里不含布局路由 → 渲染的是 `views/layout/blank.vue`（内容只有一个 `<router-view/>`），全局布局 `layout/index.vue` 根本没被挂载。目录类菜单的父组件 `blank.vue` 语义是「承载子路由出口」，从来不是「替代外壳」 | 动态路由统一经 `router/inject.ts` 的 `injectDynamicRoutes` **挂到布局路由（`name: 'Layout'`）之下**；匹配链变为 `Layout → /system → /system/users`，外壳常驻，内容区只换内层视图。子路由仍写绝对路径（URL 不变） | ✅ |
+| **BUG-17** | **P1** | 无权限时**看不到 403 页**：直输一个「存在但无权限」的路径（如 `/system/users`）落的是 **404**，与「路径不存在」无法区分 | 无 `user:read` 的账号直输 `/system/users`（或权限刚被回收后点旧标签） | 兜底路由已注册的前提下 `router.resolve()` **对任何路径都返回非空 `matched`**（命中 `/:pathMatch(.*)*`），因而 `if (resolved.matched.length > 0) return true` 恒成立；其后的 `KNOWN_SYSTEM_PATHS → 403` 分支是**不可达死代码** | 判定改为「匹配链是否命中兜底记录」（抽出纯函数 `resolveFallback` 便于单测）：命中兜底 + 属已知系统路径 → `/403`；命中兜底 + 路径未知 → `/404`；命中真实路由 → 放行。403 与 404 从此可区分 | ✅ |
+| **BUG-18** | **P2** | mock 下永远看不出「隐藏菜单仍进侧边栏」类缺陷 | 在菜单管理里把某菜单设为隐藏，用 mock 跑 | mock 的 `GET /auth/menus` 比真实后端**多做了一层 `visible` 过滤**，而真实后端只按权限码过滤、可见性由前端剪枝 → 前端 `visibleMenus()` 剪枝路径在 dev 下**永不执行**，「mock 全绿、真机炸」的经典温床 | mock 去掉 `visible` 过滤，与后端行为对齐（可见性在前端剪枝）；`订单中心` 菜单标注为 mock-only 演示菜单（生产 seed 已移除该分支） | ✅ |
+| **BUG-19** | **P0** | **登出后换另一个账号登录，侧边栏仍显示上一个账号的菜单**，且上一个账号有权限的页面（如用户管理）仍可路由进入（渲染别人的页面，只是接口 3002） | 同一浏览器标签页内：admin 登录 → 退出登录 → 用 alice 登录（不刷新页面） | ① 守卫判据只有 `if (!permission.routesAdded)`，而 `routesAdded` **登出后从未复位**——`permission.reset()` 在生产代码里**没有任何调用点**（只有单测调用）→ 换号后整个「加载菜单 + 注入路由」步骤被跳过；② 动态路由也不会随登出自动出表 | ① 判据改为「**菜单所属用户 id** 是否变化」（`menusOwnerId`）：登出与换号都能自愈，即使多入口登出（顶栏、个人中心、被踢下线）也无需逐一改；② 重建时传入上一轮注入的记录名，先 `removeRoute` 再注入 → 上一个账号的路径彻底出表，直输 URL 落 403（`TC-WEB-001 未授权路径不进路由表`）；③ `reset()` 刻意保留 `injectedRouteNames`（否则换号时无从移除旧记录） | ✅ |
+| **BUG-20** | **P2** | 换号后**标签页仍列出上一个账号开过的标签**（点进去落 403） | 与 BUG-19 同场景；标签本地持久化在 `localStorage` | `TagsView` 所有账号共用一个存储键 `fw_admin_tags`，既不隔离也不清理 → 新账号继承旧账号的标签，且两边互相覆盖写入 | 存储键按用户隔离为 `fw_admin_tags:<用户 id>`，并让键随登录用户变化 → 换号即自动切到该账号自己的标签集合（首个账号视为空）；不做旧键迁移（无法判断标签归属，迁移等于把上一个账号的标签泄露给新账号）。另修正装配顺序：`restore()` 必须放在持久化 watcher **之后**，否则初始状态不写回本地（刷新即丢标签） | ✅ |
 
 ## 4. 交互流程（涉及改动的关键路径）
 
-### 4.1 登录 → 动态路由 → 菜单（BUG-03/04/09）
+### 4.1 登录 → 动态路由 → 菜单（BUG-03/04/09/16/19）
 
 1. `/login` 提交 → 令牌落内存（access）+ 本地（refresh，按「记住我」选 local/session）。
 2. 守卫恢复会话 → `/auth/me`（权限码唯一权威来源）→ `/auth/menus`（已按权限码过滤，**未过滤 `visible`**）。
 3. 前端 `visibleMenus()` 递归剪枝隐藏节点 → 侧边栏数据；`generateRoutes()` 再按 `permissionCode` 二次过滤 + `resolveComponent()` 解析视图。
 4. **解析规则（本轮归一化）**：接受 `system/users`、`dashboard/index`、`layout/blank`、`views/demo-item/index` 四种写法；解析失败**跳过并告警**（绝不生成死链路由）。
-5. 目标路由未注册：属 `KNOWN_SYSTEM_PATHS` → `/403`；否则 `/404`。
+5. **注入规则（BUG-16）**：生成的路由**必须**以 `router.addRoute('Layout', record)` 挂到布局路由之下——顶层注册会让功能页脱离侧边栏/顶栏；与静态路由同路径的记录（`/dashboard`）跳过，保留静态记录。
+6. 目标路由未注册：属 `KNOWN_SYSTEM_PATHS` → `/403`；否则 `/404`（判定见 BUG-17）。
+
+**侧边栏可见性 = 布局是否在匹配链上**。任何「功能页侧边栏消失」的排查第一步都是看 `router.resolve(path).matched`：完整链应为
+`Layout → 目录节点（layout/blank）→ 具体页面`；只剩 `目录节点 → 具体页面` 就说明路由没挂到布局下。
+
+### 4.1.1 登出与换号（BUG-19）
+
+1. 登出：`user.logout()` → 服务端吊销 → 清本地态（**不动** permission store 的 `injectedRouteNames`）→ `router.push('/login')`。
+2. 下次进入受保护页面时守卫比对「当前登录用户 id」与 `menusOwnerId`：**不一致即重新加载菜单并重建路由表**（先移除上一轮注入的记录）。
+3. 结果：换号后侧边栏与可达页面立即归属新账号；被吊销的路径直输 URL 落 403，而不是渲染上一个账号的页面。
+4. 同一账号重复进入是幂等的（不会重复注册、不会误删静态路由）。
 
 ### 4.2 按钮级权限（BUG-02/06）
 
@@ -139,12 +158,19 @@
 - `src/components/CrudTable/index.vue`：操作列条件补插槽探测；新增 `permissionActions`；number/多选字段初始化与提交；查询条件持久化；批量删除容错与刷新。
 - `src/components/CrudTable/types.ts`：新增 `permissionActions`、`FormField.multiple`。
 - `src/components/FormDialog/index.vue`：下拉支持 `multiple`。
-- `src/store/permission.ts`：`component` 归一化解析；`KNOWN_SYSTEM_PATHS` 与真实菜单对齐；`visibleMenus()` 递归剪枝。
+- `src/store/permission.ts`：`component` 归一化解析；`KNOWN_SYSTEM_PATHS` 与真实菜单对齐；`visibleMenus()` 递归剪枝；新增 `menusOwnerId` / `injectedRouteNames`（换号重建，BUG-19）。
+- `src/router/routes.ts`：布局路由具名 `LAYOUT_ROUTE_NAME`；`/redirect` 移入布局内（标签页刷新不再卸载外壳）；导出 `CATCH_ALL_NAME`。
+- `src/router/inject.ts`（**新增**）：`injectDynamicRoutes()` —— 动态路由挂到布局之下 + 同路径去重 + 换号时先移除上一轮记录。
+- `src/router/guard.ts`：改用 `injectDynamicRoutes`（BUG-16）；抽出纯函数 `resolveFallback()` 修掉 403 死代码（BUG-17）；按 `menusOwnerId` 判定换号重建（BUG-19）。
+- `src/router/__tests__/layout-nesting.test.ts`（**新增**）：16 条护栏 —— 匹配链含 Layout、静态路由去重、`/redirect` 在布局内、公开页无外壳、真实挂载出 `.fw-sidebar`、换号后旧页面落 403、`resolveFallback` 三分支。
 - `src/store/dict.ts`：无 `dict:read` 短路降级。
 - `src/store/user.ts`、`src/api/auth.ts`、`src/api/types.ts`：新增 `GET/PUT /auth/profile` 与 `ProfileResult`。
 - `src/views/system/users|menus|dict|audit-logs|queue/index.vue`、`src/views/profile/index.vue`：权限门禁、多选角色、移除死 UI、导出按钮下线、自助资料切换。
 - `src/layout/AppMain.vue`：keep-alive 修复。
-- `mock/handlers.ts`：新增 `GET/PUT /auth/profile`；`DELETE /auth/sessions/:id` 补权限校验；`/auth/me` 与 profile 共用视图构造。
+- `src/layout/TagsView.vue`：标签存储键按用户隔离 + 修正装配顺序（BUG-20）。
+- `src/layout/__tests__/tags-view.test.ts`（**新增**）：2 条护栏 —— 新账号看不到上一个账号的标签、切回原账号恢复、两端存储键互不污染。
+- `mock/handlers.ts`：新增 `GET/PUT /auth/profile`；`DELETE /auth/sessions/:id` 补权限校验；`/auth/me` 与 profile 共用视图构造；`/auth/menus` 去掉 `visible` 过滤与后端对齐（BUG-18）。
+- `mock/db.ts`：标注 `订单中心` 为 mock-only 演示菜单。
 - `scripts/smoke-mock.mjs`：新增「个人资料自服务」冒烟段（8 条断言）。
 
 **后端（`apps/example-api`）**
@@ -161,12 +187,20 @@
 | 验证项 | 命令 | 结果 |
 |---|---|---|
 | 前端类型检查 | `cd apps/admin-web && ./node_modules/.bin/vue-tsc --noEmit` | ✅ 通过（0 错误） |
-| 前端单测 | `./node_modules/.bin/vitest run --no-file-parallelism` | ✅ 4 文件 / **31 通过**（新增 2 条回归：`visibleMenus` 递归剪枝、生成器 `views/<model>/index` 可解析） |
+| 前端单测 | `./node_modules/.bin/vitest run --no-file-parallelism` | ✅ 6 文件 / **48 通过**（含 16 条路由/布局护栏 + 1 条标签页隔离护栏） |
+| **护栏反向验证** | 临时回退修复后复跑同组测试 | ✅ **能失败才算数**：回退 BUG-16 → 3 条 FAIL（含 `.fw-sidebar` 挂载断言）；回退 BUG-19 → 3 条 FAIL；回退 BUG-20 → 1 条 FAIL |
 | mock 全链路冒烟 | `node scripts/smoke-mock.mjs` | ✅ **65/65 通过**（含新增 8 条自服务断言 + bundle gzip 门禁 311.5 kB / 231.6 kB） |
 | 后端类型检查 | `cd apps/example-api && ./node_modules/.bin/tsc -p tsconfig.json --noEmit` | ✅ 通过 |
-| 文件头门禁 | `node scripts/check-file-headers.mjs` | ✅ 371 个文件通过 |
+| 文件头门禁 | `node scripts/check-file-headers.mjs` | ✅ 373 个文件通过 |
 | 接口一致性 | `node scripts/check-api-parity.mjs` | ✅ 前端调用面全部有对应后端路由 |
 | 真机回归（1Panel / 裸机） | 见 [1Panel 实测手册](./63-1panel-real-deploy-verification.md)：重新发版 + `pnpm db:seed` + 重登 | ⛔ **未执行**（本轮未连真机；改动含种子，需重跑种子后按 §4.1 复验菜单与页面） |
+
+**BUG-16 的原始证据（修复前实测）**：以现有注入方式构造路由表后 `router.resolve('/system/users').matched` =
+`["/system","/system/users"]` —— 匹配链里没有 `Layout`，即外壳未被挂载。修复后为
+`["Layout","/system","/system/users"]`，DOM 断言 `.fw-sidebar` / `.fw-layout` / `.fw-tags` 均存在。
+
+> 已知无害告警：首次进入未注册的动态路由时，vue-router 会打印 `No match found for location with path "…"`。
+> 这是「先解析目标、再在守卫里注入路由」这一模式的固有产物（修复前同样存在），随后守卫会注入并重新解析，不影响结果。
 
 > 复现命令（本机）：
 > ```bash
@@ -182,3 +216,6 @@
 2. **发版注意**：本轮改了菜单与角色种子 → 真机必须**重跑 `db:seed` 并让用户重新登录**（动态路由与权限码均为登录时快照）；权限码新增 `dict:read` 授予普通角色后，已有角色的授权记录不会被自动补齐，需在角色页保存一次或在种子中确认。
 3. **产品待决策**：`GET /dict/:code` 是「登录即可读」还是「必须 `dict:read`」——本轮的折中是「授权 + 前端降级」；若后续放宽端点权限，请同步 `docs/40-api-spec.md` §3.6 与 `PERM.DICT_READ` 的说明。
 4. **体验债**：E-06 菜单图标/权限码选择器、E-05 工作台统计三态、死信列表无分页（后端 `listDeadLetters` 全量返回，规模大时需加窗口）。
+5. **标签页迁移说明（BUG-20 的副作用，可接受）**：标签存储键由 `fw_admin_tags` 改为 `fw_admin_tags:<用户 id>`，**不做旧键迁移**
+   —— 升级后各账号的标签集合会从空开始重建一次（旧键数据被弃用）。不迁移是刻意的：无法判断旧键里的标签属于哪个账号，
+   迁移等于把上一个账号的标签泄露给新账号。如需保留可加一次性提示，属产品待决策。
