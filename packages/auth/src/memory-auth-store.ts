@@ -6,6 +6,8 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo 实现 hasActiveRefreshTokenInFamily
+ * @modified 2026-10-14 donttemo BUG-15：pageUsers 消费 query.sort（内存排序 + 主键 tie-breaker 回落，
+ *   与 Prisma 实现的排序语义保持一致）
  * @module @fw/auth
  */
 
@@ -132,7 +134,17 @@ export class MemoryAuthStore implements AuthStore {
     if (query.roleId) {
       rows = rows.filter((u) => this.userRoles.get(u.id)?.has(query.roleId as string) === true);
     }
-    rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    // 排序（BUG-15）：字段白名单已在 HTTP 层校验，这里只负责方向；未传时回落主键升序
+    const sortEntries = Object.entries(query.sort ?? {}) as Array<[string, 'asc' | 'desc']>;
+    rows.sort((a, b) => {
+      const left = a as unknown as Record<string, unknown>;
+      const right = b as unknown as Record<string, unknown>;
+      for (const [field, direction] of sortEntries) {
+        const diff = compareValues(left[field], right[field]);
+        if (diff !== 0) return direction === 'desc' ? -diff : diff;
+      }
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
     const total = rows.length;
     // C-06 契约 §3.3：列表项须带 roleIds（分配角色弹窗预选）与 createdAt。
     // 内存实现不建模创建时间（用户是 seedUser 注入的），roleIds 由关联集合投影。
@@ -291,4 +303,25 @@ export class MemoryAuthStore implements AuthStore {
     const items = rows.slice((page - 1) * pageSize, page * pageSize);
     return { items, total, page, pageSize, hasMore: page * pageSize < total };
   }
+}
+
+/**
+ * 内存排序的字段值比较（BUG-15）
+ *
+ * Date 按时间戳、number 按数值、其余按字符串比较；null/undefined 视为最小值。
+ * 具体方言的 NULL 排序位置差异由 Prisma 实现负责，内存实现只保证「同一输入 → 同一输出」的确定性。
+ */
+function compareValues(left: unknown, right: unknown): number {
+  if (left === right) return 0;
+  if (left === null || left === undefined) return -1;
+  if (right === null || right === undefined) return 1;
+  if (left instanceof Date || right instanceof Date) {
+    const leftTime = new Date(left as string | number | Date).getTime();
+    const rightTime = new Date(right as string | number | Date).getTime();
+    return leftTime - rightTime;
+  }
+  if (typeof left === 'number' && typeof right === 'number') return left - right;
+  const leftText = String(left);
+  const rightText = String(right);
+  return leftText < rightText ? -1 : leftText > rightText ? 1 : 0;
 }

@@ -5,10 +5,12 @@
  *   本文件为「类型即契约」的唯一来源，实现方与消费方（前端/生成器）照抄签名。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo BUG-15：UserQuery 新增 sort（由 HTTP 层 parseSortQuery 按字段白名单解析后注入；
+ *   未传时存储层按 createdAt desc + id asc 的默认排序，保证分页 tie-breaker 稳定）
  * @module @fw/auth
  */
 
-import type { PageResult } from '@fw/db';
+import type { PageResult, Sort } from '@fw/db';
 
 /** 主键类型（框架统一字符串主键，与 M2 UUID 约定一致） */
 export type ID = string;
@@ -214,6 +216,12 @@ export interface UserQuery extends PageParams {
   keyword?: string;
   status?: number;
   roleId?: ID;
+  /**
+   * 排序（BUG-15）：实体字段名 → 方向。由 HTTP 层 `parseSortQuery` 按白名单解析后注入
+   * （未知字段在前置校验即 400，不会到达存储层）。未传时按 `createdAt desc, id asc` 排序。
+   * 存储层须始终追加主键 tie-breaker，保证分页结果稳定（TC-ORM-002）。
+   */
+  sort?: Sort<UserListItem>;
   /**
    * 可见部门 ID 集合（M8 T-M8-04）：用户属于其中任一部门即命中（OR 语义）。
    * 由数据范围解析注入（org / org_below 档），**禁止**来自客户端入参——否则可越权放宽范围。

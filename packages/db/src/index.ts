@@ -26,6 +26,13 @@ export type {
 } from './repository.interface.js';
 export { PrismaRepository } from './prisma-repository.js';
 export type { PrismaRepositoryOptions } from './prisma-repository.js';
+export {
+  SORT_QUERY_MAX_ITEMS,
+  parseSortItems,
+  parseSortQuery,
+  type ParsedSortItem,
+  type SortFieldMap,
+} from './query-params.js';
 export { DbModule, DB_CLIENT, TENANT_DATA_SOURCE, type DbModuleOptions, type DbReadinessProbe } from './db.module.js';
 export { TenantDataSource, type TenantDataSourceOptions, type TenantDataSourceStats } from './tenant-datasource.js';
 export {

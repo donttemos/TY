@@ -15,6 +15,7 @@
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo 行类型按 @fw/auth 契约把主键收窄为 string（@fw/db 的 BaseEntity.id 为 string | number）
  * @modified 2026-10-14 donttemo M8 T-M8-04：实现 DataScopeOrgPort；pageUsers 支持 departmentIds、pageAuditLogs 支持 userIds
+ * @modified 2026-10-14 donttemo BUG-15：pageUsers 消费 query.sort（映射为 Prisma orderBy，并始终追加 id asc tie-breaker）
  * @module example-api/auth
  */
 
@@ -244,10 +245,18 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
     }
     if (idFilter) where.id = { in: idFilter };
 
+    // 排序（BUG-15）：query.sort 已由 HTTP 层按字段白名单解析（未知字段在到达这里前即 400）；
+    // 未传时回落 createdAt desc。无论哪种情形都以 id asc 收尾，保证分页在同一排序键下稳定（TC-ORM-002）。
+    const sortEntries = Object.entries(query.sort ?? {});
+    const orderBy: Array<Record<string, string>> = sortEntries.length
+      ? sortEntries.map(([field, direction]) => ({ [field]: direction }))
+      : [{ createdAt: 'desc' }];
+    if (!sortEntries.some(([field]) => field === 'id')) orderBy.push({ id: 'asc' });
+
     const [rows, total] = await Promise.all([
       this.delegate('user').findMany({
         where,
-        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        orderBy,
         skip: (page - 1) * pageSize,
         take: pageSize,
       }) as Promise<UserRow[]>,

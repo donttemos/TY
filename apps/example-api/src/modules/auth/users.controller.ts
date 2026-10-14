@@ -14,12 +14,14 @@
  *   （原先直调 store.replaceUserRoles，绕过写库前校验）；PUT /users/:id 的角色校验
  *   **前置**到 updateUser 之前 —— 原先校验发生在资料已落库之后，非法角色会留下
  *   「资料已改、角色未改」的部分更新（客户端收到 400 却已生效）
+ * @modified 2026-10-14 donttemo BUG-15：GET /users 支持 `sort=<snake_case 字段>:<asc|desc>`（api-spec §1.5），
+ *   经 @fw/db 的 parseSortQuery 按 USER_SORT_FIELDS 白名单解析后透传存储层；未知字段 / 非法方向 / 超上限一律 400
  * @module example-api/auth
  */
 
 import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Query, Req } from '@nestjs/common';
 import { BizError, ErrorCode } from '@fw/core';
-import type { PageResult } from '@fw/db';
+import { parseSortQuery, type PageResult } from '@fw/db';
 import {
   AUTH_STORE,
   Audit,
@@ -69,6 +71,22 @@ function generateOneTimePassword(): string {
 }
 
 /**
+ * 用户列表可排序字段白名单（api-spec §1.5，BUG-15）
+ *
+ * 键为 HTTP 参数名（snake_case），值为实体字段名。白名单外字段一律 400 ——
+ * 既避免把任意 query 参数拼进 orderBy，也避免通过排序推断未暴露字段。
+ */
+const USER_SORT_FIELDS = {
+  id: 'id',
+  username: 'username',
+  nickname: 'nickname',
+  status: 'status',
+  created_at: 'createdAt',
+  updated_at: 'updatedAt',
+  last_login_at: 'lastLoginAt',
+} as const;
+
+/**
  * 用户控制器：/api/v1/users
  */
 @Controller('/api/v1/users')
@@ -98,9 +116,12 @@ export class UsersController {
     @Query('keyword') keyword?: string,
     @Query('status') status?: string,
     @Query('role_id') roleId?: string,
+    @Query('sort') sort?: string,
   ): Promise<PageResult<UserListItem>> {
     const scope = await resolveDataScopeFilter(user, this.org);
     const parsedSize = Number(pageSize);
+    // 排序解析放在数据范围解析之后、查询之前：非法 sort（未知字段 / 非法方向 / 超上限）直接 400（BUG-15）
+    const parsedSort = parseSortQuery<UserListItem>(sort, USER_SORT_FIELDS);
 
     if (scope.selfOnly) {
       // self 档只返回本人一条；经 AdminStore 取列表项以保证 roleIds / createdAt 与全量列表同构
@@ -115,6 +136,7 @@ export class UsersController {
       keyword,
       status: status === undefined ? undefined : Number(status),
       roleId,
+      sort: parsedSort,
       // org / org_below：按可见部门集合收敛；all 档不带条件
       ...(scope.departmentIds ? { departmentIds: scope.departmentIds } : {}),
     });

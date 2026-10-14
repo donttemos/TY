@@ -11,6 +11,8 @@
  * @modified 2026-10-14 donttemo v0.3.0 收口：菜单断言里的「订单中心」(/order) 已按「死链菜单」修复整支移除
  *   （视图与后端 /api/v1/orders 均不存在，真实部署必然死链；业务菜单示范改由 /demo-items 承担）——
  *   改为断言现存菜单（审计日志 / 队列管理），设计意图不变；属种子语义变更后的断言同步，非删除断言。
+ * @modified 2026-10-14 donttemo BUG-15：新增 3 条列表排序断言 —— `sort=username:asc` 生效（200 且升序）、
+ *   未知字段 → 400/1001、非法方向 → 400/1001（白名单校验必须拒绝而非静默忽略）
  * @module example-api
  */
 
@@ -89,6 +91,24 @@ async function main() {
   const allUsers = await call('/api/v1/users?page=1&pageSize=20', { token: admin.accessToken });
   check('admin 用户列表（dataScope=all）', allUsers.status === 200 && allUsers.body.code === 0 && allUsers.body.data.total >= 2,
     `total=${allUsers.body.data?.total}`);
+
+  // ---- BUG-15：列表排序参数（api-spec §1.5 的 sort=<snake_case 字段>:<asc|desc>）----
+  const sortedUsers = await call('/api/v1/users?page=1&pageSize=20&sort=username:asc', { token: admin.accessToken });
+  const sortedNames = (sortedUsers.body.data?.items ?? []).map((u) => u.username);
+  const isAscending = sortedNames.every((name, index) => index === 0 || sortedNames[index - 1] <= name);
+  check('GET /users?sort=username:asc 生效（200 且按用户名升序）',
+    sortedUsers.status === 200 && sortedUsers.body.code === 0 && sortedNames.length >= 2 && isAscending,
+    `names=${JSON.stringify(sortedNames)}`);
+
+  const badSortField = await call('/api/v1/users?sort=password:desc', { token: admin.accessToken });
+  check('GET /users?sort 未知字段 → 400/1001（白名单校验，不静默忽略）',
+    badSortField.status === 400 && badSortField.body.code === 1001,
+    `http=${badSortField.status} code=${badSortField.body.code}`);
+
+  const badSortDir = await call('/api/v1/users?sort=username:up', { token: admin.accessToken });
+  check('GET /users?sort 非法方向 → 400/1001',
+    badSortDir.status === 400 && badSortDir.body.code === 1001,
+    `http=${badSortDir.status} code=${badSortDir.body.code}`);
 
   const roles = await call('/api/v1/roles', { token: admin.accessToken });
   check('GET /roles 返回内置角色', roles.status === 200 && roles.body.data.some((r) => r.code === 'admin') && roles.body.data.some((r) => r.code === 'user'),
