@@ -1,0 +1,65 @@
+# @file 队列消费者 systemd 模板单元（云服务器裸机部署，无 Docker）
+# @description 与主服务同一份 dist、以 handler 角色启动，只消费队列不接外部流量。模板单元支持横向起多个实例：
+#     systemctl enable --now fw-worker@01 fw-worker@02
+#   **实例名必须写两位数字**，因为它同时是 HTTP 端口尾号（@01 → APP_PORT=3001，@02 → 3002，… 最大 @09 → 3009）。
+#   应用启动时会一并监听 HTTP（健康探针 /ready、队列管理端点 /api/v1/admin/queue/*），裸机上共用 3000 会端口冲突，
+#   因此用端口隔离而非进程隔离；这些端口不对公网暴露，只由本机 systemd/探针与 nginx 内网访问。
+# @author donttemo
+# @created 2026-10-14
+# @module deploy
+
+[Unit]
+Description=FW 通用应用框架 - 队列消费者实例 %i
+Documentation=file:/opt/fw/current/docs/61-bare-metal-deploy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fw
+Group=fw
+WorkingDirectory=/opt/fw/current/apps/example-api
+EnvironmentFile=/opt/fw/shared/.env
+Environment=NODE_ENV=production
+# 传输角色：只处理请求，不发起调用（caller 只发起 / handler 只处理 / both 兼顾）。
+# 注意：即使角色为 handler，进程仍会监听 HTTP 端口用于探针，故下面的端口隔离是必需的。
+Environment=TRANSPORT_ROLE=handler
+# 端口隔离：%i 即实例名（两位数字），拼成 3001…3009
+Environment=APP_PORT=30%i
+# 小内存机器限制 V8 堆（同 fw-api.service 的说明，worker 上限更低）
+Environment=NODE_OPTIONS=--max-old-space-size=512
+
+ExecStart=/usr/local/bin/node dist/main.js
+
+KillSignal=SIGTERM
+# 需大于 MQ_SHUTDOWN_TIMEOUT（默认 30s）与 SHUTDOWN_TIMEOUT 的较大值：
+# worker 停机要等在途任务跑完，否则重试队列会出现重复执行
+TimeoutStopSec=60
+
+Restart=always
+RestartSec=3
+SuccessExitStatus=0 143
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/opt/fw/shared/data
+
+# 资源约束：worker 与 API 常驻同机时须把总额度控制在物理内存内
+# （2C2G 上二者合计建议 ≤ 1200M，否则与数据库容器争抢会触发整机 OOM）
+MemoryHigh=384M
+MemoryMax=512M
+
+LimitNOFILE=65535
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fw-worker
+
+[Install]
+WantedBy=multi-user.target

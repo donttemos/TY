@@ -106,3 +106,18 @@
 | 运行期版本自述 | 应用自报版本与实际版本一致 | ✅ `apps/example-api` `/api/v1/demo/ok` 的 `framework` 由 `v0.1.0` 更新为 `v0.2.0`（冒烟实录核对发现并修复） |
 
 **遗留（不阻塞发布，已在发布报告登记）**：R2-01 真实 K8s 集群部署冒烟未执行、R2-02 FR-08 配置中心占位未实现、R2-03 长压与百万行分页未覆盖、R2-04 Redis Cluster 实跑 —— 见 [`90-release-v0.2.0.md`](./90-release-v0.2.0.md) §6。
+
+## 9. 裸机部署增量核对（2026-10-14）
+
+> 范围：新增「云服务器裸机部署」路径（1 份手册 + 5 个部署资产）与既有文档的一致性，按第 6 节硬规则核对。
+
+| 维度 | 检查项 | 结果 |
+|---|---|---|
+| 交付物完整性 | 新增手册是否入索引 | ✅ `docs/61-bare-metal-deploy.md` 已入 `README.md` 文档索引；目录树 `deploy/` 段补 `systemd/`、`scripts/`、`nginx/fw-host.conf`；`CHANGELOG.md` 记入 `[Unreleased] → Added` |
+| 资产路径可解析 | 手册引用的新增资产是否真实存在 | ✅ `deploy/systemd/{fw-api.service, fw-worker@.service, fw.env.example}`、`deploy/scripts/bare-metal-deploy.sh`、`deploy/nginx/fw-host.conf` |
+| 与既有档位不冲突 | 与 60 手册四档部署的关系是否说明 | ✅ 61 §17 给出档位对照表并指向 60 手册 §4/§5/§6，避免重复与矛盾 |
+| 配置键真伪 | 新样例 47 个键是否被实现消费 | ⚠️ 45 项经 `env-schema.ts` 与 `process.env` 直接读取核对通过；`FW_PID_FILE` 由 `apps/example-api/src/main.ts` 读取（有效）；**`LOG_FORMAT` 存在于 60 手册 §3 与既有编排（compose / helm values），但配置 schema 未声明、`@fw/logger` 亦未消费** → 本轮已在 61 §13 与 `fw.env.example` 中显式标注（见遗留 L-05） |
+| 命令正确性 | 手册命令与仓库脚本是否一致 | ✅ `pnpm --filter "example-api..." run build`、`pnpm run db:migrate`、`prisma generate --schema prisma/schema.prisma` 与 `package.json` scripts 一致；部署脚本经 `bash -n` 语法校验通过 |
+| 数据库约束表述 | provider 与迁移方言约束是否与 PRD-002/ADR-0002 一致 | ✅ 61 §6.2 与 [PRD-002](./prd/prd-002-database-abstraction.md) §7「切换演练」、ADR-0002「重建迁移」表述一致，并复用 `matrix-db-setup.mjs` 的 migrate diff 手法 |
+
+**遗留（不阻塞，登记待办）**：**L-05** `LOG_FORMAT` 为「文档与编排声明但实现未消费」的键——需在配置 schema 中补齐该键（连带 `@fw/logger` 按格式切换输出），或从 60 手册 §3 与两处编排中移除，二者取其一以消除歧义。

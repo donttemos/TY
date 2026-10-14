@@ -1,0 +1,79 @@
+# @file 应用主服务 systemd 单元（云服务器裸机部署，无 Docker）
+# @description 托管 example-api 的 HTTP 主进程：systemd 负责开机自启、崩溃自愈、优雅停机与日志归集。
+#   安装：cp deploy/systemd/fw-api.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now fw-api
+#   排障与完整步骤见 docs/61-bare-metal-deploy.md
+# @author donttemo
+# @created 2026-10-14
+# @module deploy
+
+[Unit]
+Description=FW 通用应用框架 - API 服务（example-api）
+Documentation=file:/opt/fw/current/docs/61-bare-metal-deploy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fw
+Group=fw
+
+# 工作目录必须是应用目录：Prisma schema/migrations 与 .env 均按 cwd 解析（见 prisma/schema.prisma）
+WorkingDirectory=/opt/fw/current/apps/example-api
+# 全部配置键在此文件（权限 600，不进版本库）；格式为 KEY=VALUE，不支持 export 与变量插值
+EnvironmentFile=/opt/fw/shared/.env
+Environment=NODE_ENV=production
+# 小内存机器（2C2G）必须限制 V8 堆：默认上限会按整机物理内存推导，内存吃紧时内核
+# 可能优先杀掉 PostgreSQL/MySQL 而不是本进程。限制堆后由下方 MemoryHigh/MemoryMax 承接压力。
+Environment=NODE_OPTIONS=--max-old-space-size=640
+
+# 直接执行 node，不经 pnpm/npm 包装层：少一层进程，systemd 的 SIGTERM 才能直达 node，
+# 应用内 setupGracefulShutdown 的优雅停机（SHUTDOWN_TIMEOUT，默认 10s）不被中间层吞掉。
+# 该路径由 deploy/scripts/server-bootstrap.sh 创建（符号链接 → /usr/local/node-v*-linux-*/bin/node）。
+ExecStart=/usr/local/bin/node dist/main.js
+
+# 停机信号与超时：默认即 SIGTERM，与 setupGracefulShutdown 对接；
+# TimeoutStopSec 必须大于 SHUTDOWN_TIMEOUT，否则 systemd 会在应用排空完在途请求前强杀（SIGKILL）。
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# 崩溃自愈：进程异常退出后 3s 拉起（含端口重新绑定前的等待）
+Restart=always
+RestartSec=3
+
+# 退出码语义：0 正常退出；143 = 128 + 15（SIGTERM），属计划内停机，不计为失败
+SuccessExitStatus=0 143
+
+# ---- 安全加固（最小权限）----
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+# ProtectSystem=strict 会让整个文件系统只读，因此必须显式放开需要写入的目录。
+# 本目录承载：SQLite 数据库文件（含 -journal/-wal）、上传文件、FW_PID_FILE。
+# 若数据库改用云 RDS/自建 PostgreSQL、上传走对象存储，此目录可保留为空。
+ReadWritePaths=/opt/fw/shared/data
+
+# ---- 资源约束（小内存机器专用）----
+# MemoryHigh 软限：超限后内核回收该 cgroup 的页缓存并施加节流，但不杀进程；
+# MemoryMax 硬限：超限即由 cgroup OOM killer 只杀本进程，systemd 随即按 Restart=always 拉起——
+# 这样可避免整机 OOM 时内核按 oom_score 误杀 PostgreSQL / MySQL，把数据库一起带走。
+# 2C2G 建议 1024M；若该机不跑数据库容器，可放宽到 1400M。
+MemoryHigh=768M
+MemoryMax=1024M
+
+# 长连接与高并发下的文件描述符上限
+LimitNOFILE=65535
+
+# 日志统一进 journald：journalctl -u fw-api -f 查看。
+# 注意：输出格式当前由实现固定为结构化 JSON；环境变量 LOG_FORMAT 尚未接入配置 schema
+# （已登记 docs/95-doc-audit.md L-05），设置它不会改变输出行为。
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fw-api
+
+[Install]
+WantedBy=multi-user.target

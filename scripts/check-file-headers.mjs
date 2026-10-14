@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /** 扫描根目录（相对当前工作目录） */
-const SCAN_DIRS = ['packages', 'apps', 'templates', 'scripts'];
+const SCAN_DIRS = ['packages', 'apps', 'templates', 'scripts', 'deploy'];
 /** 需要检查的文件后缀 */
 const EXTENSIONS = ['.ts', '.tsx', '.js', '.mjs', '.cjs', '.vue', '.sql', '.yml', '.yaml', '.py', '.sh'];
 /** 跳过的目录（构建产物 / VCS / 工具生成物） */

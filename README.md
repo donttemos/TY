@@ -47,10 +47,15 @@ framework/
   apps/
     example-api/              # 示例应用（每里程碑的验证载体）
     admin-web/                # M5 管理后台前端（Vue3 + Vite + Element Plus，C-06 mock 可独立运行）
-  deploy/                     # M8 部署模板（T-M8-07）
+  deploy/                     # M8 部署模板（T-M8-07）+ 裸机 / 1Panel 部署资产
     helm/fw-app/              # Helm Chart（探针/HPA/PDB/迁移 Job/worker/admin-web + README）
     docker-compose.prod.yml   # 中档部署编排（app/worker/postgres/redis/nginx/migrate）
     nginx/fw.conf             # 中档 Nginx 配置（SPA 回退 / API 反代 / 登录限流）
+    nginx/fw-host.conf        # 裸机 Nginx 配置（上游 127.0.0.1:3000 + release 软链静态根）
+    nginx/fw-1panel-locations.conf # 1Panel OpenResty 站点接入片段（粘贴进面板站点 server{} 内）
+    systemd/                  # 进程托管（fw-api.service / fw-worker@.service / fw.env.example）
+    scripts/                  # server-bootstrap.sh（Node/pnpm/用户/swap 初始化）、probe-env.sh（部署前环境勘察）、
+                              # bare-metal-deploy.sh（release 软链切换 + 迁移 + 健康检查 + 自动回滚）
   scripts/
     check-file-headers.mjs    # 文件头注释校验（中文 / 作者 / 日期）
     check-no-raw-sql.mjs      # 原生 SQL 方言标注检查（TC-ORM-005）
@@ -69,6 +74,8 @@ framework/
     40-api-spec.md            # API 文档
     50-test-cases.md          # 测试用例
     60-deployment-ops.md      # 部署与运维手册
+    61-bare-metal-deploy.md   # 云服务器裸机部署手册（宿主 nginx，无容器）
+    62-1panel-real-deploy.md  # 1Panel 服务器真机部署手册（OpenResty 反代 + 面板托管的数据库）
     70-engineering-standards.md # 编码 / Git / PR 规范
     80-project-plan.md        # 项目计划与任务板
     85-parallel-workstreams.md # 并行开发工作线划分（契约 / 所有权 / 集成点）
@@ -122,6 +129,8 @@ fw gen crud order
 | [ER 图与数据字典](./docs/30-data-dictionary.md) | 建模约定、权限/系统/租户三域 ER 图、15 张表字段字典 |
 | [API 文档](./docs/40-api-spec.md) | 通用约定、错误码、10 类接口清单、限流与幂等、版本策略 |
 | [部署与运维手册](./docs/60-deployment-ops.md) | 三档部署、配置清单、备份恢复、监控告警、故障 Runbook、升级回滚 |
+| [云服务器裸机部署手册](./docs/61-bare-metal-deploy.md) | 不用容器的服务器部署：systemd 进程托管、release 软链发版与秒级回滚、nginx 静态托管与 HTTPS、数据库档位与 provider 约束、备份监控与排障速查 |
+| [1Panel 真机部署手册](./docs/62-1panel-real-deploy.md) | 已有 1Panel 面板的服务器落地：OpenResty host 网络反代、容器化数据库的宿主端口接入、PostgreSQL schema 变体与迁移重建、2C2G 内存约束（V8 堆 + cgroup MemoryMax）、站点目录与 HTTPS、**未验证项清单** |
 | [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.2.0 已发布，M1–M8 全部交付） |
 | [ADR 架构决策记录](./docs/adr/README.md) | 12 条决策：NestJS / Prisma（已定稿）/ monorepo / 缓存 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 |
 | [编码 Git PR 规范](./docs/70-engineering-standards.md) | 编码规范、**中文注释规范（文件头含作者与日期）**、反模式清单、分支与提交约定、PR 与评审规则 |

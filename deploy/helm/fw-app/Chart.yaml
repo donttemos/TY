@@ -1,4 +1,9 @@
-# Helm Chart 元信息（T-M8-07 / PRD-008 FR-09）
+# @file Chart.yaml
+# @description Helm Chart 元信息（T-M8-07 / PRD-008 FR-09）
+# @author donttemo
+# @created 2026-10-14
+# @module deploy
+#
 # 用法：helm upgrade --install myapp ./deploy/helm/fw-app -f values-prod.yaml --wait
 apiVersion: v2
 name: fw-app

@@ -14,6 +14,36 @@
 
 ## [Unreleased]
 
+### Added（云服务器裸机部署资产，2026-10-14）
+
+> 补齐「不用容器」的部署路径：容器档位（单机 Docker / compose / Helm）此前只有编排模板，没有进程托管与宿主侧发版能力。
+> 新增资产使云服务器可用 systemd 直接托管 Node 进程，发版以 release 目录 + 软链原子切换 + 健康检查兜底实现可回滚。
+
+- **`docs/61-bare-metal-deploy.md`**：云服务器裸机部署手册——架构与目录布局、服务器与安全组准备、Node/pnpm 安装、配置与 **Prisma provider 约束**（schema 与迁移为 SQLite 方言，切云 RDS 需重建迁移）、构建位置选择（**Windows 本地构建产物不可用于 Linux**：query engine 为平台相关二进制）、首次部署、systemd 托管、nginx 与 HTTPS、备份监控、安全加固、排障速查。
+- **`deploy/systemd/fw-api.service`**：应用主服务单元。直连 `node dist/main.js`（不经 pnpm 包装层，保证 SIGTERM 直达）、`Restart=always` 自愈、`TimeoutStopSec=30` 对接优雅停机、`SuccessExitStatus=0 143`、`ProtectSystem=strict` + `ReadWritePaths=/opt/fw/shared/data` 最小权限加固。
+- **`deploy/systemd/fw-worker@.service`**：队列消费者模板单元，`TRANSPORT_ROLE=handler`；因应用启动即监听 HTTP，用 **端口隔离**（实例名即端口尾号，`@01` → 3001）避免与主服务争用 3000。
+- **`deploy/systemd/fw.env.example`**：裸机 EnvironmentFile 样例，含语法差异提示（不支持 `export`/变量插值、`$` 会被展开）、密钥生成命令、SQLite 与云 RDS 两档配置，以及 OTel 可选依赖在 `--prod` 安装下会缺失的提醒。
+- **`deploy/scripts/bare-metal-deploy.sh`**：宿主侧发版脚本。常驻 clone + `git archive` 导出（只出被跟踪文件）→ 装依赖 → `prisma generate` → 拓扑序构建（`pnpm --filter "example-api..."`）→ 前端构建 → **迁移先行** → `mv -Tf` 原子切换软链 → 重启 systemd → 健康检查轮询；失败自动切回上一 release 并重启，保留最近 5 份历史版本；`--rollback` 支持秒级回退。
+- **`deploy/nginx/fw-host.conf`**：裸机 nginx 配置，与容器版 `fw.conf` 职责一致，差异为上游改 `127.0.0.1:3000`、静态根指向 `current` 软链；补 `/assets/` 长缓存 + `index.html` 不缓存（发版即时生效）与基础安全响应头。
+
+### Added（1Panel 真机部署适配与 PostgreSQL schema 变体，2026-10-14）
+
+> 面向「已有 1Panel 面板的云服务器」补齐落地路径：应用仍以 systemd 跑在宿主机（不用容器），复用面板托管的 PostgreSQL/Redis 与 OpenResty 反向代理。
+> 与上一段的裸机资产共享同一套 systemd 单元与发版脚本，差异集中在反代与静态托管（见 `docs/62-1panel-real-deploy.md` §13 对照表）。
+
+- **`apps/example-api/prisma/pg/schema.prisma` + `prisma/pg/migrations/`**：**PostgreSQL 生产变体**。Prisma 的 `datasource.provider` 是编译期字面量、迁移 DDL 依方言生成，仓库默认 schema 及其四个迁移均为 SQLite 方言，**不能直接应用到 PostgreSQL**。本变体与默认 schema 的模型段**逐字节一致**（12 个模型，`md5` 相同，校验命令见手册 §4.2），仅 `provider` 与迁移目录不同，用 `--schema` 显式切换。初始迁移由 `prisma migrate diff --from-empty --to-schema-datamodel` 生成：**12 表 / 29 索引**，`TIMESTAMP(3)` / `JSONB` / `BIGINT`，零 SQLite 残留。**刻意不改编默认 schema**，故本地开发与 CI base 作业（依赖 sqlite + `dev.db`）完全不受影响。
+- **`docs/62-1panel-real-deploy.md`**：1Panel 真机部署手册。核心是把三条**容器跨界约束**讲清并给出做法——① 1Panel 的 OpenResty 是**容器但 host 网络**，反代可用 `127.0.0.1:3000` 命中宿主上的 systemd 服务；② 其**文件系统隔离**，容器内看不到 `/opt/fw`，故前端产物必须同步到面板站点目录，**不能**像宿主 nginx 那样 root 到 release 软链；③ MySQL/PG/Redis 均为**容器**，应用在宿主机侧必须用 `127.0.0.1:<宿主映射端口>`，写容器名必然 `ECONNREFUSED`。另含 2C2G 内存取舍、验收清单、排障速查与**未验证项清单**（明确区分「已静态校验」与「待真机确认」）。
+- **`deploy/scripts/server-bootstrap.sh`**：服务器初始化脚本（幂等）。Node 22 LTS 从 npmmirror 取官方二进制直解（不走 NodeSource，国内带宽更稳）→ `corepack` 激活 `pnpm@11.6.0` → 创建系统用户 `fw` 与 `/opt/fw/*` 目录骨架 → 创建 2G swap 与内核参数（`vm.swappiness=10` / `vm.overcommit_memory=1`）。**swap 是 2C2G 全量构建的硬前提**：`pnpm install` + `tsc` 峰值内存约 1.2~1.6G。
+- **`deploy/scripts/probe-env.sh`**：部署前**只读**环境勘察。探测 1Panel 版本与安装目录、容器网络模式与端口映射、数据库宿主可达性、80/443/3000 占用、外网可达性，并**自动判定 OpenResty 是否为 host 网络**（直接决定反代地址该怎么写）、给出构建可行性结论。输出不含任何密码。
+- **`deploy/nginx/fw-1panel-locations.conf`**：1Panel 站点接入片段。因面板自己管理 `server_name` / `listen` / 证书指令（整份覆盖会被面板改回），本文件只提供可粘贴进既有 `server { }` 的 `location` 块（静态长缓存、SPA 回退、`/api` 反代、登录限流、`/health`）与 http 层级片段，并明确「HTTPS 走面板 Acme 流程，不要手写 443 块」。
+- **`deploy/scripts/bare-metal-deploy.sh`**：新增三个可覆盖变量——`PRISMA_SCHEMA`（切换 schema 变体，`prisma generate` 与 `db:migrate` 同时生效）、`WEB_SYNC_DIR`（前端产物 rsync 到 1Panel 站点目录，带 `--delete` 与目标目录存在性校验）、`COREPACK_HOME`（复用 bootstrap 预热的 pnpm 缓存，避免重复下载）。
+- **`deploy/systemd/fw-api.service` / `fw-worker@.service`**：针对小内存机器补资源约束——`NODE_OPTIONS=--max-old-space-size`（API 640 / worker 512）与 `MemoryHigh`/`MemoryMax`（API 768M/1024M，worker 384M/512M）。作用是让内存压力由 **cgroup OOM killer 只杀本进程**（systemd 随即按 `Restart=always` 拉起），而非整机 OOM 时内核按 `oom_score` 误杀 PostgreSQL/MySQL 把数据库一并带走；`ExecStart` 路径同步为 bootstrap 创建的 `/usr/local/bin/node`。
+- **`deploy/systemd/fw.env.example`**：数据库段落改写为「两套 schema 如何选 + `PRISMA_SCHEMA` 归位」，并补 1Panel 本机容器 PostgreSQL 的连接串样例（host 必须写 `127.0.0.1`、端口取面板的宿主映射端口）。
+
+### Fixed（文件头门禁扫描范围遗漏 `deploy/`，2026-10-14）
+
+- **`scripts/check-file-headers.mjs` 的 `SCAN_DIRS` 未包含 `deploy`**：该目录下的 `.sh` / `.yml` / `.yaml` **从未被文件头门禁覆盖**——既有的 `deploy/helm/fw-app/**`、`deploy/docker-compose.prod.yml`，以及上一轮新增的 `deploy/scripts/bare-metal-deploy.sh` 全都在扫描范围之外。这违反「每源文件强制文件头」的仓库规范，却不会让门禁变红，属**静默失效的检查**。现将 `deploy` 纳入扫描（受检文件 347 → 366），并补齐 `docker-compose.prod.yml`、`helm/fw-app/Chart.yaml`、`helm/fw-app/values.yaml`、`helm/fw-app/values-prod.yaml` 四个文件的头注释（`@created` 取各自首次提交日期）。`pnpm run check:helm` 回归 **63/63**，未受影响。
+
 ### Fixed（v0.2.0 推送后首次真实 Actions 运行排障，2026-10-14）
 
 > 仓库首次推送 GitHub 后 CI 在真实 Actions 上连续暴露 6 处**只在干净环境（无本地 `.env`、无既有 `node_modules`/`dist`）才复现**的缺陷，逐层修复后 [run 38513416509](https://github.com/donttemos/TY/actions/runs/38513416509) 四大作业（基础门禁 24 步 + 三库集成矩阵）全绿，耗时 4m28s。以下修复均不改变已发布产物的运行期行为。

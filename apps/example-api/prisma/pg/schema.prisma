@@ -1,0 +1,252 @@
+/*
+ * @file example-api 数据模型（PostgreSQL 生产变体）
+ * @description 与 ../schema.prisma 的模型段逐字节一致，唯一差异是 datasource.provider = "postgresql"。
+ *
+ *   为什么需要这一份：Prisma 的 datasource.provider 是**编译期字面量**，不能用 env() 切换；
+ *   而 migrations/*.sql 是按方言生成的 DDL。仓库默认的 ../schema.prisma 是 sqlite（本地开发与
+ *   CI 的 base 作业依赖它，其 dev.db 与 migration 也全是 sqlite 方言），因此生产环境需要独立一份，
+ *   否则无法在 PostgreSQL / MySQL 上建表。
+ *
+ *   迁移目录随 schema 隔离：Prisma 在「schema 文件同级」查找 migrations/，故本文件对应
+ *   prisma/pg/migrations/，与 sqlite 的 prisma/migrations/ 互不干扰。
+ *
+ *   部署与使用（务必用 --schema 显式指定，勿依赖默认值）：
+ *     pnpm exec prisma generate --schema prisma/pg/schema.prisma
+ *     pnpm run db:migrate -- --schema=prisma/pg/schema.prisma
+ *
+ *   ★ 约束：两份 schema 的模型段必须保持逐字节一致。新增模型/字段时须同步修改两份，
+ *     否则本地（sqlite）与生产（postgresql）结构漂移，且漂移只会在真机上暴露。
+ *     校验办法：diff <(sed -n '/^model /,$p' schema.prisma) <(sed -n '/^model /,$p' pg/schema.prisma)
+ *
+ * @author donttemo
+ * @created 2026-10-14
+ * @module example-api
+ */
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // 本文件固定为 postgresql；sqlite / mysql 见 ../schema.prisma 与 ../test-schema.*.prisma 约定
+  provider = "postgresql"
+  url      = env("DB_URL")
+}
+
+/// 演示条目（M2 通用约定字段全集）
+model DemoItem {
+  id        String   @id @default(uuid())
+  title     String
+  done      Boolean  @default(false)
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String   @default("system")
+  updatedBy String   @default("system")
+}
+
+// ---------- M3 鉴权与权限（字段与 docs/30-data-dictionary.md §3.1~3.13 对齐） ----------
+// 主键统一 UUID 字符串（与 M2 DemoItem 的 @fw/db BaseEntity 约定一致，数据字典中的 bigint 为逻辑描述）
+
+/// 用户（PRD-003 FR-01）
+model User {
+  id           String    @id @default(uuid())
+  tenantId     BigInt    @default(0) @map("tenant_id")
+  username     String    @unique
+  phone        String?   @unique
+  email        String?   @unique
+  passwordHash String    @map("password_hash")
+  nickname     String?
+  avatar       String?
+  status       Int       @default(1)
+  lastLoginAt  DateTime? @map("last_login_at")
+  lastLoginIp  String?   @map("last_login_ip")
+  deletedAt    DateTime? @map("deleted_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+  createdBy    String    @default("system") @map("created_by")
+  updatedBy    String    @default("system") @map("updated_by")
+
+  @@index([tenantId], map: "idx_users_tenant")
+  @@index([status], map: "idx_users_status")
+  @@map("users")
+}
+
+/// 角色（PRD-003 FR-04/FR-10）
+model Role {
+  id         String   @id @default(uuid())
+  tenantId   BigInt   @default(0) @map("tenant_id")
+  code       String
+  name       String
+  remark     String?
+  isSystem   Int      @default(0) @map("is_system")
+  dataScope  String   @default("self") @map("data_scope")
+  sort       Int      @default(0)
+  deletedAt  DateTime? @map("deleted_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  createdBy  String   @default("system") @map("created_by")
+  updatedBy  String   @default("system") @map("updated_by")
+
+  @@unique([tenantId, code], map: "uk_roles_tenant_code")
+  @@index([tenantId], map: "idx_roles_tenant")
+  @@map("roles")
+}
+
+/// 权限点（PRD-003 FR-04：编码 `资源:操作`，类型 menu/button/api）
+model Permission {
+  id         String   @id @default(uuid())
+  code       String   @unique
+  name       String
+  type       String   @default("api")
+  module     String?
+  sort       Int      @default(0)
+  deletedAt  DateTime? @map("deleted_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  createdBy  String   @default("system") @map("created_by")
+  updatedBy  String   @default("system") @map("updated_by")
+
+  @@index([type], map: "idx_permissions_type")
+  @@index([module], map: "idx_permissions_module")
+  @@map("permissions")
+}
+
+/// 用户-角色关联（无审计字段，故不经 Repository<T>）
+model UserRole {
+  userId String @map("user_id")
+  roleId String @map("role_id")
+
+  @@id([userId, roleId])
+  @@index([roleId], map: "idx_ur_role")
+  @@index([userId], map: "idx_ur_user")
+  @@map("user_role")
+}
+
+/// 角色-权限关联（无审计字段，故不经 Repository<T>）
+model RolePermission {
+  roleId       String @map("role_id")
+  permissionId String @map("permission_id")
+
+  @@id([roleId, permissionId])
+  @@map("role_permission")
+}
+
+/// 菜单（PRD-003 FR-09：供后台动态路由）
+model Menu {
+  id             String   @id @default(uuid())
+  parentId       String   @default("0") @map("parent_id")
+  name           String
+  path           String?
+  component      String?
+  icon           String?
+  permissionCode String?  @map("permission_code")
+  visible        Int      @default(1)
+  sort           Int      @default(0)
+  deletedAt      DateTime? @map("deleted_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+  createdBy      String   @default("system") @map("created_by")
+  updatedBy      String   @default("system") @map("updated_by")
+
+  @@index([parentId], map: "idx_menus_parent")
+  @@index([permissionCode], map: "idx_menus_perm")
+  @@map("menus")
+}
+
+/// 组织部门（PRD-008 FR-05，数据字典 §3.7：树形，parentId='0' 为顶级）
+model Department {
+  id        String    @id @default(uuid())
+  tenantId  BigInt    @default(0) @map("tenant_id")
+  parentId  String    @default("0") @map("parent_id")
+  code      String?
+  name      String
+  leaderId  String?   @map("leader_id")
+  sort      Int       @default(0)
+  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdBy String    @default("system") @map("created_by")
+  updatedBy String    @default("system") @map("updated_by")
+
+  @@unique([tenantId, code], map: "uk_dept_tenant_code")
+  @@index([tenantId], map: "idx_dept_tenant")
+  @@index([parentId], map: "idx_dept_parent")
+  @@map("departments")
+}
+
+/// 用户-部门关联（PRD-008 FR-05，数据字典 §3.8：支持多部门，isPrimary 标主部门）
+model UserDepartment {
+  userId       String @map("user_id")
+  departmentId String @map("department_id")
+  isPrimary    Int    @default(0) @map("is_primary")
+
+  @@id([userId, departmentId])
+  @@index([departmentId], map: "idx_ud_dept")
+  @@map("user_department")
+}
+
+/// 刷新令牌（PRD-003 FR-02/FR-03：只存哈希 + 轮换族）
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  tokenHash String    @unique @map("token_hash")
+  familyId  String    @map("family_id")
+  expireAt  DateTime  @map("expire_at")
+  revokedAt DateTime? @map("revoked_at")
+  loginIp   String?   @map("login_ip")
+  userAgent String?   @map("user_agent")
+  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdBy String    @default("system") @map("created_by")
+  updatedBy String    @default("system") @map("updated_by")
+
+  @@index([userId], map: "idx_rt_user")
+  @@index([familyId], map: "idx_rt_family")
+  @@index([expireAt], map: "idx_rt_expire")
+  @@map("refresh_tokens")
+}
+
+/// 审计日志（PRD-003 FR-08：仅创建，不更新不删除）
+model AuditLog {
+  id          String   @id @default(uuid())
+  tenantId    BigInt   @default(0) @map("tenant_id")
+  userId      String?  @map("user_id")
+  module      String
+  action      String
+  targetType  String?  @map("target_type")
+  targetId    String?  @map("target_id")
+  beforeValue Json?    @map("before_value")
+  afterValue  Json?    @map("after_value")
+  ip          String?
+  userAgent   String?  @map("user_agent")
+  traceId     String?  @map("trace_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId], map: "idx_audit_tenant")
+  @@index([userId], map: "idx_audit_user")
+  @@index([action], map: "idx_audit_action")
+  @@index([targetType, targetId], map: "idx_audit_target")
+  @@index([traceId], map: "idx_audit_trace")
+  @@index([createdAt], map: "idx_audit_created")
+  @@map("audit_logs")
+}
+
+/// 租户（PRD-008 FR-01/FR-02，数据字典 §3.10）
+model Tenant {
+  id        String    @id
+  code      String    @unique
+  name      String
+  isolation String    @default("shared")
+  dbUrlEnc  String?   @map("db_url_enc")
+  plan      String?
+  status    Int       @default(1)
+  expireAt  DateTime? @map("expire_at")
+  deletedAt DateTime? @map("deleted_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  createdBy String    @default("system") @map("created_by")
+  updatedBy String    @default("system") @map("updated_by")
+
+  @@map("tenants")
+}

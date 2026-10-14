@@ -1,4 +1,9 @@
-# fw-app 默认 values（对照 docs/60-deployment-ops.md §6 大档部署）
+# @file values.yaml
+# @description fw-app 默认 values（对照 docs/60-deployment-ops.md §6 大档部署）
+# @author donttemo
+# @created 2026-10-14
+# @module deploy
+#
 # 生产建议不直接改本文件，另建 values-<env>.yaml 覆盖。
 # 密钥类字段（secrets.*）一律留空，经外部 Secret / CSI 注入（见 templates/secret.yaml）。
 

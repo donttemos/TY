@@ -1,4 +1,9 @@
-# 生产档 values 覆盖示例（T-M8-07 / docs/60-deployment-ops.md §6 大档）
+# @file values-prod.yaml
+# @description 生产档 values 覆盖示例（T-M8-07 / docs/60-deployment-ops.md §6 大档）
+# @author donttemo
+# @created 2026-10-14
+# @module deploy
+#
 # 用法：helm upgrade --install myapp ./deploy/helm/fw-app -f values-prod.yaml \
 #         --set image.tag=1.0.0 --set secrets.existingSecret=fw-prod-secrets --wait
 # 原则：密钥只经 existingSecret（外部 Secret / CSI 注入），本文件不含任何明文密钥。

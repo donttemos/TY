@@ -1,4 +1,9 @@
-# 中档部署编排（T-M8-07 / PRD-008 FR-09 / docs/60-deployment-ops.md §5）
+# @file docker-compose.prod.yml
+# @description 中档部署编排（T-M8-07 / PRD-008 FR-09 / docs/60-deployment-ops.md §5）
+# @author donttemo
+# @created 2026-10-14
+# @module deploy
+#
 # 用法：docker compose --env-file .env.prod -f deploy/docker-compose.prod.yml up -d
 # 组件：nginx（静态 + 反代）| app×N（无状态）| worker（队列消费者）| postgres | redis
 # 原则：应用无状态；会话/令牌走 JWT 或 Redis；定时任务靠 Redis 分布式锁单点执行。
