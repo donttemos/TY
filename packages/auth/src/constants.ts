@@ -4,6 +4,7 @@
  *   新增权限点必须同步 docs/40-api-spec.md 与本文件，避免前后端权限不同源（PRD-003 FR-04/FR-09）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-14 donttemo C-06 收口：新增 dict:read / dict:write / auth:revoke-session（补齐管理后台契约声明的权限点）
  * @module @fw/auth
  */
 
@@ -49,6 +50,11 @@ export const PERM = {
   MENU_DELETE: 'menu:delete',
   /** 审计日志查询 */
   AUDIT_READ: 'audit:read',
+  /** 字典读 / 维护（PRD-005 FR-07：字典项避免前端硬编码枚举） */
+  DICT_READ: 'dict:read',
+  DICT_WRITE: 'dict:write',
+  /** 下线本人登录设备 */
+  AUTH_REVOKE_SESSION: 'auth:revoke-session',
 } as const;
 
 /** 权限码字面量类型 */

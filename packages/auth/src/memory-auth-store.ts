@@ -134,7 +134,13 @@ export class MemoryAuthStore implements AuthStore {
     }
     rows.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     const total = rows.length;
-    const items = rows.slice((page - 1) * pageSize, page * pageSize).map(({ passwordHash: _ignored, ...rest }) => rest);
+    // C-06 契约 §3.3：列表项须带 roleIds（分配角色弹窗预选）与 createdAt。
+    // 内存实现不建模创建时间（用户是 seedUser 注入的），roleIds 由关联集合投影。
+    const items = rows.slice((page - 1) * pageSize, page * pageSize).map(({ passwordHash: _ignored, ...rest }) => ({
+      ...rest,
+      roleIds: [...(this.userRoles.get(rest.id) ?? [])],
+      createdAt: null,
+    }));
     return { items, total, page, pageSize, hasMore: page * pageSize < total };
   }
 

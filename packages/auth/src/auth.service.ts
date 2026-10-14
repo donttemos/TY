@@ -443,6 +443,21 @@ export class AuthService {
     return { affectedUsers: affected.length };
   }
 
+  /**
+   * 失效持有指定角色的用户权限缓存
+   * 用途：角色**资料**变更（如 dataScope 调整）后即时生效——dataScope 不落 role_permission，
+   * 不走 grantRolePermissions 的失效路径，须显式调用本方法，否则已登录用户仍持旧数据范围。
+   * @param roleId 角色 ID
+   * @returns 受影响用户数
+   */
+  async invalidateUsersOfRole(roleId: ID): Promise<{ affectedUsers: number }> {
+    const affected = await this.deps.store.listUserIdsByRoleId(roleId);
+    if (affected.length === 0) return { affectedUsers: 0 };
+    await this.deps.permissions.invalidateUsers(affected);
+    logger.info('角色资料已变更，相关用户缓存已失效', { roleId, affectedUsers: affected.length });
+    return { affectedUsers: affected.length };
+  }
+
   /** 组装请求用户（登录 / 刷新 / 改密共用） */
   private toRequestUser(
     id: ID,

@@ -14,7 +14,8 @@
     "lint": "turbo run lint",
     "check:headers": "node scripts/check-file-headers.mjs",
     "check:config": "fw check",
-    "check:helm": "node scripts/check-helm-chart.mjs"
+    "check:helm": "node scripts/check-helm-chart.mjs",
+    "check:api-parity": "node scripts/check-api-parity.mjs"
   },
   "devDependencies": {
     "turbo": "^2.3.0",

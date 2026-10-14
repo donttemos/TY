@@ -254,10 +254,23 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
       this.delegate('user').count({ where }),
     ]);
 
+    // 列表批量投影角色 ID（C-06 契约 §3.3：分配角色弹窗预选），避免逐行 N+1
+    const roleLinks = rows.length
+      ? ((await this.delegate('userRole').findMany({
+          where: { userId: { in: rows.map((row) => row.id) } },
+        })) as UserRoleRow[])
+      : [];
+    const roleIdsByUser = new Map<string, string[]>();
+    for (const link of roleLinks) {
+      const bucket = roleIdsByUser.get(link.userId) ?? [];
+      bucket.push(link.roleId);
+      roleIdsByUser.set(link.userId, bucket);
+    }
+
     return {
       items: rows.map((row) => {
         const { passwordHash: _ignored, ...rest } = this.toAuthUser(row);
-        return rest;
+        return { ...rest, roleIds: roleIdsByUser.get(row.id) ?? [], createdAt: row.createdAt };
       }),
       total,
       page,

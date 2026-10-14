@@ -82,6 +82,9 @@ const FRAMEWORK_PERMISSIONS: PermissionSeed[] = [
   { code: PERM.MENU_UPDATE, name: '菜单修改', type: 'menu', module: 'menu' },
   { code: PERM.MENU_DELETE, name: '菜单删除', type: 'menu', module: 'menu' },
   { code: PERM.AUDIT_READ, name: '审计日志查询', type: 'api', module: 'audit' },
+  { code: PERM.DICT_READ, name: '字典查询', type: 'api', module: 'dict' },
+  { code: PERM.DICT_WRITE, name: '字典维护', type: 'api', module: 'dict' },
+  { code: PERM.AUTH_REVOKE_SESSION, name: '下线登录设备', type: 'api', module: 'auth' },
   // M7 队列管理端点（@fw/queue 的 QueueAdminController，路径 /api/v1/admin/queue）的守卫权限。
   // 真机部署修复：缺少这两点会让整个队列管理功能面对任何角色都返回 3002，必须随种子建出并授予 admin。
   { code: QUEUE_PERM_LIST, name: '队列查看', type: 'api', module: 'queue' },
@@ -142,6 +145,8 @@ const MENU_TREE: MenuSeed[] = [
       { name: '用户管理', path: '/system/users', component: 'system/users', icon: 'user', permissionCode: PERM.USER_READ, sort: 1 },
       { name: '角色权限', path: '/system/roles', component: 'system/roles', icon: 'shield', permissionCode: PERM.ROLE_READ, sort: 2 },
       { name: '审计日志', path: '/system/audit-logs', component: 'system/audit-logs', icon: 'file-text', permissionCode: PERM.AUDIT_READ, sort: 3 },
+      { name: '菜单管理', path: '/system/menus', component: 'system/menus', icon: 'menu', permissionCode: PERM.MENU_READ, sort: 4 },
+      { name: '字典管理', path: '/system/dict', component: 'system/dict', icon: 'collection', permissionCode: PERM.DICT_READ, sort: 5 },
     ],
   },
   {
@@ -157,7 +162,7 @@ const MENU_TREE: MenuSeed[] = [
   },
 ];
 
-/** 清场顺序：外键依赖倒序（关联表 → 主表 → 演示表 → 租户） */
+/** 清场顺序：外键依赖倒序（关联表 → 主表 → 演示表 → 租户 → 字典） */
 async function truncate(): Promise<void> {
   await prisma.auditLog.deleteMany();
   await prisma.refreshToken.deleteMany();
@@ -169,8 +174,98 @@ async function truncate(): Promise<void> {
   await prisma.role.deleteMany();
   await prisma.department.deleteMany();
   await prisma.user.deleteMany();
+  await prisma.dictItem.deleteMany();
+  await prisma.dictCategory.deleteMany();
   await prisma.demoItem.deleteMany();
   await prisma.tenant.deleteMany();
+}
+
+/** 字典种子：编码 / 名称 / 项（value 为程序值，label 为展示值，color 供标签取色） */
+interface DictSeed {
+  code: string;
+  name: string;
+  remark?: string;
+  items: Array<{ label: string; value: string; color?: string }>;
+}
+
+/**
+ * 字典基线（PRD-005 FR-07：页面不硬编码枚举）
+ * 编码与前端实际消费点一一对应：
+ *   user_status  —— 用户管理页状态列 / 表单（views/system/users/index.vue）
+ *   data_scope   —— 角色管理页数据范围列 / 表单（views/system/roles/index.vue，四档与 roles.data_scope 同源）
+ *   audit_action —— 审计日志页动作筛选列（views/system/audit-logs/index.vue）
+ *   order_channel—— 订单演示页渠道筛选（views/demo/orders/index.vue）
+ * 缺任一项，对应页面首次渲染即 404（GET /api/v1/dict/:code）。
+ */
+const DICT_SEED: DictSeed[] = [
+  {
+    code: 'user_status',
+    name: '用户状态',
+    remark: '账号启用 / 禁用',
+    items: [
+      { label: '启用', value: '1', color: 'success' },
+      { label: '禁用', value: '0', color: 'danger' },
+    ],
+  },
+  {
+    code: 'data_scope',
+    name: '数据范围',
+    remark: '角色可见数据边界，四档与 roles.data_scope 同源',
+    items: [
+      { label: '全部数据', value: 'all', color: 'primary' },
+      { label: '本部门及下级', value: 'org_below', color: 'warning' },
+      { label: '本部门', value: 'org', color: 'warning' },
+      { label: '仅本人', value: 'self', color: 'info' },
+    ],
+  },
+  {
+    code: 'audit_action',
+    name: '审计动作',
+    remark: '审计日志 action 字段取值',
+    items: [
+      { label: '新增', value: 'create', color: 'success' },
+      { label: '修改', value: 'update', color: 'warning' },
+      { label: '删除', value: 'delete', color: 'danger' },
+      { label: '登录', value: 'login', color: 'primary' },
+      { label: '登出', value: 'logout', color: 'info' },
+      { label: '导出', value: 'export', color: 'info' },
+      { label: '授权', value: 'grant', color: 'primary' },
+    ],
+  },
+  {
+    code: 'order_channel',
+    name: '订单渠道',
+    remark: '演示订单来源渠道',
+    items: [
+      { label: '小程序', value: 'miniapp', color: 'primary' },
+      { label: 'APP', value: 'app', color: 'success' },
+      { label: '网页', value: 'web', color: 'info' },
+      { label: '线下', value: 'offline', color: 'warning' },
+    ],
+  },
+];
+
+/** 写入字典分类与字典项 */
+async function seedDicts(): Promise<void> {
+  let sort = 0;
+  for (const category of DICT_SEED) {
+    const row = await prisma.dictCategory.create({
+      data: { code: category.code, name: category.name, remark: category.remark ?? null },
+    });
+    let itemSort = 0;
+    for (const item of category.items) {
+      await prisma.dictItem.create({
+        data: {
+          categoryId: row.id,
+          label: item.label,
+          value: item.value,
+          color: item.color ?? null,
+          sort: itemSort++,
+        },
+      });
+    }
+    sort += 1;
+  }
 }
 
 /**
@@ -324,6 +419,9 @@ async function main(): Promise<void> {
   // 5) 菜单
   const menuCounter = { count: 0 };
   await seedMenus('0', MENU_TREE, menuCounter);
+
+  // 5.5) 字典基线（PRD-005 FR-07：页面不硬编码枚举；缺项即对应页面 GET /dict/:code 404）
+  await seedDicts();
 
   // 6) M6 生成器产物：权限点 + 菜单（幂等 upsert；truncate 之后执行，admin 显式授权后后台角色配置页可见）
   await seedDemoItemPermissions();

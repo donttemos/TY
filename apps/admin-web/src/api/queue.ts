@@ -43,7 +43,7 @@ export function fetchCrons(): Promise<CronListResult> {
  * @param name 任务名
  */
 export function tickCron(name: string): Promise<CronTickResult> {
-  return request.post<CronTickResult>(`/queue/crons/${encodeURIComponent(name)}/tick`);
+  return request.post<CronTickResult>(`/admin/queue/crons/${encodeURIComponent(name)}/tick`);
 }
 
 /**
@@ -59,7 +59,7 @@ export function fetchDeadLetters(queue?: string): Promise<DeadLetterListResult> 
  * @param id 任务 ID
  */
 export function requeueDeadLetter(id: string): Promise<DeadLetterRequeueResult> {
-  return request.post<DeadLetterRequeueResult>(`/queue/dead-letters/${encodeURIComponent(id)}/requeue`);
+  return request.post<DeadLetterRequeueResult>(`/admin/queue/dead-letters/${encodeURIComponent(id)}/requeue`);
 }
 
 /**

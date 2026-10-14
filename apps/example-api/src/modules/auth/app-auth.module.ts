@@ -15,6 +15,9 @@
 import { Module } from '@nestjs/common';
 import { AuthModule, AUTH_STORE, DATA_SCOPE_ORG } from '@fw/auth';
 import type { AuthStore, DataScopeOrgPort } from '@fw/auth';
+import { ADMIN_STORE, PrismaAdminStore } from '../admin/admin-store.js';
+import { DictController } from '../admin/dict.controller.js';
+import { MenusController } from '../admin/menus.controller.js';
 import { AuditController } from './audit.controller.js';
 import { AuthController } from './auth.controller.js';
 import { AuthMaintenanceJobs } from './auth-maintenance.js';
@@ -29,9 +32,20 @@ import { UsersController } from './users.controller.js';
  */
 @Module({
   imports: [AuthModule.forRoot({ store: PrismaAuthStore, cache: CacheBackedAuthCache })],
-  controllers: [AuthController, UsersController, RbacController, AuditController, MaintenanceController],
+  controllers: [
+    AuthController,
+    UsersController,
+    RbacController,
+    AuditController,
+    MaintenanceController,
+    // C-06 契约 §3.5 / §3.6：菜单维护与字典（M5 前端按契约全量实现，M3 后端未落地，接入真实 API 后 404）
+    MenusController,
+    DictController,
+  ],
   providers: [
     AuthMaintenanceJobs,
+    // 管理后台存储端口：用户软删 / 角色维护 / 菜单维护 / 登录设备 / 审计详情 / 字典
+    { provide: ADMIN_STORE, useClass: PrismaAdminStore },
     // M8 T-M8-04：组织解析端口与 AuthStore 同实现（PrismaAuthStore），经 AUTH_STORE 适配注册，
     // 避免 useExisting 造成二次实例化；存储缺部门能力时启动即失败（fail-fast），不留运行期 500
     {

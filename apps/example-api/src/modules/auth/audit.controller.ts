@@ -9,7 +9,8 @@
  * @module example-api/auth
  */
 
-import { Controller, Get, Inject, Query } from '@nestjs/common';
+import { Controller, Get, Inject, Param, Query } from '@nestjs/common';
+import { BizError, ErrorCode } from '@fw/core';
 import type { PageResult } from '@fw/db';
 import {
   AuthService,
@@ -23,6 +24,8 @@ import {
   type DataScopeOrgPort,
   type RequestUser,
 } from '@fw/auth';
+import { ADMIN_STORE } from '../admin/admin-store.js';
+import type { AdminStore } from '../admin/admin-store.js';
 
 /**
  * 审计日志控制器：/api/v1/audit-logs
@@ -32,6 +35,7 @@ export class AuditController {
   constructor(
     private readonly auth: AuthService,
     @Inject(DATA_SCOPE_ORG) private readonly org: DataScopeOrgPort,
+    @Inject(ADMIN_STORE) private readonly admin: AdminStore,
   ) {}
 
   /** 审计日志分页查询 */
@@ -68,5 +72,21 @@ export class AuditController {
       from: from ? new Date(from) : undefined,
       to: to ? new Date(to) : undefined,
     });
+  }
+
+  /**
+   * 审计详情（字段级变更前后值）
+   * dataScope 与列表同源收敛：self 档只看本人记录，范围外目标一律 404（不泄露存在性，fail-closed）。
+   */
+  @Permissions(PERM.AUDIT_READ)
+  @Get(':id')
+  async detail(@CurrentUser() user: RequestUser, @Param('id') id: string): Promise<AuditLogRecord> {
+    const scope = await resolveDataScopeFilter(user, this.org);
+    const record = await this.admin.findAuditLogById(id);
+    if (!record) throw new BizError(ErrorCode.NOT_FOUND, '审计日志不存在');
+    if (scope.selfOnly && record.userId !== user.id) {
+      throw new BizError(ErrorCode.NOT_FOUND, '审计日志不存在');
+    }
+    return record;
   }
 }

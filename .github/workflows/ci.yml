@@ -118,6 +118,20 @@ jobs:
           node scripts/smoke-auth.mjs
           kill "$(cat /tmp/fw-api.pid)"
 
+      # C-06 契约收口：管理后台端点冒烟。这些端点（字典/菜单维护/用户维护/角色维护/登录设备/审计详情）
+      # 在契约与 mock 中齐全，但后端 M3 未落地，接真实 API 后集体 404 —— 本步骤逐个验证。
+      # 独立起服务：登录限流计数器是进程内的，与 smoke-auth 共用进程会互相打满（429 假失败）。
+      - name: C-06 管理后台端点冒烟（SQLite）
+        working-directory: apps/example-api
+        run: |
+          node dist/main.js & echo $! > /tmp/fw-api-admin.pid
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3000/health > /dev/null && break
+            sleep 1
+          done
+          node scripts/smoke-admin.mjs
+          kill "$(cat /tmp/fw-api-admin.pid)"
+
       # M4 缓存层端到端冒烟：memory 驱动全能力 + redis 降级 + 配置守卫（PRD-004 AC）
       # 脚本自带服务生命周期（端口 3100），复用上一步已迁移/播种的 SQLite 库
       - name: M4 缓存层端到端冒烟（SQLite）
@@ -161,11 +175,15 @@ jobs:
       - name: M8 Helm Chart 渲染与清单校验
         run: node scripts/check-helm-chart.mjs
 
-      # 静态检查：文件头门禁 + 原生 SQL 白名单门禁
+      # 静态检查：文件头门禁 + 原生 SQL 白名单门禁 + 前后端接口对撞门禁
       - name: 文件头门禁
         run: pnpm run check:headers
       - name: 方言白名单门禁（TC-ORM-005）
         run: node scripts/check-no-raw-sql.mjs
+      # C-06 契约收口：契约先行 + mock 顶上，前端调用面与后端路由面必须逐一对上。
+      # 缺此门禁时「契约声明、mock 有、后端未注册」的端点只在接真实 API 后才 404
+      - name: 前后端接口对撞门禁（C-06 API parity）
+        run: node scripts/check-api-parity.mjs
 
   # ---------- 三库集成矩阵（TC-ORM-001：同一套用例三库各跑一遍） ----------
   integration:

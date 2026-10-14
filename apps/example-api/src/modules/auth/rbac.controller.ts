@@ -10,10 +10,11 @@
  * @module example-api/auth
  */
 
-import { Body, Controller, Get, Inject, Param, Put, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Req } from '@nestjs/common';
 import { BizError, ErrorCode } from '@fw/core';
 import {
   AUTH_STORE,
+  Audit,
   AuthService,
   CurrentUser,
   PERM,
@@ -23,6 +24,8 @@ import {
   type AuthRole,
   type AuthStore,
 } from '@fw/auth';
+import { ADMIN_STORE } from '../admin/admin-store.js';
+import type { AdminStore, RoleDetail, RoleUpsertInput } from '../admin/admin-store.js';
 import { clientIp } from './auth.controller.js';
 import type { Request } from 'express';
 
@@ -40,13 +43,14 @@ export class RbacController {
   constructor(
     private readonly auth: AuthService,
     @Inject(AUTH_STORE) private readonly store: AuthStore,
+    @Inject(ADMIN_STORE) private readonly admin: AdminStore,
   ) {}
 
-  /** 角色列表 */
+  /** 角色列表（含权限点计数，C-06 契约 §3.4 RoleListItem） */
   @Permissions(PERM.ROLE_READ)
   @Get('roles')
-  async listRoles(): Promise<AuthRole[]> {
-    return this.store.listRoles();
+  async listRoles(): Promise<RoleDetail[]> {
+    return this.admin.listRoleDetails();
   }
 
   /** 某角色已授权的权限点 */
@@ -99,5 +103,84 @@ export class RbacController {
       groups.set(key, bucket);
     }
     return [...groups.entries()].map(([module, items]) => ({ module, items }));
+  }
+
+  /** 新建角色（编码唯一，冲突 409；新角色默认无权限，需再走授权接口） */
+  @Permissions(PERM.ROLE_CREATE)
+  @Audit({ module: 'role', action: 'create', targetType: 'role' })
+  @Post('roles')
+  async createRole(
+    @Body() body: RoleUpsertInput,
+    @CurrentUser('id') operator: string,
+    @Req() request: Request,
+  ): Promise<RoleDetail> {
+    try {
+      return await this.admin.createRole(body);
+    } catch (error) {
+      throw this.conflict(error, '角色编码已存在');
+    }
+  }
+
+  /**
+   * 更新角色资料
+   * 约束：code 不可改（code 是权限判定与种子同步的锚点）；内置角色不可改 dataScope
+   * （保证内置管理员始终 all，否则改窄即失去系统可管理性）。dataScope 变更后失效相关用户缓存。
+   */
+  @Permissions(PERM.ROLE_UPDATE)
+  @Audit({ module: 'role', action: 'update', targetType: 'role' })
+  @Put('roles/:id')
+  async updateRole(
+    @Param('id') id: string,
+    @Body() body: RoleUpsertInput,
+    @CurrentUser('id') operator: string,
+    @Req() request: Request,
+  ): Promise<RoleDetail> {
+    if (body.code !== undefined) {
+      throw new BizError(ErrorCode.STATE_NOT_ALLOWED, '角色编码不可修改（编码是权限判定锚点）');
+    }
+    const existing = (await this.admin.listRoleDetails()).find((role) => role.id === id);
+    if (!existing) throw new BizError(ErrorCode.NOT_FOUND, '角色不存在');
+    if (existing.isSystem && body.dataScope !== undefined && body.dataScope !== existing.dataScope) {
+      throw new BizError(ErrorCode.STATE_NOT_ALLOWED, '内置角色的数据范围不可调整（保证系统可管理性）');
+    }
+    const updated = await this.admin.updateRole(id, body);
+    if (body.dataScope !== undefined && body.dataScope !== existing.dataScope) {
+      await this.auth.invalidateUsersOfRole(id);
+    }
+    return updated;
+  }
+
+  /** 删除角色（内置角色拒绝；仍有用户持有时拒绝，先解绑） */
+  @Permissions(PERM.ROLE_DELETE)
+  @Audit({ module: 'role', action: 'delete', targetType: 'role' })
+  @Delete('roles/:id')
+  async deleteRole(@Param('id') id: string, @CurrentUser('id') operator: string, @Req() request: Request): Promise<{ id: string }> {
+    const existing = (await this.admin.listRoleDetails()).find((role) => role.id === id);
+    if (!existing) throw new BizError(ErrorCode.NOT_FOUND, '角色不存在');
+    if (existing.isSystem) {
+      throw new BizError(ErrorCode.STATE_NOT_ALLOWED, '内置角色不可删除');
+    }
+    const holders = await this.admin.countRoleUsers(id);
+    if (holders > 0) {
+      throw new BizError(ErrorCode.STATE_NOT_ALLOWED, `仍有 ${holders} 个用户持有该角色，请先解绑`);
+    }
+    await this.admin.deleteRole(id);
+    return { id };
+  }
+
+  /** 复制角色（含权限）；新角色编码自动加 `-copy` 后缀并保证唯一 */
+  @Permissions(PERM.ROLE_CREATE)
+  @Audit({ module: 'role', action: 'create', targetType: 'role' })
+  @Post('roles/:id/copy')
+  async copyRole(@Param('id') id: string): Promise<RoleDetail> {
+    return this.admin.copyRole(id);
+  }
+
+  /** 唯一约束冲突转业务 409（其余原样抛出，交由全局异常过滤） */
+  private conflict(error: unknown, message: string): unknown {
+    if (error && typeof error === 'object' && (error as { code?: string }).code === 'P2002') {
+      return new BizError(ErrorCode.CONFLICT, message);
+    }
+    return error;
   }
 }

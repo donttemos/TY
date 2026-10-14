@@ -13,37 +13,71 @@
  * @module example-api/auth
  */
 
-import { Body, Controller, Get, Inject, Param, Put, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Query, Req } from '@nestjs/common';
 import { BizError, ErrorCode } from '@fw/core';
 import type { PageResult } from '@fw/db';
 import {
   AUTH_STORE,
+  Audit,
   AuthService,
   AuditService,
   CurrentUser,
   DATA_SCOPE_ORG,
+  MASKED,
   PERM,
+  PasswordService,
   Permissions,
+  ROLE,
   assertWithinDataScope,
+  checkPasswordPolicy,
   resolveDataScopeFilter,
   type AuthStore,
+  type AuthUser,
   type DataScopeOrgPort,
   type RequestUser,
   type UserListItem,
 } from '@fw/auth';
+import { ADMIN_STORE } from '../admin/admin-store.js';
+import type { AdminStore } from '../admin/admin-store.js';
 import { clientIp } from './auth.controller.js';
 import type { Request } from 'express';
+
+/** 新建 / 更新用户入参（C-06 契约 §3.3 UserUpsertInput） */
+interface UserUpsertBody {
+  username?: string;
+  password?: string;
+  nickname?: string;
+  phone?: string;
+  email?: string;
+  status?: number;
+  roleIds?: string[];
+}
+
+/** 一次性密码字符集（去除易混淆字符 0/O/1/l/I） */
+const ONE_TIME_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+const ONE_TIME_SPECIALS = '@#$%&*!';
+
+/** 生成满足密码策略（medium 档：≥8 位含字母数字特殊字符）的一次性密码 */
+function generateOneTimePassword(): string {
+  const pick = (from: string): string => from[Math.floor(Math.random() * from.length)];
+  const body = Array.from({ length: 10 }, () => pick(ONE_TIME_ALPHABET)).join('');
+  return `${pick(ONE_TIME_ALPHABET)}${body}${pick('23456789')}${pick(ONE_TIME_SPECIALS)}`;
+}
 
 /**
  * 用户控制器：/api/v1/users
  */
 @Controller('/api/v1/users')
 export class UsersController {
+  /** 密码哈希与策略校验（无状态服务，控制器内直接实例） */
+  private readonly passwords = new PasswordService('medium');
+
   constructor(
     private readonly auth: AuthService,
     private readonly audit: AuditService,
     @Inject(AUTH_STORE) private readonly store: AuthStore,
     @Inject(DATA_SCOPE_ORG) private readonly org: DataScopeOrgPort,
+    @Inject(ADMIN_STORE) private readonly admin: AdminStore,
   ) {}
 
   /**
@@ -65,22 +99,9 @@ export class UsersController {
     const parsedSize = Number(pageSize);
 
     if (scope.selfOnly) {
-      const me = await this.store.findUserById(scope.ownerId ?? user.id);
-      const items: UserListItem[] = me
-        ? [
-            {
-              id: me.id,
-              username: me.username,
-              phone: me.phone,
-              email: me.email,
-              nickname: me.nickname,
-              avatar: me.avatar,
-              status: me.status,
-              lastLoginAt: me.lastLoginAt,
-              lastLoginIp: me.lastLoginIp,
-            },
-          ]
-        : [];
+      // self 档只返回本人一条；经 AdminStore 取列表项以保证 roleIds / createdAt 与全量列表同构
+      const me = await this.admin.findUserListItemById(scope.ownerId ?? user.id);
+      const items: UserListItem[] = me ? [me] : [];
       return { items, total: items.length, page: 1, pageSize: parsedSize, hasMore: false };
     }
 
@@ -145,5 +166,190 @@ export class UsersController {
       ip: clientIp(request),
     });
     return { id, status: updated.status, forcedLogout: revoked !== null };
+  }
+
+  /**
+   * 用户详情（含角色 ID）
+   * 详情越权校验先于存在性查询：范围外目标一律 3002，不泄露存在性（fail-closed）。
+   */
+  @Permissions(PERM.USER_READ)
+  @Get(':id')
+  async detail(@Param('id') id: string, @CurrentUser() user: RequestUser): Promise<UserListItem> {
+    await assertWithinDataScope(user, id, this.org);
+    const found = await this.admin.findUserListItemById(id);
+    if (!found) throw new BizError(ErrorCode.NOT_FOUND, '用户不存在');
+    return found;
+  }
+
+  /** 新建用户（密码走后端强校验，不信任前端强度判断；账号唯一冲突 409） */
+  @Permissions(PERM.USER_CREATE)
+  @Audit({ module: 'user', action: 'create', targetType: 'user' })
+  @Post()
+  async create(
+    @Body() body: UserUpsertBody,
+    @CurrentUser('id') operator: string,
+    @Req() request: Request,
+  ): Promise<UserListItem> {
+    if (!body?.username) throw new BizError(ErrorCode.BAD_REQUEST, 'username 必填');
+    if (!body?.password) throw new BizError(ErrorCode.BAD_REQUEST, 'password 必填');
+    const policy = checkPasswordPolicy(body.password, 'medium');
+    if (!policy.ok) throw new BizError(ErrorCode.BAD_REQUEST, `密码不合规：${policy.issues.join('；')}`);
+    if (body.roleIds !== undefined && !Array.isArray(body.roleIds)) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'roleIds 必须为字符串数组');
+    }
+    // 账号唯一性：username / phone / email 任一被占用即 409（不指明具体字段，避免枚举）
+    for (const candidate of [body.username, body.phone, body.email]) {
+      if (candidate === undefined || candidate === null || candidate === '') continue;
+      if (await this.store.findUserByAccount(candidate)) {
+        throw new BizError(ErrorCode.CONFLICT, '账号已被占用');
+      }
+    }
+
+    const created = await this.store.createUser({
+      username: body.username,
+      passwordHash: await this.passwords.hash(body.password),
+      phone: body.phone,
+      email: body.email,
+      nickname: body.nickname,
+    });
+    if (body.roleIds?.length) await this.store.replaceUserRoles(created.id, body.roleIds);
+
+    this.audit.record({
+      userId: operator,
+      module: 'user',
+      action: 'create',
+      targetType: 'user',
+      targetId: created.id,
+      after: { username: created.username, roleIds: body.roleIds ?? [] },
+      ip: clientIp(request),
+    });
+
+    const item = await this.admin.findUserListItemById(created.id);
+    if (!item) throw new BizError(ErrorCode.INTERNAL, '用户创建成功但读取失败');
+    return item;
+  }
+
+  /**
+   * 更新用户资料
+   * 约束：username 不可改（账号是登录与审计锚点）；禁用（status=0）同时强制下线，与 setStatus 同语义。
+   */
+  @Permissions(PERM.USER_UPDATE)
+  @Audit({ module: 'user', action: 'update', targetType: 'user' })
+  @Put(':id')
+  async update(
+    @Param('id') id: string,
+    @Body() body: UserUpsertBody,
+    @CurrentUser('id') operator: string,
+    @CurrentUser() user: RequestUser,
+    @Req() request: Request,
+  ): Promise<UserListItem> {
+    if (body.username !== undefined) {
+      throw new BizError(ErrorCode.STATE_NOT_ALLOWED, '账号不可修改（账号是登录与审计锚点）');
+    }
+    if (body.status !== undefined && body.status !== 0 && body.status !== 1) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'status 只能为 0（禁用）或 1（启用）');
+    }
+    if (body.roleIds !== undefined && !Array.isArray(body.roleIds)) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'roleIds 必须为字符串数组');
+    }
+    await assertWithinDataScope(user, id, this.org);
+    const before = await this.admin.findUserListItemById(id);
+    if (!before) throw new BizError(ErrorCode.NOT_FOUND, '用户不存在');
+
+    const patch: Partial<AuthUser> = {};
+    if (body.nickname !== undefined) patch.nickname = body.nickname;
+    if (body.phone !== undefined) patch.phone = body.phone;
+    if (body.email !== undefined) patch.email = body.email;
+    if (body.status !== undefined) patch.status = body.status;
+    await this.store.updateUser(id, patch);
+
+    // 角色走 assignUserRoles：除写关联外还按 user 标签失效权限缓存（接口权限即时生效）
+    if (body.roleIds !== undefined) {
+      await this.auth.assignUserRoles(id, body.roleIds, operator, clientIp(request));
+    }
+    const revoked = patch.status === 0 ? await this.auth.revokeUserSessions(id, clientIp(request), operator) : null;
+
+    this.audit.record({
+      userId: operator,
+      module: 'user',
+      action: 'update',
+      targetType: 'user',
+      targetId: id,
+      before: { nickname: before.nickname, status: before.status, roleIds: before.roleIds },
+      after: { nickname: body.nickname ?? before.nickname, status: patch.status ?? before.status, roleIds: body.roleIds ?? before.roleIds, forcedLogout: revoked !== null },
+      ip: clientIp(request),
+    });
+
+    const item = await this.admin.findUserListItemById(id);
+    if (!item) throw new BizError(ErrorCode.NOT_FOUND, '用户不存在');
+    return item;
+  }
+
+  /** 软删除用户（内置管理员拒绝；不可删当前登录账号；删除同时强制下线） */
+  @Permissions(PERM.USER_DELETE)
+  @Audit({ module: 'user', action: 'delete', targetType: 'user' })
+  @Delete(':id')
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser('id') operator: string,
+    @CurrentUser() user: RequestUser,
+    @Req() request: Request,
+  ): Promise<{ id: string }> {
+    if (id === operator) throw new BizError(ErrorCode.STATE_NOT_ALLOWED, '不能删除当前登录账号');
+    await assertWithinDataScope(user, id, this.org);
+    const target = await this.admin.findUserListItemById(id);
+    if (!target) throw new BizError(ErrorCode.NOT_FOUND, '用户不存在');
+    const roles = await this.store.listRolesByUserId(id);
+    if (roles.some((role) => role.code === ROLE.ADMIN)) {
+      throw new BizError(ErrorCode.STATE_NOT_ALLOWED, '内置管理员账号不可删除（保证系统可管理性）');
+    }
+
+    await this.admin.softDeleteUser(id);
+    const revoked = await this.auth.revokeUserSessions(id, clientIp(request), operator);
+    this.audit.record({
+      userId: operator,
+      module: 'user',
+      action: 'delete',
+      targetType: 'user',
+      targetId: id,
+      before: { username: target.username, status: target.status },
+      after: { deleted: true, forcedLogout: revoked.revokedRefreshTokens > 0 },
+      ip: clientIp(request),
+    });
+    return { id };
+  }
+
+  /**
+   * 重置密码：生成一次性密码并返回（前端据此强制引导改密）
+   * 重置即失效该用户全部登录态——旧会话必须全部掉线，否则旧令牌仍可用。
+   */
+  @Permissions(PERM.USER_RESET_PASSWORD)
+  @Audit({ module: 'user', action: 'update', targetType: 'user' })
+  @Post(':id/reset-password')
+  async resetPassword(
+    @Param('id') id: string,
+    @CurrentUser('id') operator: string,
+    @CurrentUser() user: RequestUser,
+    @Req() request: Request,
+  ): Promise<{ id: string; oneTimePassword: string }> {
+    await assertWithinDataScope(user, id, this.org);
+    const target = await this.admin.findUserListItemById(id);
+    if (!target) throw new BizError(ErrorCode.NOT_FOUND, '用户不存在');
+
+    const oneTimePassword = generateOneTimePassword();
+    await this.store.updateUser(id, { passwordHash: await this.passwords.hash(oneTimePassword) });
+    await this.auth.revokeUserSessions(id, clientIp(request), operator);
+
+    this.audit.record({
+      userId: operator,
+      module: 'user',
+      action: 'update',
+      targetType: 'user',
+      targetId: id,
+      before: { passwordHash: MASKED },
+      after: { passwordHash: MASKED, reset: true },
+      ip: clientIp(request),
+    });
+    return { id, oneTimePassword };
   }
 }

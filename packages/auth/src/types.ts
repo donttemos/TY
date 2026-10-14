@@ -221,8 +221,17 @@ export interface UserQuery extends PageParams {
   departmentIds?: ID[];
 }
 
-/** 用户列表项（不含口令哈希） */
-export type UserListItem = Omit<AuthUser, 'passwordHash'>;
+/**
+ * 用户列表项（不含口令哈希）
+ * C-06 前端 API 契约 §3.3：列表必须带 roleIds（分配角色弹窗预选，避免逐行拉详情）与 createdAt。
+ * 这两项不在 AuthUser 上（AuthUser 是登录态实体），由存储层在列表投影时补齐。
+ */
+export type UserListItem = Omit<AuthUser, 'passwordHash'> & {
+  /** 持有的角色 ID 列表 */
+  roleIds: ID[];
+  /** 创建时间 */
+  createdAt: Date | null;
+};
 
 /** 服务端鉴权配置（由环境变量映射，见 AuthModuleOptions） */
 export interface AuthOptions {

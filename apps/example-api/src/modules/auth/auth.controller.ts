@@ -9,18 +9,22 @@
  * @module example-api/auth
  */
 
-import { Body, Controller, Get, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Post, Req } from '@nestjs/common';
 import { BizError, ErrorCode } from '@fw/core';
 import {
   Audit,
+  AUTH_STORE,
   AuthService,
   CurrentUser,
   PERM,
   Permissions,
   Public,
+  type AuthStore,
   type MenuNode,
   type RequestUser,
 } from '@fw/auth';
+import { ADMIN_STORE } from '../admin/admin-store.js';
+import type { AdminStore, LoginSessionView } from '../admin/admin-store.js';
 import type { Request } from 'express';
 
 /** 取客户端 IP（容器内取 x-forwarded-for 首段） */
@@ -41,7 +45,11 @@ export function clientUserAgent(request: Request): string | null {
  */
 @Controller('/api/v1/auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    @Inject(AUTH_STORE) private readonly store: AuthStore,
+    @Inject(ADMIN_STORE) private readonly admin: AdminStore,
+  ) {}
 
   /** 登录：账号密码 → 双 token（公开；失败计数达阈值锁定） */
   @Public()
@@ -130,5 +138,41 @@ export class AuthController {
       ip: clientIp(request),
       userAgent: clientUserAgent(request),
     });
+  }
+
+  /**
+   * 当前用户的登录设备列表
+   * 语义：一次登录对应一个刷新令牌轮换族（换设备 / 重登即新族），族内多条为正常轮换结果。
+   * current：与本次请求同 IP 且同 User-Agent 的会话判为当前设备（供前端禁止踢自己下线）。
+   */
+  @Permissions(PERM.AUTH_ME)
+  @Get('sessions')
+  async sessions(@CurrentUser('id') userId: string, @Req() request: Request): Promise<LoginSessionView[]> {
+    const sessions = await this.admin.listSessionsByUser(userId, new Date());
+    const ip = clientIp(request);
+    const agent = clientUserAgent(request);
+    return sessions.map((session) => ({
+      ...session,
+      device: session.device ?? '未知设备',
+      current: session.ip === ip && session.device === agent,
+    }));
+  }
+
+  /** 下线指定设备：先确认该族属于当前用户，再整族撤销（防越权踢他人下线） */
+  @Permissions(PERM.AUTH_REVOKE_SESSION)
+  @Audit({ module: 'auth', action: 'logout', targetType: 'session' })
+  @Delete('sessions/:id')
+  async revokeSession(
+    @CurrentUser('id') userId: string,
+    @Param('id') sessionId: string,
+    @Req() request: Request,
+  ): Promise<{ revoked: string }> {
+    const sessions = await this.admin.listSessionsByUser(userId, new Date());
+    const target = sessions.find((session) => session.id === sessionId);
+    if (!target) {
+      throw new BizError(ErrorCode.NOT_FOUND, '登录设备不存在或已下线');
+    }
+    await this.store.revokeRefreshFamily(target.familyId, new Date());
+    return { revoked: sessionId };
   }
 }
