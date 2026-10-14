@@ -21,6 +21,9 @@
 # @modified 2026-10-14 donttemo v0.2.0 发布前修订（验收发现并修复）：补入 @fw/tenant——M8 T-M8-01 新增该包时
 #   漏加构建与覆盖率循环，CI 干净环境下 example-api 会取不到其 dist 而构建失败；同时新增 M8 多租户端到端
 #   冒烟步骤（smoke-tenant.mjs），此前多租户仅有单测与本地冒烟、无 CI 门禁
+# @modified 2026-10-14 donttemo v0.2.0 推送后首次真实 Actions 运行修复：pnpm/action-setup@v4 同时配置了
+#   version: 11 与根 package.json 的 packageManager(pnpm@11.6.0)，触发 ERR_PNPM_BAD_PM_VERSION 在多版本冲突处直接
+#   失败（第 3 步即挂，后续步骤全 skipped）；移除 action 的 version 输入，统一以 packageManager 为准（两处 job 均已改）
 # @module ci
 
 name: CI
@@ -41,9 +44,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # 不指定 version：由根 package.json 的 packageManager 决定（避免与 action 的 version 冲突）
       - uses: pnpm/action-setup@v4
-        with:
-          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -184,9 +186,8 @@ jobs:
           --health-retries=10
     steps:
       - uses: actions/checkout@v4
+      # 不指定 version：由根 package.json 的 packageManager 决定（避免与 action 的 version 冲突）
       - uses: pnpm/action-setup@v4
-        with:
-          version: 11
       - uses: actions/setup-node@v4
         with:
           node-version: 22
