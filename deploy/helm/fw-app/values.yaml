@@ -1,0 +1,255 @@
+# fw-app 默认 values（对照 docs/60-deployment-ops.md §6 大档部署）
+# 生产建议不直接改本文件，另建 values-<env>.yaml 覆盖。
+# 密钥类字段（secrets.*）一律留空，经外部 Secret / CSI 注入（见 templates/secret.yaml）。
+
+# ---- 全局 ----
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: registry.example.com/fw-app
+  # 默认跟随 Chart appVersion；生产建议显式 --set image.tag=<版本>
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+serviceAccount:
+  # 需要访问 K8s API（如 ConfigMap 热更新）时才创建
+  create: false
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+# 追踪 / 租户上下文字段随日志输出，无需额外标签采集
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# ---- 应用容器 ----
+replicaCount: 3
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    # 与大档部署要求一致：不减可用副本、单次只加 1 个
+    maxUnavailable: 0
+    maxSurge: 1
+updateStrategyRevisionHistoryLimit: 5
+
+# 应用启动命令（镜像默认 CMD 已含迁移 + 启动，此处仅演示可覆盖）
+command: []
+args: []
+
+app:
+  port: 3000
+  # 停机宽限：需 ≥ MQ_SHUTDOWN_TIMEOUT / TRANSPORT_SHUTDOWN_TIMEOUT 的最大值
+  terminationGracePeriodSeconds: 45
+  # 迁移由独立 Job 执行（见 templates/migrate-job.yaml），应用容器只做启动前 DB 就绪等待
+  runMigrationOnStartup: false
+
+probes:
+  liveness:
+    enabled: true
+    path: /health
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    path: /ready
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  startup:
+    enabled: true
+    path: /health
+    periodSeconds: 3
+    failureThreshold: 20
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# ---- 水平自动伸缩 ----
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 60
+  targetMemoryUtilizationPercentage: null
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+
+# ---- 中断预算 ----
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+  # 二选一：填 maxUnavailable 时忽略 minAvailable
+  maxUnavailable: null
+
+# ---- 服务与入口 ----
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: api.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# 网络策略：默认关闭，仅同命名空间入站
+networkPolicy:
+  enabled: false
+
+# ---- 配置（非敏感，进 ConfigMap）----
+config:
+  APP_ENV: prod
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  DB_DRIVER: postgres
+  DB_POOL_MAX: "10"
+  DB_SLOW_MS: "500"
+  CACHE_DRIVER: redis
+  CACHE_PREFIX: "fw:prod"
+  CACHE_FAIL_OPEN: "true"
+  AUTH_STRATEGY: jwt
+  AUTH_ALLOW_REGISTER: "false"
+  MQ_DRIVER: bullmq
+  MQ_PREFIX: "fw:prod"
+  MQ_CRON_ENABLED: "true"
+  TENANT_ENABLED: "true"
+  TENANT_ORDER: "subdomain,header,jwt"
+  TENANT_BASE_DOMAIN: example.com
+  TRANSPORT_DRIVER: in-process
+  TRANSPORT_PREFIX: "fw:prod"
+  OTEL_ENABLED: "true"
+  OTEL_SERVICE_NAME: "fw-prod-api"
+  OTEL_SAMPLE_RATIO: "0.1"
+  OTEL_SAMPLE_ERRORS: "true"
+
+# 连接串等半敏感项：默认从 Secret 读取；置 true 时由 values 直填（仅本地/演示用，生产禁止）
+configInValues: false
+# 非敏感连接串（无密码场景，如集群内无鉴权 Redis）；有密码一律走 secrets
+configUrls:
+  DB_URL: ""
+  CACHE_URL: ""
+  MQ_URL: ""
+  TRANSPORT_URL: ""
+  OTEL_EXPORTER_URL: "http://otel-collector.observability.svc.cluster.local:4318/v1/traces"
+
+# ---- 密钥（禁止写入 values 文件；此处留空，用 --set / external secret 注入）----
+secrets:
+  # 已有 Secret 名（external secrets operator / CSI / 手工创建）；非空则不再渲染 Secret 模板
+  existingSecret: ""
+  # 逐键注入（existingSecret 为空且对应项非空时渲染进 Secret）
+  JWT_SECRET: ""
+  JWT_SECRET_PREV: ""
+  DB_URL: ""
+  CACHE_URL: ""
+  MQ_URL: ""
+  TRANSPORT_URL: ""
+  TENANT_DB_KEY: ""
+
+# ---- 迁移 Job ----
+migrateJob:
+  enabled: true
+  # 每次发布新建 Job（PostSync 语义由 CI 的 helm upgrade --install 后显式 kubectl wait 实现）
+  backoffLimit: 1
+  activeDeadlineSeconds: 600
+  annotations: {}
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# ---- 队列 worker（与 app 同镜像不同角色）----
+worker:
+  enabled: false
+  replicaCount: 2
+  # 仅消费队列时不暴露 HTTP；保留 /health /ready 供探针
+  command: []
+  args: []
+  resources:
+    requests:
+      cpu: 200m
+      memory: 384Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  config:
+    TRANSPORT_ROLE: handler
+
+# ---- 管理后台静态站点（可选）----
+adminWeb:
+  enabled: false
+  replicaCount: 2
+  image:
+    repository: registry.example.com/fw-admin-web
+    tag: ""
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# ---- 节点调度 ----
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []
+
+# ---- 附加上下文：外部依赖（DB / Redis / OTel Collector）地址 ----
+externalDependencies:
+  # 仅用于文档与就绪探针注释；实际地址经 config/secret 注入
+  database: "postgres://<host>:5432/<db>"
+  cache: "redis://<host>:6379"
+  otelCollector: "http://otel-collector:4318"

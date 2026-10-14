@@ -2,7 +2,7 @@
 
 > 一套「框架之上的框架」：用它在 1 天内搭出任意业务系统的可运行骨架，小到内部工具站、大到多租户 SaaS，规模升级时业务代码零重写。
 >
-> **当前状态：v0.1.0 已发布（M1 核心骨架 + M2 数据库抽象层 + M3 鉴权与权限 + M4 缓存层）**；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；M7 队列与定时任务（PRD-007）已完成实现与全量验收（含真实 Redis 失速恢复演练 TC-JOB-008，见 docs/94-queue-stall-drill.md），未发版；**M8 多租户与规模化演进（PRD-008）进行中：T-M8-01 租户上下文 / T-M8-02 dedicated 独立库路由 / T-M8-04 组织架构与数据权限四档 / T-M8-05 transport 切换 / T-M8-06 OpenTelemetry 链路追踪已完成（冒烟 48/48 + 17/17 + 14/14），未发版**。发布验收记录见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
+> **当前状态：v0.2.0 已发布（2026-10-14）** —— v0.1.0 交付 M1 核心骨架 + M2 数据库抽象层 + M3 鉴权与权限 + M4 缓存层；本次 **v0.2.0 一次性纳入 M5 管理后台前端（PRD-005）、M6 CRUD 代码生成器（PRD-006）、M7 队列与定时任务（PRD-007）、M8 多租户与规模化演进（PRD-008）**，**M1–M8 全部交付**：`@fw/tenant` 租户三级回退与 fail-closed / `@fw/db` dedicated 独立库路由 / `@fw/auth` 组织架构与数据权限四档 / `@fw/transport` 双驱动传输层 / `@fw/telemetry` OpenTelemetry 链路追踪 / Helm Chart 与部署模板 / 三大关键演练与终验（演练 25/25、Chart 清单校验 63/63、压测基线已建立），M8 判定「条件通过」。发布验收记录见 [v0.2.0 发布验收报告](./docs/90-release-v0.2.0.md)，M8 记录见 [M8 三大关键演练与终验](./docs/96-m8-drills.md)。
 
 ## 设计原则
 
@@ -45,9 +45,15 @@ framework/
   apps/
     example-api/              # 示例应用（每里程碑的验证载体）
     admin-web/                # M5 管理后台前端（Vue3 + Vite + Element Plus，C-06 mock 可独立运行）
+  deploy/                     # M8 部署模板（T-M8-07）
+    helm/fw-app/              # Helm Chart（探针/HPA/PDB/迁移 Job/worker/admin-web + README）
+    docker-compose.prod.yml   # 中档部署编排（app/worker/postgres/redis/nginx/migrate）
+    nginx/fw.conf             # 中档 Nginx 配置（SPA 回退 / API 反代 / 登录限流）
   scripts/
     check-file-headers.mjs    # 文件头注释校验（中文 / 作者 / 日期）
     check-no-raw-sql.mjs      # 原生 SQL 方言标注检查（TC-ORM-005）
+    check-helm-chart.mjs      # Helm Chart 离线渲染 + K8s 清单语义校验（T-M8-07，63 项）
+    lib/mini-yaml.mjs         # 零依赖极简 YAML 解析器（供上者使用）
   docs/
     contracts/                # 并行开发先行契约（类型即契约，只读）
       auth.ts                 # C-05 权限契约（RequestUser / 权限码 / 菜单树 / 守卫失败码）
@@ -98,10 +104,10 @@ fw gen crud order
 | 数据库抽象与多库切换 | `@fw/db`（Repository 契约 + Prisma 适配 + 方言白名单 + 迁移工具 + 慢查询观测） | M2 | ✅ 已完成 |
 | 鉴权与权限 | `@fw/auth`（双 token 轮换 + RBAC 五表 + 多策略 + 审计 + 登录加固） | M3 | ✅ 已完成 |
 | 缓存 | `@fw/cache`（统一 CacheService + memory/redis/cluster 驱动 + 三防护 + 标签失效 + 分布式锁 + 降级与指标） | M4 | ✅ 已完成 |
-| 管理后台模板 | `apps/admin-web`（Vue3 + Vite + Element Plus：登录、动态路由、按钮级权限、用户/角色/菜单/字典/审计页、`<CrudTable>` 标准组件；mock 全链路冒烟 40/40、单测 29） | M5 | ✅ 已完成（未发版） |
-| CRUD 代码生成器 | `@fw/cli gen`（schema 解析 + 类型映射 + 模板引擎 + 后端/前端/seed 生成 + dry-run/diff/回滚；模板外置 `templates/codegen/`；单测 116 / 覆盖率 94.7%） | M6 | ✅ 已完成（未发版） |
-| 队列与定时任务 | `@fw/queue`（统一 Job 抽象 + memory/bullmq 双驱动 + `@JobHandler`/`@Cron` 自动扫描 + 重试退避 + 死信重放 + 幂等 + 令牌桶限速 + cron 分布式锁 + 优雅停机 + 队列管理页；单测 135 / 覆盖率 93.1%、example-api 冒烟 27/27 含真实 Redis 的 bullmq 全链路） | M7 | 已实现（重启验收待补，未发版） |
-| 多租户与规模化 | `@fw/tenant`（三级回退租户解析 + fail-closed + 上下文透传）+ `@fw/db` TenantDataSource（dedicated 独立库路由：懒创建 + LRU/空闲淘汰 + Repository 按上下文选路）+ `@fw/auth` 数据权限四档（`DataScopeOrgPort` + all/org_below/org/self 解析与详情越权校验 + `departments`/`user_department` 模型）+ `@fw/transport` 传输层（in-process/redis 双驱动端口 + redis RPC 协议 + `@TransportHandler` 声明式注册 + 客户端代理，切换不改调用方代码）+ `@fw/telemetry` 链路追踪（OTel：HTTP 中间件 + 尾采样错误全采 + OTLP 导出 + 日志 span 桥接 + DB/缓存/队列/传输插桩）；Helm 待启动 | M8 | 进行中（T-M8-01/02/04/05/06 已完成，冒烟 48/48 + 17/17 + 14/14，未发版） |
+| 管理后台模板 | `apps/admin-web`（Vue3 + Vite + Element Plus：登录、动态路由、按钮级权限、用户/角色/菜单/字典/审计页、`<CrudTable>` 标准组件；mock 全链路冒烟 40/40、单测 29） | M5 | ✅ 已发布 v0.2.0 |
+| CRUD 代码生成器 | `@fw/cli gen`（schema 解析 + 类型映射 + 模板引擎 + 后端/前端/seed 生成 + dry-run/diff/回滚；模板外置 `templates/codegen/`；单测 116 / 覆盖率 94.7%） | M6 | ✅ 已发布 v0.2.0 |
+| 队列与定时任务 | `@fw/queue`（统一 Job 抽象 + memory/bullmq 双驱动 + `@JobHandler`/`@Cron` 自动扫描 + 重试退避 + 死信重放 + 幂等 + 令牌桶限速 + cron 分布式锁 + 优雅停机 + 队列管理页；单测 135 / 覆盖率 93.1%、example-api 冒烟 31/31 含真实 Redis 失速恢复演练 TC-JOB-008） | M7 | ✅ 已发布 v0.2.0 |
+| 多租户与规模化 | `@fw/tenant`（三级回退租户解析 + fail-closed + 上下文透传）+ `@fw/db` TenantDataSource（dedicated 独立库路由：懒创建 + LRU/空闲淘汰 + Repository 按上下文选路）+ `@fw/auth` 数据权限四档（`DataScopeOrgPort` + all/org_below/org/self 解析与详情越权校验 + `departments`/`user_department` 模型）+ `@fw/transport` 传输层（in-process/redis 双驱动端口 + redis RPC 协议 + `@TransportHandler` 声明式注册 + 客户端代理，切换不改调用方代码）+ `@fw/telemetry` 链路追踪（OTel：HTTP 中间件 + 尾采样错误全采 + OTLP 导出 + 日志 span 桥接 + DB/缓存/队列/传输插桩）+ **部署模板（Helm Chart + compose + Nginx）与三大演练**；冒烟 48/48 + 17/17 + 14/14，演练 25/25、Chart 校验 63/63 | M8 | ✅ 已发布 v0.2.0（条件通过） |
 
 ## 文档索引
 
@@ -114,7 +120,7 @@ fw gen crud order
 | [ER 图与数据字典](./docs/30-data-dictionary.md) | 建模约定、权限/系统/租户三域 ER 图、15 张表字段字典 |
 | [API 文档](./docs/40-api-spec.md) | 通用约定、错误码、10 类接口清单、限流与幂等、版本策略 |
 | [部署与运维手册](./docs/60-deployment-ops.md) | 三档部署、配置清单、备份恢复、监控告警、故障 Runbook、升级回滚 |
-| [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.1.0 已发布，M5–M7 尚未发版） |
+| [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.2.0 已发布，M1–M8 全部交付） |
 | [ADR 架构决策记录](./docs/adr/README.md) | 12 条决策：NestJS / Prisma（已定稿）/ monorepo / 缓存 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 |
 | [编码 Git PR 规范](./docs/70-engineering-standards.md) | 编码规范、**中文注释规范（文件头含作者与日期）**、反模式清单、分支与提交约定、PR 与评审规则 |
 | [项目计划与任务板](./docs/80-project-plan.md) | 15 周甘特、M1–M8 WBS（40+ 任务）、任务板列与标签、当前快照 |
@@ -124,12 +130,17 @@ fw gen crud order
 | [贡献指南](./CONTRIBUTING.md) | 三步上手与硬性规则入口 |
 | [PRD 索引](./docs/prd/README.md) | 迭代清单与 PRD 模板约定 |
 | PRD-001 ~ PRD-008 | 见 `docs/prd/`，每个功能 / 迭代一份 |
+| [v0.2.0 发布验收报告](./docs/90-release-v0.2.0.md) | M5–M8 发布门禁逐条判定、验证证据清单、遗留问题与发布结论（条件通过） |
 | [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md) | M1–M4 发布门禁逐条判定、验证证据清单、遗留问题与发布结论（条件通过） |
 | [测试数据库环境](./docs/92-test-databases.md) | 远程共用测试实例（MySQL / PostgreSQL / Redis）连接登记与测试切换方式（含明文凭证，仅测试用） |
 | [数据库联通性与切换实测](./docs/93-db-connectivity-switch-test.md) | v0.1.0 三库连通/鉴权实测、T-M2-07 三库一致性矩阵、业务代码零改动证明、Redis 真实实例联调与遗留项 |
 | [TC-JOB-008 失速恢复演练](./docs/94-queue-stall-drill.md) | 真实 Redis 上 BullMQ 失速恢复演练记录：设计、排障（register 未建消费器 / ensureWorker 自递归死锁与竞态）、MQ_STALLED_MS 与证据 |
 | [代码生成模板定制](./templates/codegen/README.md) | `fw gen crud` 模板目录结构、标签语法、可用变量清单、项目级同名覆盖与 `codegen.config.json`（vars / typeOverrides） |
 | [文档一致性核对报告](./docs/95-doc-audit.md) | 全量文档交叉核对结果、冲突修复记录与遗留项 |
+| [M8 三大关键演练与终验](./docs/96-m8-drills.md) | 数据库切换 / 规模演进 / 依赖故障降级三大演练的可复现结果（25/25）、PRD-008 §7 AC 逐条判定与遗留项 |
+| [压测基线报告](./docs/97-bench-baseline.md) | 登录 / 列表 / 写入三类场景的 QPS 与 P50/P95/P99 实测值、复现命令与性能基线对照 |
+| [规模化上线自检清单](./docs/98-scale-checklist.md) | 上线前 CheckList：连接池 / 缓存三防护 / 队列积压 / 慢 SQL / N+1 / 日志采样 / 容量与降级 |
+| [Helm Chart 使用说明](./deploy/helm/fw-app/README.md) | Chart 目录结构、安装升级回滚、关键 values、探针与迁移 Job 语义、离线校验方式 |
 
 ## 路线图
 
@@ -139,15 +150,17 @@ fw gen crud order
 | M2 | 数据库抽象层 | [002](./docs/prd/prd-002-database-abstraction.md) | ✅ 已完成 |
 | M3 | 鉴权与权限 | [003](./docs/prd/prd-003-auth-rbac.md) | ✅ 已完成 |
 | M4 | 缓存层 | [004](./docs/prd/prd-004-cache-layer.md) | ✅ 已完成 |
-| M5 | 管理后台模板 | [005](./docs/prd/prd-005-admin-template.md) | ✅ 已完成（未发版） |
-| M6 | 代码生成器 | [006](./docs/prd/prd-006-code-generator.md) | ✅ 已完成（未发版） |
-| M7 | 队列与定时任务 | [007](./docs/prd/prd-007-queue-scheduler.md) | 已实现（重启验收待补，未发版） |
-| M8 | 多租户与规模化 | [008](./docs/prd/prd-008-multitenancy-scale.md) | 进行中（T-M8-01/02/04/05/06 已完成，未发版） |
+| M5 | 管理后台模板 | [005](./docs/prd/prd-005-admin-template.md) | ✅ 已发布 v0.2.0 |
+| M6 | 代码生成器 | [006](./docs/prd/prd-006-code-generator.md) | ✅ 已发布 v0.2.0 |
+| M7 | 队列与定时任务 | [007](./docs/prd/prd-007-queue-scheduler.md) | ✅ 已发布 v0.2.0 |
+| M8 | 多租户与规模化 | [008](./docs/prd/prd-008-multitenancy-scale.md) | ✅ 已发布 v0.2.0（条件通过） |
 
 ## 开发规范
 
 - 分支：`main`（可发布）/ `feat/<prd>-<短名>` / `fix/<issue>`；PR 必须关联 PRD 与验收项。
 - 提交：Conventional Commits（`feat(auth): ...`）。
 - 门禁：`pnpm lint` + `pnpm test` + 覆盖率阈值 + 变更影响到的 PRD 的 AC 全部勾选。
+- 部署模板门禁：`pnpm check:helm`（Helm Chart 离线渲染 + K8s 清单语义校验）；有集群时另跑 `helm template` + `kubectl apply --dry-run=server`。
+- 里程碑演练：`pnpm --filter example-api run drill`（三大关键演练，远程段落由 `SMOKE_DB_SWITCH` / `SMOKE_REDIS_URL` 门控）；`pnpm --filter example-api run bench`（压测基线）。
 - 文档：能力变更必须同步更新对应 PRD 的「变更记录」，禁止静默改需求。
 - 兼容性：任何破坏性变更需在 README 与 PRD 中标注迁移步骤。

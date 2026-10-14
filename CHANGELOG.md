@@ -2,7 +2,7 @@
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
-> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；M7 队列与定时任务（PRD-007）已完成实现与全量验收（含真实 Redis 失速恢复演练 TC-JOB-008，见 docs/94-queue-stall-drill.md），未发版；**M8 多租户与规模化演进（PRD-008）进行中：T-M8-01 租户上下文 / T-M8-02 dedicated 独立库路由 / T-M8-04 组织架构与数据权限四档 / T-M8-05 transport 切换 / T-M8-06 OpenTelemetry 链路追踪已完成（冒烟 48/48 + 17/17 + 14/14）**；运行时已升级 NestJS 11 / Express 5，dev 工具链升至 vitest 4 / vite 8，**`pnpm audit` 生产与 dev 全量零漏洞**。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
+> **当前状态：v0.2.0 已发布（2026-10-14）** —— 在 v0.1.0（M1 核心骨架 / M2 数据库抽象层 / M3 鉴权与权限 / M4 缓存层）之上，本次发布**一次性纳入 M5 管理后台前端（PRD-005）、M6 CRUD 代码生成器（PRD-006）、M7 队列与定时任务（PRD-007）、M8 多租户与规模化演进（PRD-008）**，至此 **M1–M8 全部交付**：管理后台模板、CRUD 生成器、队列与定时任务（含真实 Redis 失速恢复演练 TC-JOB-008）、租户三级回退与 dedicated 独立库路由、数据权限四档、transport 双驱动、OpenTelemetry 链路追踪、Helm Chart 与部署模板；三大关键演练 **25/25**、Helm 清单校验 **63/63**、M8 终验判定「条件通过」。运行时为 NestJS 11 / Express 5，dev 工具链 vitest 4 / vite 8，**`pnpm audit` 生产与 dev 全量零漏洞**。验收结论与证据见 [v0.2.0 发布验收报告](./docs/90-release-v0.2.0.md) 与 [M8 三大关键演练与终验](./docs/96-m8-drills.md)。
 
 ## 版本与变更规则
 
@@ -12,7 +12,9 @@
 - **来源**：需求变更先记入对应 PRD 的「变更记录」，发布时汇总到本文件。本文件只记**对外可见**的变更，内部重构不在此记录。
 - **频率**：每个发布版本一条记录；`Unreleased` 区间持续累积，发布时转为版本条目并清空。
 
-## [Unreleased]
+## [0.2.0] - 2026-10-14
+
+> 本次发布纳入 **M5–M8** 四个里程碑的完整交付（M1–M4 已于 [`[0.1.0]`](#010---2026-10-13) 发布）。以下条目按里程碑倒序排列；M8 与 M7 的验证证据、演练记录与压测基线见对应文档。
 
 ### Added（M8 多租户与规模化演进，2026-10-14）
 
@@ -50,7 +52,10 @@
   - **DB / 缓存插桩**：`@fw/db` 的 `$allOperations` 漏斗包 CLIENT span（`db.query <Model>.<op>`，属性 db.system/db.operation/db.collection.name/db.query.duration_ms）；`@fw/cache` 的 `guarded` 守卫点包 CLIENT span（`cache.<op>`，属性 db.system=cache/cache.operation/cache.driver）——均只依赖 api 的 no-op 语义，未启用追踪时零行为变化。
   - **配置**：`@fw/config` 新增 5 个 `OTEL_*` 键（enabled / serviceName / exporterUrl / sampleRatio / sampleErrors）；`OTEL_ENABLED=true` 但缺 `OTEL_EXPORTER_URL` 时**启动即失败**（不静默丢 span），与 M7/M8 配置守卫一致。导出形态为 OTLP/HTTP JSON（`content-type: application/json`）。
 - **example-api 追踪装配**：`TelemetryModule.forRoot()` 接入 `AppModule`；bootstrap `beforeListen` 按 `OTEL_MIDDLEWARE` → `TENANT_MIDDLEWARE` 顺序注册（追踪 span 先建立，租户解析并入链路）；`demo.module` 的租户数据源默认路径改用插桩 client（避免 dedicated 路由旁路 DB span）。
-
+- **部署模板（T-M8-07，PRD-008 FR-09）**：新增 `deploy/` 部署资产——`deploy/helm/fw-app/` 标准 Helm Chart（`Chart.yaml` + `values.yaml` + `values-prod.yaml` + 14 个模板：Deployment / Service / HPA / PDB / Ingress / ConfigMap / Secret / ServiceAccount / NetworkPolicy / 迁移 Job / Worker / admin-web / `_helpers.tpl` / `NOTES.txt`），`deploy/docker-compose.prod.yml`（中档：app + worker + postgres + redis + nginx + migrate 六服务，应用无状态、迁移为一次性服务），`deploy/nginx/fw.conf`（SPA history 回退 + `/api` 反代 + traceparent 透传 + 登录限流 + 运维端点内网白名单）。
+  - **Chart 语义要点**：三档探针分指（`startupProbe`→`/health`、`readinessProbe`→`/ready`、`livenessProbe`→`/health`）；滚动更新 `maxUnavailable=0` / `maxSurge=1`；`resources` requests+limits 必填；`runAsNonRoot` + 禁提权 + `drop: ALL` + `readOnlyRootFilesystem`；HPA（默认 3~12 / CPU 60%）、PDB（`minAvailable=2`）；**密钥默认不渲染 Secret 对象**，容器经 `secretRef` 取用，生产用 `secrets.existingSecret` 外部注入；迁移以 `helm.sh/hook: pre-install,pre-upgrade` 独立 Job 执行（失败即阻断发布）；Worker 与 API 同镜像不同角色（`TRANSPORT_ROLE=handler`）且选择器按 `component` 区分；Pod 模板带 `checksum/config` 注解，配置变更自动触发滚动。
+  - **离线校验**：新增 `scripts/check-helm-chart.mjs`（+ `scripts/lib/mini-yaml.mjs` 零依赖极简 YAML 解析器）——实现 Helm 模板子集渲染（`include` / `if` / `range` / `with` / `default` / `toYaml` / `nindent` / `sha256sum` 等），对默认档 / 生产档 / 最小档三套 values 渲染结果做 K8s 清单语义断言，共 **63/63** 通过；本机与 CI 无 helm 时的门禁兜底（不替代真实集群 `helm install`）。
+- **三大关键演练与终验（T-M8-08）**：新增 `apps/example-api/scripts/drill-m8.mjs`（可复跑，远程段落门控）与 `apps/example-api/scripts/bench.mjs`（压测基线）；产出 `docs/96-m8-drills.md`（演练记录 + PRD-008 §7 七条 AC 判定 + 遗留）、`docs/97-bench-baseline.md`（登录/列表/写入三类场景 QPS 与 P95）、`docs/98-scale-checklist.md`（规模化上线自检清单，FR-10）。
 
 ### M8 验证（2026-10-14，全量实跑）
 
@@ -62,6 +67,13 @@
 - 链路追踪冒烟 `smoke-telemetry.mjs` **14/14**（T-M8-06，PRD-008 FR-07 / TC-TNT-006）：**阶段 A 未启用**（服务正常、`X-Trace-Id` 响应头与响应信封 traceId 一致）+ **阶段 B 启用全采**（本地 mock OTLP 收集器收到 SERVER span，traceId 与响应头一致、资源 `service.name` 生效、DB 操作产生 `db.query` 子 span）+ **阶段 C 跨服务同 traceId**（上游 `traceparent` 请求，服务端 SERVER span 复用其 traceId 且父 spanId = 上游 spanId，父子跨进程成立）+ **阶段 D 采样门控**（ratio=0 时普通链路 0 导出且服务不报错）+ **阶段 E 错误全采**（ratio=0 下 5xx 的 ERROR span 仍被导出）+ **阶段 F 配置守卫**（启用但缺 `OTEL_EXPORTER_URL` 启动即失败 exit=1）。使用本地 mock 收集器，无需外部采集端。
 - `@fw/telemetry` 单测 **50/50**，覆盖率 **lines 92.56% / functions 80.18% / statements 97.05% / branches 93.12%**（门禁 85/85/65/85）：options 解析、尾采样（确定性 traceIdRatio / 错误全采 / 边界）、SDK 懒加载形状、span 桥接（有/无 SDK）、HTTP 中间件（根 span / traceparent / X-Trace-Id 归一化与非法回退 / 数组头 / 5xx vs 4xx / 同步异常 / ALS 回写 / 工厂开关）、模块装配（成功 / 失败路径不 close）、服务生命周期（本地 http 收集器端到端 + 部分 mock loader）。
 - 插桩回归（T-M8-06c）：`@fw/db` **70/70**（12 skipped 为三库矩阵，未设 DB_DRIVER 时跳过）、`@fw/cache` **77/77**、`@fw/queue` **138/138**，三包覆盖率均远超门禁、`tsc`/文件头全过；新增 `trace.test.ts`（db 3 例 / cache 4 例 / queue 3 例）验证 DB/缓存/队列 span 名与属性、跨 async 边界父子续接、异常记 ERROR。
+- **Helm Chart 离线校验（T-M8-07）**：`node scripts/check-helm-chart.mjs` **63/63**——默认档 / 生产档（ingress + worker + admin-web + 反亲和 + 拓扑分布）/ 最小档（autoscaling / PDB / migrateJob / ingress 全关）三套渲染全部成功；断言覆盖探针分指 `/ready` 与 `/health`、`maxUnavailable=0`/`maxSurge=1`、`resources` requests+limits、非 root + 禁提权 + `drop: ALL`、优雅停机 ≥ 30s、镜像 tag 回退 appVersion、HPA 副本与 CPU 目标、HPA 启用时 Deployment 不设 replicas、PDB `minAvailable≥2`、Service 端口映射、ConfigMap 七类关键键且值均为字符串、未渲染明文 Secret、`secretRef`/`configMapRef` 取用、迁移 Job 为 pre-upgrade 钩子且指令 `db:migrate`、`checksum/config` 注解、组件开关生效；另校验 `Chart.yaml` 元信息、必备模板齐备、compose 六服务与无状态性、Nginx SPA 回退与反代与登录限流。
+- **三大关键演练（T-M8-08）**：`node scripts/drill-m8.mjs` **25/25，0 跳过**（含远程 MySQL 8.4 / PostgreSQL 18.6 / Redis 8.10，总耗时 80s）：
+  - **演练一 · 数据库切换**：sqlite / postgresql / mysql 三库均 `ready.db=ok` + 写后读全通（`listCount=4`），三库结果一致；`git diff --stat -- apps/example-api/src packages` 为空（**业务代码零改动**）；耗时 47s ≤ 3600s。
+  - **演练二 · 规模演进**：单体 in-process（`handledBy === callerId`）→ redis 双进程（`handledBy ≠ callerId`、caller `handled=0`）**同一端点同一请求体，仅环境变量不同**；链路追踪跨进程贯通（固定 `traceparent` → 同一 traceId 下 3 span / 2 服务）；compose → Helm 演进路径与 Chart 校验 63/63。
+  - **演练三 · 依赖故障降级**：Redis 不可达时业务接口仍返回 200（降级直查 DB）且 `/ready` 503 + `checks.cache=fail` + `degradations=5` + `/metrics` 暴露降级指标；真实 Redis 恢复后读写一致（`healed`）且 `cache=ok`、`degradations=0`；远程库注入 `DB_SLOW_MS=10` 产生「慢查询告警」（`durationMs=40`、带 `traceId`）；队列限速下派发 12 个任务积压 `waiting=10` 且 `/metrics/queue` 暴露 `fw_queue_backlog`，等待后**消化归零**。
+- **压测基线（T-M8-08，FR-11）**：`node scripts/bench.mjs` 三类场景——登录 `QPS 10.2 / P50 191.62ms / P95 255.65ms`（第 11 次返回 429，登录限流 60s/10 次生效）、列表查询 `QPS 561.8 / P50 16.17ms / P95 27.69ms`、写入 `QPS 37.5 / P50 26.46ms / P95 434.09ms`（SQLite 写锁串行长尾）；报告见 `docs/97-bench-baseline.md`，原始数据 `docs/bench/bench-latest.json`。
+- 文件头门禁 **345** 文件通过。
 
 
 ### Added（M7 队列与定时任务，2026-10-13）
@@ -398,14 +410,8 @@
 
 | 预期版本 | 内容 | 关联 |
 |---|---|---|
-| `v0.1.0` | M1 核心骨架可用：配置校验、结构化日志、错误码、健康检查、优雅停机、CLI | PRD-001 |
-| `v0.2.0` | M2 数据库抽象与三库切换；CI 多库测试矩阵 | PRD-002 |
-| `v0.3.0` | M3 鉴权与 RBAC（双 token + 审计） | PRD-003 |
-| `v0.4.0` | M4 缓存层（memory / redis + 降级） | PRD-004 |
-| `v0.5.0` | M5 管理后台模板 | PRD-005 |
-| `v0.6.0` | M6 CRUD 代码生成器 | PRD-006 |
-| `v0.7.0` | M7 队列与定时任务 | PRD-007 |
-| `v0.8.0` | M8 多租户与规模化演进（含 OTel、Helm） | PRD-008 |
+| `v0.1.0`（已发布 2026-10-13） | M1–M4：核心骨架 / 数据库抽象与三库切换 / 鉴权与 RBAC / 缓存层 | PRD-001 ~ PRD-004 |
+| `v0.2.0`（已发布 2026-10-14） | M5–M8：管理后台模板 / CRUD 生成器 / 队列与定时任务 / 多租户与规模化演进（OTel、Helm、三大演练） | PRD-005 ~ PRD-008 |
 | 待规划 | 内容/门户模板、文件存储抽象、消息通知、开放平台网关、国际化 | PRD 索引「待规划」 |
 
 > 版本号随里程碑推进可能合并或拆分，以实际发布内容为准。

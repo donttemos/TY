@@ -1,0 +1,23 @@
+# Helm Chart 元信息（T-M8-07 / PRD-008 FR-09）
+# 用法：helm upgrade --install myapp ./deploy/helm/fw-app -f values-prod.yaml --wait
+apiVersion: v2
+name: fw-app
+description: 通用应用框架（@fw）标准应用 Chart —— NestJS 11 后端 + 可选队列 worker + 可选管理后台静态站点；含探针、HPA、PDB、滚动更新与迁移 Job
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.24.0-0"
+home: https://github.com/donttemo/fw
+sources:
+  - https://github.com/donttemo/fw
+maintainers:
+  - name: donttemo
+keywords:
+  - nestjs
+  - multi-tenant
+  - opentelemetry
+  - queue
+annotations:
+  # 与本仓里程碑对应；M8 T-M8-07 交付
+  fw.milestone: "M8"
+  fw.prd: "PRD-008"

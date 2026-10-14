@@ -1,0 +1,155 @@
+# 中档部署编排（T-M8-07 / PRD-008 FR-09 / docs/60-deployment-ops.md §5）
+# 用法：docker compose --env-file .env.prod -f deploy/docker-compose.prod.yml up -d
+# 组件：nginx（静态 + 反代）| app×N（无状态）| worker（队列消费者）| postgres | redis
+# 原则：应用无状态；会话/令牌走 JWT 或 Redis；定时任务靠 Redis 分布式锁单点执行。
+
+name: fw-prod
+
+x-app-env: &app-env
+  APP_ENV: prod
+  APP_PORT: "3000"
+  LOG_LEVEL: info
+  LOG_FORMAT: json
+  # 数据与缓存连接（经 compose 内网服务名）
+  DB_DRIVER: postgres
+  DB_URL: postgresql://fw:${POSTGRES_PASSWORD}@postgres:5432/fw?schema=public
+  DB_POOL_MAX: "20"
+  DB_SLOW_MS: "500"
+  CACHE_DRIVER: redis
+  CACHE_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+  CACHE_PREFIX: "fw:prod"
+  CACHE_FAIL_OPEN: "true"
+  # 队列与传输
+  MQ_DRIVER: bullmq
+  MQ_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+  MQ_PREFIX: "fw:prod"
+  MQ_CRON_ENABLED: "true"
+  TRANSPORT_DRIVER: in-process
+  TRANSPORT_PREFIX: "fw:prod"
+  # 鉴权（密钥经 .env.prod 注入，禁止写死）
+  AUTH_STRATEGY: jwt
+  JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 必须设置}
+  AUTH_ALLOW_REGISTER: "false"
+  # 多租户与追踪
+  TENANT_ENABLED: "true"
+  TENANT_ORDER: "subdomain,header,jwt"
+  TENANT_BASE_DOMAIN: ${TENANT_BASE_DOMAIN:-example.com}
+  TENANT_DB_KEY: ${TENANT_DB_KEY:-}
+  OTEL_ENABLED: "true"
+  OTEL_SERVICE_NAME: "fw-prod-api"
+  OTEL_EXPORTER_URL: ${OTEL_EXPORTER_URL:-http://otel-collector:4318/v1/traces}
+  OTEL_SAMPLE_RATIO: "0.1"
+  OTEL_SAMPLE_ERRORS: "true"
+
+x-app-image: &app-image
+  image: ${APP_IMAGE:-registry.example.com/fw-app:0.1.0}
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fw
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD 必须设置}
+      POSTGRES_DB: fw
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fw -d fw"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [fw-net]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD 必须设置}"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [fw-net]
+
+  # 迁移：一次性执行，由应用镜像的 db:migrate 驱动（迁移锁保证单实例）
+  migrate:
+    <<: *app-image
+    environment:
+      <<: *app-env
+    command: ["pnpm", "db:migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks: [fw-net]
+
+  app:
+    <<: *app-image
+    environment:
+      <<: *app-env
+    # 迁移完成后再起应用
+    command: ["sh", "-c", "node dist/main.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 3
+      update_config:
+        order: start-first
+        failure_action: rollback
+      restart_policy:
+        condition: on-failure
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    expose:
+      - "3000"
+    networks: [fw-net]
+
+  # 队列 worker：同镜像、handler 角色，仅消费不接流量
+  worker:
+    <<: *app-image
+    environment:
+      <<: *app-env
+      TRANSPORT_ROLE: handler
+    command: ["sh", "-c", "node dist/main.js"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 2
+    expose:
+      - "3000"
+    networks: [fw-net]
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/fw.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    networks: [fw-net]
+
+volumes:
+  pg-data:
+  redis-data:
+
+networks:
+  fw-net:
+    driver: bridge

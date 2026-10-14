@@ -1,0 +1,55 @@
+{
+  "generatedAt": "2026-10-14T03:42:14.166Z",
+  "port": 3700,
+  "scenarios": {
+    "login": {
+      "requests": 10,
+      "ok": 10,
+      "failed": 0,
+      "errorRate": 0,
+      "qps": 10.3,
+      "p50": 152.36,
+      "p95": 293.06,
+      "p99": 293.06,
+      "max": 293.06,
+      "elapsedMs": 967,
+      "statuses": {
+        "201": 10
+      }
+    },
+    "loginThrottle": {
+      "nth": 11,
+      "status": 429
+    },
+    "list": {
+      "requests": 300,
+      "ok": 300,
+      "failed": 0,
+      "errorRate": 0,
+      "qps": 523.1,
+      "p50": 18.13,
+      "p95": 27.55,
+      "p99": 41.43,
+      "max": 64.38,
+      "elapsedMs": 573,
+      "statuses": {
+        "200": 300
+      }
+    },
+    "write": {
+      "requests": 200,
+      "ok": 200,
+      "failed": 0,
+      "errorRate": 0,
+      "qps": 36.7,
+      "p50": 27.21,
+      "p95": 687.07,
+      "p99": 1575.43,
+      "max": 2180,
+      "elapsedMs": 5451,
+      "statuses": {
+        "201": 200
+      }
+    }
+  }
+}

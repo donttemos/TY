@@ -10,10 +10,10 @@
 | [PRD-002](./prd-002-database-abstraction.md) | M2 | 数据库抽象层与多库切换 | M1 | P0 | 已验收 |
 | [PRD-003](./prd-003-auth-rbac.md) | M3 | 鉴权与权限（RBAC） | M1, M2 | P0 | 已实现 |
 | [PRD-004](./prd-004-cache-layer.md) | M4 | 缓存层 | M1 | P1 | 已实现 |
-| [PRD-005](./prd-005-admin-template.md) | M5 | 管理后台模板 | M3 | P0 | 草案 |
-| [PRD-006](./prd-006-code-generator.md) | M6 | CRUD 代码生成器 | M2, M5 | P1 | 已实现（未发版） |
-| [PRD-007](./prd-007-queue-scheduler.md) | M7 | 队列与定时任务 | M1, M4 | P2 | 已实现（重启验收待补，未发版） |
-| [PRD-008](./prd-008-multitenancy-scale.md) | M8 | 多租户与规模化演进 | M2–M4、M7 | P2 | 已定稿 |
+| [PRD-005](./prd-005-admin-template.md) | M5 | 管理后台模板 | M3 | P0 | 已发布 v0.2.0 |
+| [PRD-006](./prd-006-code-generator.md) | M6 | CRUD 代码生成器 | M2, M5 | P1 | 已发布 v0.2.0 |
+| [PRD-007](./prd-007-queue-scheduler.md) | M7 | 队列与定时任务 | M1, M4 | P2 | 已发布 v0.2.0 |
+| [PRD-008](./prd-008-multitenancy-scale.md) | M8 | 多租户与规模化演进 | M2–M4、M7 | P2 | 已发布 v0.2.0（条件通过） |
 
 ## 待规划 PRD（尚未排期）
 

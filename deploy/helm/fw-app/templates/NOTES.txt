@@ -1,0 +1,43 @@
+{{/*
+@file helm install 后提示信息
+@author donttemo
+@created 2026-10-14
+*/}}
+{{- $fullname := include "fw-app.fullname" . -}}
+1. 查看发布状态
+   kubectl rollout status deploy/{{ $fullname }}-api --timeout=180s
+   kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+2. 校验健康检查与依赖就绪
+   kubectl port-forward svc/{{ $fullname }}-api 3000:{{ .Values.service.port }}
+   curl -fsS http://127.0.0.1:3000/health
+   curl -fsS http://127.0.0.1:3000/ready
+
+3. 迁移 Job（本 Chart 以 pre-upgrade hook 执行，正常发布无需手工操作）
+   kubectl get jobs -l app.kubernetes.io/component=migrate
+
+{{- if .Values.autoscaling.enabled }}
+4. HPA：当前副本与伸缩目标
+   kubectl get hpa {{ $fullname }}-api
+{{- end }}
+
+{{- if .Values.podDisruptionBudget.enabled }}
+5. 中断预算
+   kubectl get pdb {{ $fullname }}-api
+{{- end }}
+
+6. 指标与追踪
+   curl -fsS http://127.0.0.1:3000/metrics | grep -E 'cache_hit|queue_'
+   # traceId 检索：响应头 X-Trace-Id → 追踪系统 / OTel Collector
+
+{{- if .Values.worker.enabled }}
+
+7. 队列 worker：确认消费与积压
+   kubectl logs -l app.kubernetes.io/component=worker --tail=100
+{{- end }}
+
+{{- if not .Values.secrets.existingSecret }}
+
+⚠️  当前未使用现有 Secret（secrets.existingSecret 为空）。
+    生产环境请通过外部 Secret / CSI 驱动注入敏感配置，禁止把明文写入 values 文件。
+{{- end }}

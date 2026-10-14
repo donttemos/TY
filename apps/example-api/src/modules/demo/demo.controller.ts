@@ -7,6 +7,7 @@
  * @created 2026-10-13
  * @module demo
  * @since v0.1.0
+ * @modified 2026-10-14 donttemo v0.2.0 发布：/demo/ok 自报版本由 v0.1.0 更新为 v0.2.0
  */
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { BizError, ErrorCode } from '@fw/core';
@@ -33,7 +34,7 @@ export class DemoController {
   /** 正常请求：验证统一响应包装（code=0 + traceId） */
   @Get('ok')
   ok(): { hello: string; framework: string } {
-    return { hello: 'fw', framework: 'v0.1.0' };
+    return { hello: 'fw', framework: 'v0.2.0' };
   }
 
   /** 业务异常：验证结构化错误码（TC-CORE-004） */

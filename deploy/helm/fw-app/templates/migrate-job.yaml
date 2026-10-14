@@ -1,0 +1,55 @@
+{{/*
+@file 迁移 Job
+@description 发布时由 CI 在 helm upgrade 后执行（kubectl wait --for=condition=complete）；
+  迁移锁由应用侧保证单实例执行。helm hook pre-install/pre-upgrade 亦可，启用 hook 时 Job 随发布自动跑。
+@author donttemo
+@created 2026-10-14
+*/}}
+{{- if .Values.migrateJob.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "fw-app.fullname" . }}-migrate
+  labels:
+    {{- include "fw-app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    # 作为 helm 发布钩子：安装前 / 升级前执行迁移，失败则阻断发布
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+    {{- with .Values.migrateJob.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  backoffLimit: {{ .Values.migrateJob.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrateJob.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        {{- include "fw-app.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ include "fw-app.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["pnpm", "db:migrate"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "fw-app.fullname" . }}-config
+            - secretRef:
+                name: {{ include "fw-app.configuredSecretName" . }}
+          resources:
+            {{- toYaml .Values.migrateJob.resources | nindent 12 }}
+{{- end }}

@@ -77,3 +77,32 @@
 4. **新增表/字段** → 同步 `30-data-dictionary.md` + 生成器类型映射。
 5. **决策变更** → 写新 ADR（不改写旧 ADR），并同步 `20-architecture.md` §8 摘要。
 6. **每次里程碑验收前** → 重跑本报告第 2 节矩阵，未通过项记入验收记录「遗留问题」。
+
+## 7. M8 增量核对（2026-10-14）
+
+> 范围：M8（多租户与规模化演进）新增/变更的全部文档与资产，按第 6 节硬规则逐条核对。结论：**全部通过，0 遗留**。
+
+| 维度 | 检查项 | 结果 |
+|---|---|---|
+| 交付物完整性 | M8 新增文档 / 资产是否入索引 | ✅ `docs/96/97/98`、`deploy/helm/fw-app/README.md` 均入 `README.md` 文档索引；`deploy/` 入目录树 |
+| 配置键同源 | `TENANT_*` / `TRANSPORT_*` / `OTEL_*` 是否四处一致 | ✅ PRD-008 §6 + `docs/60-deployment-ops.md` §3 + `apps/example-api/.env.example` + `templates/api/.env.example` 四处同源（本轮补 `templates/api/.env.example` 的 `TENANT_*` 段） |
+| 计划与验收闭环 | M8 WBS / AC / 状态是否自洽 | ✅ `80-project-plan.md`（M8 状态、T-M8-01~08 ✅、Done/Backlog）、`prd-008` §7 七条 AC 勾选 + 证据、`prd/README.md` 状态「已实现（条件通过）」三处一致 |
+| 部署手册准确性 | 大/中档部署命令是否指向真实资产 | ✅ §5 指向 `deploy/docker-compose.prod.yml` + `deploy/nginx/fw.conf`；§6 指向 `deploy/helm/fw-app/` 并补 `pnpm check:helm` 离线校验与验收现状（L-01） |
+| 演练可复现 | 三大演练命令是否可执行 | ✅ `pnpm --filter example-api drill` / `bench` 入 §15 速查，与 `docs/96/97` 复现命令一致 |
+| 术语与编号 | 包名 / 任务 ID / 用例 ID | ✅ `@fw/tenant`/`db`/`auth`/`transport`/`telemetry` 命名一致；T-M8-01~08 与 TC-TNT-001~007 编号无漂移 |
+
+**遗留（不阻塞文档一致性，已在验收记录登记）**：L-01 真实 K8s 集群部署冒烟未执行（`96` §6.4）、L-02 FR-08 配置中心占位未实现、L-03 压测条件、L-04 Redis Cluster 实跑。
+
+## 8. v0.2.0 发布增量核对（2026-10-14）
+
+> 范围：v0.2.0 发布（M5–M8 一并纳入）所涉文档与索引同步，按第 6 节硬规则逐条核对。结论：**全部通过**。
+
+| 维度 | 检查项 | 结果 |
+|---|---|---|
+| 交付物完整性 | 新增发布报告是否入索引 | ✅ `docs/90-release-v0.2.0.md` 已入 `README.md` 文档索引（置于 v0.1.0 报告之前） |
+| 版本一致性 | 版本号 / CHANGELOG 条目 / 发布报告 / 标签 | ✅ 根与 13 个包 / 应用 `package.json` 统一 **`0.2.0`**；`CHANGELOG.md` 收敛 `## [0.2.0] - 2026-10-14`；发布报告 `docs/90-release-v0.2.0.md`；附注标签 `v0.2.0` 一一对应 |
+| 状态同步 | README 能力矩阵 / 路线图 / PRD 索引 | ✅ M5–M8 由「已完成/已实现（未发版）」改为「已发布 v0.2.0」；`docs/prd/README.md` PRD-005~008 状态同步为「已发布 v0.2.0」 |
+| 配置键同源 | M8 新增 `TENANT_*` / `TRANSPORT_*` / `OTEL_*` | ✅ 已由 §7 核对（PRD-008 §6 + 部署手册 §3 + 两处 `.env.example` 四处同源） |
+| 运行期版本自述 | 应用自报版本与实际版本一致 | ✅ `apps/example-api` `/api/v1/demo/ok` 的 `framework` 由 `v0.1.0` 更新为 `v0.2.0`（冒烟实录核对发现并修复） |
+
+**遗留（不阻塞发布，已在发布报告登记）**：R2-01 真实 K8s 集群部署冒烟未执行、R2-02 FR-08 配置中心占位未实现、R2-03 长压与百万行分页未覆盖、R2-04 Redis Cluster 实跑 —— 见 [`90-release-v0.2.0.md`](./90-release-v0.2.0.md) §6。

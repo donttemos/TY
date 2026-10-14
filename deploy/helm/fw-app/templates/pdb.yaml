@@ -1,0 +1,25 @@
+{{/*
+@file PodDisruptionBudget
+@description 保证滚动 / 驱逐期间可用副本不低于 minAvailable（默认 2）；与 HPA 配合避免缩容抖动丢可用性。
+@author donttemo
+@created 2026-10-14
+*/}}
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "fw-app.fullname" . }}-api
+  labels:
+    {{- include "fw-app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  {{- if .Values.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "fw-app.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+{{- end }}

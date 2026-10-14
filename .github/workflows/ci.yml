@@ -16,6 +16,8 @@
 #   端到端冒烟步骤（in-process 全能力 + 配置守卫；redis 阶段由 SMOKE_REDIS_URL 门控，CI 未设置则跳过）
 # @modified 2026-10-14 donttemo M8 T-M8-06：纳入 @fw/telemetry（构建 + 覆盖率门禁）并新增 M8 链路追踪
 #   端到端冒烟步骤（本地 mock OTLP 收集器；未启用/全采/跨服务同 traceId/采样门控/错误全采/配置守卫）
+# @modified 2026-10-14 donttemo M8 T-M8-07/08：新增 Helm Chart 渲染与清单校验步骤、M8 三大关键演练步骤
+#   （演练的远程库段落由 SMOKE_DB_SWITCH 门控、真实 Redis 段落由 SMOKE_REDIS_URL 门控，CI 未设置则跳过）
 # @module ci
 
 name: CI
@@ -114,6 +116,17 @@ jobs:
       - name: M8 链路追踪端到端冒烟（SQLite）
         working-directory: apps/example-api
         run: node scripts/smoke-telemetry.mjs
+
+      # M8 三大关键演练（验收标准 §6 L3 发布门禁）：数据库切换 / 规模演进 / 依赖故障降级
+      # 本地可跑段落（单体形态 / 编排演进 / Redis 降级 / 队列积压）默认执行；
+      # 远程库段落（数据库切换、慢查询注入）需 SMOKE_DB_SWITCH=1，真实 Redis 段落需 SMOKE_REDIS_URL，未设置则明确跳过
+      - name: M8 三大关键演练（SQLite）
+        working-directory: apps/example-api
+        run: node scripts/drill-m8.mjs
+
+      # M8 T-M8-07：Helm Chart 离线渲染 + K8s 清单语义校验（本机/CI 无 helm 时的门禁兜底）
+      - name: M8 Helm Chart 渲染与清单校验
+        run: node scripts/check-helm-chart.mjs
 
       # 静态检查：文件头门禁 + 原生 SQL 白名单门禁
       - name: 文件头门禁

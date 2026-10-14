@@ -1,0 +1,125 @@
+# 生产档 values 覆盖示例（T-M8-07 / docs/60-deployment-ops.md §6 大档）
+# 用法：helm upgrade --install myapp ./deploy/helm/fw-app -f values-prod.yaml \
+#         --set image.tag=1.0.0 --set secrets.existingSecret=fw-prod-secrets --wait
+# 原则：密钥只经 existingSecret（外部 Secret / CSI 注入），本文件不含任何明文密钥。
+
+replicaCount: 3
+image:
+  repository: registry.example.com/fw-app
+  tag: ""            # 由 --set image.tag 覆盖，或在此显式填写
+  pullPolicy: IfNotPresent
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 24
+  targetCPUUtilizationPercentage: 60
+  targetMemoryUtilizationPercentage: 80
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 768Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+app:
+  terminationGracePeriodSeconds: 60
+
+# 生产必须使用外部 Secret
+secrets:
+  existingSecret: fw-prod-secrets
+
+config:
+  APP_ENV: prod
+  LOG_LEVEL: info
+  CACHE_PREFIX: "fw:prod"
+  MQ_PREFIX: "fw:prod"
+  TRANSPORT_PREFIX: "fw:prod"
+  TENANT_ENABLED: "true"
+  TENANT_BASE_DOMAIN: example.com
+  OTEL_ENABLED: "true"
+  OTEL_SERVICE_NAME: "fw-prod-api"
+  OTEL_SAMPLE_RATIO: "0.1"
+  OTEL_SAMPLE_ERRORS: "true"
+
+configUrls:
+  OTEL_EXPORTER_URL: "http://otel-collector.observability.svc.cluster.local:4318/v1/traces"
+
+# 生产：API（可伸缩）+ worker（独立伸缩）+ 管理后台
+worker:
+  enabled: true
+  replicaCount: 3
+  resources:
+    requests:
+      cpu: 500m
+      memory: 768Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 12
+    targetCPUUtilizationPercentage: 70
+  config:
+    TRANSPORT_ROLE: handler
+
+adminWeb:
+  enabled: true
+  replicaCount: 3
+  image:
+    repository: registry.example.com/fw-admin-web
+    tag: ""
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "16m"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: api.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: fw-prod-tls
+      hosts:
+        - api.example.com
+
+migrateJob:
+  enabled: true
+  activeDeadlineSeconds: 900
+
+nodeSelector: {}
+tolerations: []
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: fw-app
+              app.kubernetes.io/component: api
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: topology.kubernetes.io/zone
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: fw-app
+        app.kubernetes.io/component: api

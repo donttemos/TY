@@ -1,0 +1,27 @@
+{{/*
+@file API Service
+@description ClusterIP 服务，端口 80 → 容器 3000；Ingress / admin-web 反代经此进入。
+@author donttemo
+@created 2026-10-14
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fw-app.fullname" . }}-api
+  labels:
+    {{- include "fw-app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "fw-app.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: api

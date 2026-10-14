@@ -1,6 +1,6 @@
 # 通用应用框架 · 部署与运维手册
 
-> 版本 v0.1 ｜ 状态：草案 ｜ 关联：[架构设计](./20-architecture.md) 第 6 节 ｜ [验收标准](./10-acceptance-criteria.md) ｜ 更新：2026-10-09
+> 版本 v0.1 ｜ 状态：已随 M8 更新 ｜ 关联：[架构设计](./20-architecture.md) 第 6 节 ｜ [验收标准](./10-acceptance-criteria.md) ｜ [三大演练](./96-m8-drills.md) ｜ [规模化自检清单](./98-scale-checklist.md) ｜ 更新：2026-10-14
 >
 > 适用：基于本框架构建的所有项目。档位选择决定操作复杂度——**小档不要求运维懂 K8s，大档不要求开发改代码**。
 
@@ -163,47 +163,71 @@ curl -fsS http://127.0.0.1:3000/health
 
 ## 5. 中档部署（docker-compose）
 
+框架内置编排文件 **`deploy/docker-compose.prod.yml`**（`name: fw-prod`）与配套 **`deploy/nginx/fw.conf`**（SPA 回退 + `/api` 反代 + `traceparent` 透传 + 登录限流 + 运维端点内网白名单），可作为中档起步模板：
+
 ```
-├─ nginx        # 静态资源 + 反向代理 + TLS 终止 + 限流
+├─ nginx        # 静态资源 + 反向代理 + TLS 终止 + 限流（deploy/nginx/fw.conf）
 ├─ app-1 / app-2# 无状态应用实例（同一镜像）
 ├─ worker       # BullMQ 消费者（可与 app 同镜像不同启动命令）
-├─ mysql / pg   # 主从
-└─ redis        # 缓存 + 队列 + 分布式锁
+├─ postgres     # 主库（也可换 MySQL）
+├─ redis        # 缓存 + 队列 + 分布式锁
+└─ migrate      # 一次性迁移容器（先于 app 启动，退出即完成）
 ```
 
 **操作**
 
 ```bash
-docker compose --env-file .env.prod up -d        # 启动
-docker compose exec app pnpm db:migrate          # 迁移（只在一个实例执行）
-docker compose logs -f --tail=200 app            # 看日志
-docker compose up -d --scale app=3               # 扩容实例
-docker compose down                              # 停止（保留卷）
+docker compose -f deploy/docker-compose.prod.yml --env-file .env.prod up -d   # 启动
+docker compose -f deploy/docker-compose.prod.yml exec app pnpm db:migrate     # 迁移（只在一个实例执行）
+docker compose -f deploy/docker-compose.prod.yml logs -f --tail=200 app       # 看日志
+docker compose -f deploy/docker-compose.prod.yml up -d --scale app=3          # 扩容实例
+docker compose -f deploy/docker-compose.prod.yml down                          # 停止（保留卷）
 ```
 
-**Nginx 要点**：`/api` 反向代理到 app 上游；`/` 指向前端静态资源；开启 gzip；`client_max_body_size` 与上传限制对齐；TLS 证书与自动续期；对 `/auth/*` 单独限流。
+**Nginx 要点**（已落 `deploy/nginx/fw.conf`）：`/api` 反向代理到 app 上游；`/` 指向前端静态资源并配 SPA history 回退；透传上游 `traceparent`（与 OTel 链路追踪贯通）；`/auth/*` 单独限流；`/metrics`、`/ready`、`/health` 等运维端点限内网白名单；开启 gzip 并让 `client_max_body_size` 与上传限制对齐；TLS 证书与自动续期。
 
 **无状态要求**：会话不落本地内存（走 Redis 或 JWT）、上传文件走对象存储、定时任务靠分布式锁单点执行——否则多实例会出现行为不一致。
 
 ## 6. 大档部署（Helm / K8s）
 
+框架内置 Chart 位于 **`deploy/helm/fw-app/`**（apiVersion v2，`version`/`appVersion` 0.1.0，`kubeVersion >= 1.24`），配套生产覆盖 `deploy/helm/fw-app/values-prod.yaml`、Chart 使用说明 `deploy/helm/fw-app/README.md`。Chart 不托管于远端仓库——按项目需要自行 `helm package` 后推送私有 OCI/ChartMuseum，或直接从仓库目录安装：
+
 ```bash
-helm repo add fw https://charts.example.com
-helm upgrade --install myapp fw/app \
-  -f values-prod.yaml --set image.tag=1.0.0 --wait
+# 从仓库目录直接安装（推荐先 --dry-run 预演）
+helm upgrade --install myapp deploy/helm/fw-app \
+  -f deploy/helm/fw-app/values-prod.yaml \
+  --set image.repository=registry.example.com/fw-app --set image.tag=1.0.0 \
+  --wait --timeout 5m
+
+# 或打包后推送私有仓库
+helm package deploy/helm/fw-app -d dist/    # 产出 fw-app-0.1.0.tgz
+helm push dist/fw-app-0.1.0.tgz oci://registry.example.com/charts
 ```
 
-**关键 values**
+**离线校验（无需 K8s 集群）**：仓库内置 Helm 模板子集渲染 + K8s 清单语义断言脚本，CI 与本地均可运行，确保模板可渲染、三档探针 / 滚动更新 / HPA / PDB / 迁移 Job / `checksum/config` 注解等语义不漂移：
 
-| 项 | 建议 |
+```bash
+pnpm check:helm        # 等价 node scripts/check-helm-chart.mjs，离线渲染三档并断言清单语义
+```
+
+**关键 values**（完整项见 `values.yaml` 注释）
+
+| 项 | 默认 / 建议 |
 |---|---|
-| `replicaCount` / HPA | 最小 3，CPU 60% 触发扩容，上限按容量评估 |
-| `readinessProbe` / `livenessProbe` | 分别指向 `/ready` 与 `/health` |
-| `resources` | 必须设置 requests/limits，避免节点资源争抢 |
+| `replicaCount` | 3 |
 | `strategy` | RollingUpdate，`maxUnavailable=0`，`maxSurge=1` |
+| `probes.readiness` / `probes.liveness` / `probes.startup` | 分别指向 `/ready` 与 `/health`（启动探针防慢启动被误杀） |
+| `resources` | 必须设置 requests/limits，避免节点资源争抢 |
+| `autoscaling` | 默认关；开启后 `minReplicas=3`、CPU 60% 触发、`maxReplicas` 按容量评估 |
 | `podDisruptionBudget` | `minAvailable: 2` |
-| `secrets` | 从外部 Secret / CSI 驱动注入，禁止写入 values 文件 |
-| `cronJobs` | 与 Deployment 分离，避免定时任务被多副本重复执行 |
+| `migrateJob` | `helm.sh/hook: pre-install,pre-upgrade`，迁移先于应用滚动 |
+| `worker` / `adminWeb` | 与主 Deployment 分离的独立工作负载；cron/handler 与 app 分进程，避免多副本重复执行 |
+| `secrets` | 留空并配 `secrets.existingSecret`，从外部 Secret / CSI 驱动注入，**禁止写入 values 文件** |
+| `podAntiAffinity` / `topologySpreadConstraints` | 生产开启，跨节点/可用区打散 |
+
+**变更触发滚动**：Deployment 带 `checksum/config: {{ include "fw-app.configData" . | sha256sum }}` 注解，ConfigMap 内容变化即触发 Pod 滚动，保证配置与进程同步生效。
+
+> **验收现状（M8 T-M8-07）**：Chart 与 compose 资产已交付、离线校验 63/63 通过；**真实 K8s 集群部署冒烟未执行**（本机沙箱无 kubectl/集群，遗留 L-01，见 `docs/96-m8-drills.md` §6.4）。上生产前请在目标集群补一次 `helm template` + `--dry-run=server` + 灰度发布验证。
 
 ## 7. 启动、停止与优雅停机
 
@@ -301,7 +325,7 @@ cat app.log | jq -r 'select(.level=="error") | .module' | sort | uniq -c | sort 
 | 每日 | `/health`、`/ready` 正常；5xx 与 P95 无异常；队列无积压；备份任务成功 |
 | 每周 | 慢查询 Top10；缓存命中率；磁盘与内存趋势；依赖漏洞扫描结果 |
 | 每月 | 证书与密钥到期检查；容量评估；备份恢复演练；Runbook 复盘更新 |
-| 每季 | 灾备演练（切换/演进/降级三大演练）；RTO/RPO 复核；权限与审计抽查 |
+| 每季 | 灾备演练（切换/演进/降级三大演练，可执行化脚本 `pnpm --filter example-api drill`）；RTO/RPO 复核；权限与审计抽查 |
 
 ## 15. 常用命令速查
 
@@ -311,11 +335,16 @@ fw dev | fw build | fw check        # 开发 / 构建 / 配置自检
 fw db:migrate | db:rollback | db:seed
 fw gen crud <model> [--dry|--force]
 
+pnpm check:helm                     # Helm Chart 离线渲染 + K8s 清单语义校验（无需集群）
+pnpm --filter example-api drill     # M8 三大关键演练（切换 / 演进 / 降级）
+pnpm --filter example-api bench     # 性能基线压测（登录 / 列表 / 写入）
+
 curl -s localhost:3000/health | jq
 curl -s localhost:3000/ready  | jq
 curl -s localhost:3000/metrics | grep cache_hit
 
-docker compose logs -f --tail=200 app
+docker compose -f deploy/docker-compose.prod.yml logs -f --tail=200 app
+helm upgrade --install myapp deploy/helm/fw-app -f deploy/helm/fw-app/values-prod.yaml --dry-run
 kubectl rollout status deploy/myapp
 kubectl rollout undo deploy/myapp
 ```

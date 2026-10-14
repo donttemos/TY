@@ -1,0 +1,64 @@
+{{/*
+@file 管理后台静态站点（可选组件）
+@description Nginx 镜像托管 admin-web 的 dist/；SPA history 回退由镜像内 nginx.conf 提供；
+  API 反代建议由 Ingress 统一处理，此处仅暴露静态资源。
+@author donttemo
+@created 2026-10-14
+*/}}
+{{- if .Values.adminWeb.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "fw-app.fullname" . }}-admin-web
+  labels:
+    {{- include "fw-app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-web
+spec:
+  replicas: {{ .Values.adminWeb.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "fw-app.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: admin-web
+  template:
+    metadata:
+      labels:
+        {{- include "fw-app.labels" . | nindent 8 }}
+        app.kubernetes.io/component: admin-web
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: admin-web
+          image: "{{ .Values.adminWeb.image.repository }}:{{ default .Chart.AppVersion .Values.adminWeb.image.tag }}"
+          imagePullPolicy: {{ .Values.adminWeb.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.adminWeb.resources | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "fw-app.fullname" . }}-admin-web
+  labels:
+    {{- include "fw-app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-web
+spec:
+  type: {{ .Values.adminWeb.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.adminWeb.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "fw-app.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-web
+{{- end }}

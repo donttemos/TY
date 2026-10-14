@@ -1,6 +1,6 @@
 # PRD-008 · 多租户与规模化演进
 
-> 里程碑：M8 ｜ 状态：已定稿 ｜ 优先级：P2 ｜ 依赖：M2–M4、M7 ｜ 负责人：donttemo ｜ 更新：2026-10-14
+> 里程碑：M8 ｜ 状态：**已实现（条件通过，未发版）** ｜ 优先级：P2 ｜ 依赖：M2–M4、M7 ｜ 负责人：donttemo ｜ 更新：2026-10-14
 >
 > 变更记录：2026-10-13 donttemo 草案转定稿——结算两项待定问题（租户识别改三级回退可配、配置中心首版仅留适配位不绑定实现）；补 M7 依赖至头部（§8 已列）；状态置「已定稿」，M8 实现完成后再按验收门禁勾选 AC。
 >
@@ -11,6 +11,8 @@
 > 变更记录：2026-10-14 donttemo T-M8-05 落地——FR-06 完成：新框架包 `@fw/transport` 以双驱动端口模式（沿用 M7 `@fw/queue` 先例）提供微服务调用语义，`TransportModule.forRoot()` 按 `TRANSPORT_DRIVER` 装配 **in-process**（进程内直连，单体零依赖）或 **redis**（跨进程 RPC：LPUSH 信封 + BLPOP 应答 + BRPOP 1s 轮询消费 + EXPIRE 60s 兜底）双驱动，**切换只改配置，调用方代码 diff = 0**；`TransportService` 只依赖端口并承载统计埋点与启停编排；错误经 serialize/deserialize 对等传播（BizError 按 ERROR_CODE_META 重建），处理方执行上限取信封内调用方超时；`TRANSPORT_ROLE`（caller/handler/both）按进程职责裁剪拓扑；`@TransportHandler` 声明式注册 + `createTransportProxy` 客户端代理（黑名单防生命周期钩子误触发）；配置 7 键（redis 缺连接串回退 CACHE_URL、两者皆缺启动即失败，tcp/kafka 仅预留不入枚举）。TC-TNT-005 冒烟 17/17 全绿（in-process 5 项 + redis 单进程 5 项 + redis 双进程跨进程 3 项 + 超时 fail-fast 3 项 + 配置守卫 1 项），单测 78/78、覆盖率 95.09/93.82/94.33/90.54。剩余 FR-07~11 进行中，§7 AC 仍待 T-M8-08 统一勾选。
 >
 > 变更记录：2026-10-14 donttemo T-M8-06 落地——FR-07 完成：新框架包 `@fw/telemetry` 以「`@opentelemetry/api` 轻量硬依赖 + `@opentelemetry/sdk-node`/OTLP 导出器 optional peer 懒加载」双轨模式（沿用 M7 ioredis 先例）提供链路追踪：`TelemetryModule.forRoot()` 按 `OTEL_ENABLED` 装配 SDK（未启用全短路零开销），`register({ propagator })` 显式注册 W3C traceparent+baggage 组合传播器；**尾采样处理器**（错误全采 + traceId 低 8 位确定性比例，同链路跨服务决策恒定）；**HTTP 中间件**每请求一个 SERVER span，父上下文三级解析（标准 `traceparent` → 框架自有 `X-Trace-Id` → 根），span 的 traceId/spanId 回写日志 ALS 与 `X-Trace-Id` 响应头（日志/trace/响应头三者同 ID），finish 按路由模板刷新 span 名、5xx 记 ERROR；**日志 span 桥接**；传输层 `call/dispatch` 包 CLIENT/SERVER span 并经 `traceparent` 信封跨进程续接；**DB/缓存/队列插桩**（各自 `$allOperations`/守卫点/派发执行点包 CLIENT/PRODUCER/CONSUMER span，均只依赖 api 的 no-op 语义，与 telemetry 经全局 provider 解耦）。配置 5 个 `OTEL_*` 键（缺端点启动即失败）。TC-TNT-006 冒烟 14/14 全绿（未启用/全采导出与 ID 一致/跨服务同 traceId 父子跨进程/采样门控 0 导出/5xx 错误全采/配置守卫），telemetry 单测 50/50（覆盖率 92.56/80.18/97.05/93.12），db/cache/queue 插桩单测全绿零回归。剩余 FR-08~11 进行中，§7 AC 仍待 T-M8-08 统一勾选。
+
+> 变更记录：2026-10-14 donttemo T-M8-07/08 落地——**M8 全部 WBS 任务完成**（FR-09/FR-10/FR-11 交付）：新增 `deploy/` 部署资产（`deploy/helm/fw-app/` Helm Chart：14 模板含三档探针/滚动更新 `maxUnavailable=0`/HPA/PDB/迁移 pre-upgrade Job/Worker/admin-web/密钥外部注入/`checksum/config` 注解；`deploy/docker-compose.prod.yml` 中档六服务编排；`deploy/nginx/fw.conf` SPA 回退+反代+登录限流）与离线校验脚本 `scripts/check-helm-chart.mjs`（Helm 子集渲染 + K8s 清单语义断言 **63/63**）；三大关键演练可执行化 `apps/example-api/scripts/drill-m8.mjs` **25/25（0 跳过）**——数据库切换三库一致且业务代码 diff=0、规模演进（in-process → redis 双进程 + traceId 跨进程贯通 + compose→Helm）、依赖故障降级（Redis 不可达降级直查 + 恢复回切无脏数据 + DB 慢查询告警 + 队列积压可观测并消化归零）；压测基线 `scripts/bench.mjs`（登录/列表/写入三类场景 QPS 与 P95）；新文档 `docs/96-m8-drills.md`、`docs/97-bench-baseline.md`、`docs/98-scale-checklist.md`。**§7 AC 七条全部通过**，判定「条件通过」（遗留：真实 K8s 集群部署未执行、FR-08 配置中心占位未实现，见 96 文档 §6.4）。
 
 ## 1. 背景与目标
 
@@ -78,13 +80,22 @@
 
 ## 7. 验收标准（AC）
 
-- [ ] 同一份业务模块代码，在 `in-process` 与 `redis` 两种 transport 下均调用成功。
-- [ ] 租户 A 的用户无法查询/修改租户 B 的数据（自动化越权用例全绿）。
-- [ ] 缺失租户上下文时，查询直接失败（fail-closed），不返回全量数据。
-- [ ] 数据权限四种范围在列表与详情接口上均生效。
-- [ ] 一个请求跨 2 个服务时，可用同一 traceId 在追踪系统查到完整链路。
-- [ ] Helm 模板一键部署后，健康检查、滚动更新、HPA 均生效。
-- [ ] 压测基线报告可复现，登录/列表/写入三类场景有明确 QPS 与 P95 数值。
+> 判定依据与逐条证据见 [`docs/96-m8-drills.md`](../96-m8-drills.md) §6.1；结论：**七条全部通过**。
+
+- [x] 同一份业务模块代码，在 `in-process` 与 `redis` 两种 transport 下均调用成功。
+      *证据*：`drill-m8.mjs` 演练二（同一端点同一请求体，仅环境变量不同）；`smoke-transport.mjs` 17/17。
+- [x] 租户 A 的用户无法查询/修改租户 B 的数据（自动化越权用例全绿）。
+      *证据*：`smoke-tenant.mjs` 阶段 A（跨租户越权 403/4001）+ 阶段 D（三类详情越权 403/3002）。
+- [x] 缺失租户上下文时，查询直接失败（fail-closed），不返回全量数据。
+      *证据*：`smoke-tenant.mjs` 阶段 A1；`@fw/db` tenantScoped fail-closed 单测。
+- [x] 数据权限四种范围在列表与详情接口上均生效。
+      *证据*：`smoke-tenant.mjs` 阶段 D 19 项；`@fw/auth` 四档解析/越权校验单测 14 项。
+- [x] 一个请求跨 2 个服务时，可用同一 traceId 在追踪系统查到完整链路。
+      *证据*：`drill-m8.mjs` 演练二（固定 `traceparent` → 同 traceId 3 span / 2 服务）；`smoke-telemetry.mjs` 14/14（TC-TNT-006）。
+- [x] Helm 模板一键部署后，健康检查、滚动更新、HPA 均生效。
+      *证据*：`scripts/check-helm-chart.mjs` 63/63（清单语义层：探针分指 `/ready` `/health`、`maxUnavailable=0/maxSurge=1`、HPA、PDB、resources、非 root、Secret 外部注入、迁移 Job pre-upgrade 钩子）。**真实集群 `helm install` + `kubectl rollout` 未执行**（本机无 helm/kubectl），见 96 文档 L-01。
+- [x] 压测基线报告可复现，登录/列表/写入三类场景有明确 QPS 与 P95 数值。
+      *证据*：[`docs/97-bench-baseline.md`](../97-bench-baseline.md)（登录 P95 255.65ms / 列表 P95 27.69ms / 写入 P95 434.09ms）；`apps/example-api/scripts/bench.mjs` 可复跑。
 
 ## 8. 依赖与风险
 

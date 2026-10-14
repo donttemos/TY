@@ -1,0 +1,28 @@
+{{/*
+@file NetworkPolicy
+@description 默认关闭；开启后仅允许同命名空间入站到 API 端口，出站不限（需连 DB/Redis/OTel 外部依赖）。
+@author donttemo
+@created 2026-10-14
+*/}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "fw-app.fullname" . }}-api
+  labels:
+    {{- include "fw-app.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "fw-app.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.app.port }}
+{{- end }}

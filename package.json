@@ -1,6 +1,6 @@
 {
   "name": "fw-monorepo",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "通用应用框架 monorepo：框架包 + 应用 + 项目模板",
   "packageManager": "pnpm@11.6.0",
@@ -13,7 +13,8 @@
     "dev": "turbo run dev",
     "lint": "turbo run lint",
     "check:headers": "node scripts/check-file-headers.mjs",
-    "check:config": "fw check"
+    "check:config": "fw check",
+    "check:helm": "node scripts/check-helm-chart.mjs"
   },
   "devDependencies": {
     "turbo": "^2.3.0",
