@@ -324,6 +324,19 @@ async function main() {
     badRoleIdsUnknown.status === 400 && badRoleIdsUnknown.body.code === 1001,
     `http=${badRoleIdsUnknown.status} code=${badRoleIdsUnknown.body.code}`);
 
+  // 回归（部分更新）：角色校验原先发生在 updateUser 之后 —— 非法角色返回 400 时，
+  // 同一请求里的资料字段已落库，客户端收到失败却已生效。校验前置后，任一入参非法即整体不写。
+  const beforePartial = await call(`/api/v1/users/${probeUserId}`, { token });
+  const partialUpdate = await call(`/api/v1/users/${probeUserId}`, {
+    method: 'PUT', token, body: { nickname: '冒烟不应生效', roleIds: [''] },
+  });
+  const afterPartial = await call(`/api/v1/users/${probeUserId}`, { token });
+  const partialNick = beforePartial.body.data?.nickname;
+  check('PUT /users/:id 角色非法时资料字段不被部分写入（整体不写）',
+    partialUpdate.status === 400 && partialUpdate.body.code === 1001 &&
+      afterPartial.body.data?.nickname === partialNick,
+    `http=${partialUpdate.status} code=${partialUpdate.body.code} before=${partialNick} after=${afterPartial.body.data?.nickname}`);
+
   const adminScopeChange = await call(`/api/v1/roles/${adminRole.id}`, {
     method: 'PUT', token, body: { dataScope: 'self' },
   });

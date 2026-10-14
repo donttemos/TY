@@ -10,6 +10,10 @@
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo M8 T-M8-04：列表改走 resolveDataScopeFilter（四档）；
  *   setStatus / assignRoles 增加 assertWithinDataScope 详情越权校验（范围外 3002）
+ * @modified 2026-10-14 donttemo POST /users 建号带角色改走 AuthService.assignUserRoles
+ *   （原先直调 store.replaceUserRoles，绕过写库前校验）；PUT /users/:id 的角色校验
+ *   **前置**到 updateUser 之前 —— 原先校验发生在资料已落库之后，非法角色会留下
+ *   「资料已改、角色未改」的部分更新（客户端收到 400 却已生效）
  * @module example-api/auth
  */
 
@@ -257,6 +261,11 @@ export class UsersController {
     await assertWithinDataScope(user, id, this.org);
     const before = await this.admin.findUserListItemById(id);
     if (!before) throw new BizError(ErrorCode.NOT_FOUND, '用户不存在');
+
+    // 角色校验**前置**：assignUserRoles 内部虽也校验，但那时 patch 已落库 →
+    // 校验失败会留下「资料已改、角色未改」的部分更新（客户端收到 400 却已生效）。
+    // 这里先校验一次（幂等、无副作用），保证任一入参非法即整体不写。
+    if (body.roleIds !== undefined) await this.auth.assertRoleIds(body.roleIds);
 
     const patch: Partial<AuthUser> = {};
     if (body.nickname !== undefined) patch.nickname = body.nickname;
