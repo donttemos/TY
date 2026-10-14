@@ -14,6 +14,79 @@
 
 ## [Unreleased]
 
+### Fixed（C-06 契约收口：前端按契约全量调用、后端只实现演示子集，接入真实 API 后 25 个端点集体 404，2026-10-14）
+
+> 域名上线后点管理后台页面，浏览器接连报 `Cannot GET /api/v1/auth/sessions`、`Cannot GET /api/v1/users/:id`、
+> `Cannot GET /api/v1/dict/data_scope`。根因不是新引入的回归，而是**架构性缺口**：
+> 本仓库采用「契约先行 + mock 顶上」的并行开发（[85-parallel-workstreams](./docs/85-parallel-workstreams.md) §4）——
+> C-06 契约冻结于 M5，前端 `admin-web` 与 `mock/handlers.ts` 按契约**全量**实现，而后端 `example-api` 只落地到
+> 「M3/M8 演示可验证」深度。两侧各自的门禁都是绿的（前端 29 单测 + 40 冒烟走 mock，后端冒烟走已实现路由），
+> 于是「契约声明、mock 有、后端未注册」的端点**没有任何一道检查会发现**，只在接真实 API 后才 404。
+> `docs/40-api-spec.md` §3 与 `docs/30-data-dictionary.md` §3.11/§3.12 其实早已写明这些端点与表，
+> 缺的从来不是文档，是**实现**与**两侧对撞的门禁**。
+
+- **补齐 25 个契约声明但后端未注册的端点**：
+  - `GET/DELETE /auth/sessions[/:id]`：登录设备列表与下线。语义为「一个刷新令牌轮换族 = 一台设备」，
+    族内多条是正常轮换结果；下线前先确认该族属于当前用户（防越权踢他人），再整族撤销。
+  - `GET /audit-logs/:id`：审计详情，`dataScope` 与列表同源收敛（`self` 档范围外一律 404，不泄露存在性）。
+  - `GET /menus/tree` + `POST/PUT/DELETE /menus`：菜单维护。与 `/auth/menus` 的分工是
+    「全量配置用」vs「当前用户可见（按权限过滤，供动态路由）」；有子菜单时拒绝删除，避免层级悬空。
+  - `GET /dict/categories|items` + `POST/PUT/DELETE` + `GET /dict/:code`：字典模块（PRD-005 FR-07）。
+    `dict/:code` 是 `useDict()` 的消费入口，编码不存在返回**空数组而非报错**——否则页面首次渲染即失败。
+  - `GET /users/:id` + `POST /users` + `PUT /users/:id` + `DELETE /users/:id` + `POST /users/:id/reset-password`：
+    用户维护。密码走后端强校验（不信任前端强度判断）；账号不可改（登录与审计锚点）；
+    重置密码返回一次性密码并**同时失效该用户全部登录态**。
+  - `POST /roles` + `PUT /roles/:id` + `DELETE /roles/:id` + `POST /roles/:id/copy`：角色维护。
+    编码不可改、内置角色不可删也不可调窄数据范围（保证超管始终 `all`）、仍有用户持有时拒绝删除；
+    复制角色连同 `role_permission` 一起复制。
+- **列表返回补齐契约字段**：`GET /users` 与 `GET /roles` 此前返回的是 `AuthUser`/`AuthRole` 原始形状，
+  缺 `roleIds` / `createdAt`（用户）与 `permissionCount` / `remark` / `sort`（角色）——C-06 契约 §3.3/§3.4 要求列表带这些字段
+  （分配角色弹窗预选、授权页展示都依赖它们）。现改为批量投影（一次关联查询，避免 N+1）。
+- **`@fw/auth` 新增 `AuthService.invalidateUsersOfRole()`**：角色**资料**变更（如 `dataScope`）不写
+  `role_permission`，不走 `grantRolePermissions` 的缓存失效路径，已登录用户会继续持旧数据范围。
+  新增该方法供角色更新端点调用（纯新增，不破坏既有契约）。
+- **新增权限点 `dict:read` / `dict:write` / `auth:revoke-session`**（随种子建出并授予 admin，权限点 28 → 31）。
+
+### Fixed（软删不释放唯一键：同名账号 / 同编码字典永远无法重建，2026-10-14）
+
+> 冒烟脚本连续第二次运行即失败：`POST /users` 对已软删的 `smoke_probe_user` 返回 409，
+> `POST /dict/categories` 对已软删的 `smoke_probe` 同样 409。这不是测试问题，是**真实业务缺陷**：
+> 软删行仍在表内，继续占用 `username` 与 `dict_categories.code` / `(category_id, value)` 唯一约束——
+> 表现为「人员离职后重新入职」或「字典停用后想复用原编码」直接撞 409，且错误信息无法指出真实原因。
+
+- **`PrismaAdminStore.softDeleteUser()`**：软删时给 `username` / `phone` / `email` 追加重删后缀释放唯一键
+  （已释放过的跳过，重复调用幂等；审计仍可按原 id 追溯）。
+- **`PrismaAdminStore.deleteDictCategory()` / `deleteDictItem()`**：同样释放 `code` 与 `value` 唯一键，
+  删分类时连带释放其下所有字典项。
+
+### Added（前后端接口对撞门禁 + 管理后台端点冒烟，2026-10-14）
+
+- **`scripts/check-api-parity.mjs`（`pnpm run check:api-parity`，已接入 CI base 作业）**：
+  把**前端调用面**（`apps/admin-web/src` 下所有 `request.<method>('<path>')`，模板串归一为占位段）
+  与**后端路由面**（全仓 `*.controller.ts` 的 `@Controller` 前缀 + 方法装饰器）逐一对撞。
+  前端调了而后端没注册 → **失败**（这正是线上 404 的直接来源）；后端有而前端未调用 → 仅提示
+  （演示 / 运维端点本就不该被前端调）；路径首段即变量的动态调用（如 `<CrudTable>` 的 `props.api`）
+  单独归类，不计入缺口。已用临时探针反向验证：注入一个不存在的调用即使脚本退出码变 1。
+- **`apps/example-api/scripts/smoke-admin.mjs`（72 条断言，已接入 CI）**：逐个验证上述补齐端点，
+  含越权面（最小权限角色对每类写操作均应 3002）、唯一键释放、软删后同名可重建、
+  重置密码后旧口令失效、被下线设备的 refresh 立即失效、内置角色保护等。
+  断言遵循「形状 + 下界 + 关键权限码」，不与种子总数耦合；所有写操作只用临时实体并清理。
+  连续运行三次均 72/72（另：登录限流 60 秒 10 次会被连续跑打满，脚本识别 429 后明确退出而非输出一堆假失败）。
+- **数据模型**：`prisma/schema.prisma` 与 `prisma/pg/schema.prisma`（模型段逐字节一致）新增
+  `dict_categories` / `dict_items`；迁移 `20261014112810_add_dict_tables` 两个方言各一份；
+  种子新增字典基线四类（`user_status` / `data_scope` / `audit_action` / `order_channel`，
+  与前端真实消费点一一对应）与「菜单管理 / 字典管理」两个菜单项。
+- **文档**：`docs/40-api-spec.md` §3.2 补登录设备端点、§3.4/§3.7 给两个未实现端点标注 Backlog、
+  §6 记录接口对撞门禁；`docs/30-data-dictionary.md` §3.11/§3.12 按现行「字符串主键、框架表不带租户」约定重写
+  （原文档是 bigint + `tenant_id` + `is_default` 的旧约定残留），ER 图同步。
+
+### Fixed（前端队列管理两个端点路径缺少 `admin/` 前缀，2026-10-14）
+
+> `apps/admin-web/src/api/queue.ts` 的 `tickCron` 与 `requeueDeadLetter` 请求 `/queue/...`，
+> 而后端 `QueueAdminController` 挂在 `/api/v1/admin/queue`——同样是必然 404，且因为队列页面能打开、
+> 只有点「手动触发 / 重放」才炸，属于典型的「页面绿、操作红」。现补齐前缀，产物已复验含
+> `admin/queue/crons` 与 `admin/queue/dead-letters`。
+
 ### Fixed（HTTPS 上线后暴露：生产前端构建缺 API 基址导致登录 405，2026-10-14）
 
 > 域名 `cs.donttemo.top` 走 Let's Encrypt HTTPS 后，浏览器登录返回 **405 Not Allowed**。

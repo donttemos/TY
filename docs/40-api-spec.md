@@ -118,6 +118,8 @@
 | GET | `/auth/me` | `auth:me` | 当前用户资料 + 角色 + 权限码列表 |
 | GET | `/auth/menus` | `auth:me` | 当前用户可见菜单树（后台动态路由数据源） |
 | POST | `/auth/change-password` | `auth:change-password` | 改密，成功后其它设备下线 |
+| GET | `/auth/sessions` | `auth:me` | 当前用户登录设备列表（一个刷新轮换族即一台设备） |
+| DELETE | `/auth/sessions/:id` | `auth:revoke-session` | 下线指定设备（仅限本人设备；整族撤销） |
 | GET | `/auth/oauth/:provider` | 公开 | OAuth2 跳转（微信 / 企业微信 / GitHub） |
 | GET | `/auth/oauth/:provider/callback` | 公开 | OAuth2 回调，绑定或创建用户 |
 
@@ -152,7 +154,7 @@
 | PUT | `/roles/:id/permissions` | `role:grant` | 全量授权，写入 `role_permission` |
 | POST | `/roles/:id/copy` | `role:create` | 复制角色（含权限） |
 | GET | `/permissions` | `permission:read` | 权限点列表（按 module 分组） |
-| GET | `/permissions/tree` | `permission:read` | 权限树（菜单 / 按钮 / 接口三层） |
+| GET | `/permissions/tree` | `permission:read` | 权限树（菜单 / 按钮 / 接口三层）—— **未实现（Backlog）**，前端未消费，`scripts/check-api-parity.mjs` 仅提示不阻断 |
 
 ### 3.5 菜单（PRD-005）
 
@@ -168,10 +170,10 @@
 | 方法 | 路径 | 权限点 | 说明 |
 |---|---|---|---|
 | GET | `/dict/categories` | `dict:read` | 分类列表 |
-| POST / PUT / DELETE | `/dict/categories[/:id]` | `dict:create/update/delete` | 分类维护 |
+| POST / PUT / DELETE | `/dict/categories[/:id]` | `dict:write` | 分类维护（删除连带其下字典项；软删同时释放编码唯一键） |
 | GET | `/dict/items` | `dict:read` | 字典项列表（按 `category_id`） |
-| POST / PUT / DELETE | `/dict/items[/:id]` | `dict:create/update/delete` | 字典项维护 |
-| GET | `/dict/:code` | 公开（登录后） | 按分类编码取字典项，供前端 `useDict()` 消费 |
+| POST / PUT / DELETE | `/dict/items[/:id]` | `dict:write` | 字典项维护 |
+| GET | `/dict/:code` | 登录后 | 按分类编码取字典项，供前端 `useDict()` 消费；编码不存在返回空数组而非报错 |
 
 ### 3.7 审计日志（PRD-003）
 
@@ -179,7 +181,7 @@
 |---|---|---|---|
 | GET | `/audit-logs` | `audit:read` | 分页查询，支持 `user_id / module / action / target / 时间区间` |
 | GET | `/audit-logs/:id` | `audit:read` | 详情，含变更前后值（脱敏） |
-| GET | `/audit-logs/export` | `audit:export` | 导出（异步任务，返回 `jobId`） |
+| GET | `/audit-logs/export` | `audit:export` | 导出（异步任务，返回 `jobId`）—— **未实现（Backlog）**，前端未消费 |
 
 ### 3.8 任务与队列（PRD-007）
 
@@ -245,4 +247,10 @@
 
 - 由装饰器（DTO + 控制器）生成 OpenAPI，`GET /docs-json` 输出 spec。
 - CI 校验：spec 与路由清单一致；未标注权限点的接口视为缺陷并阻断合并。
+- **接口对撞门禁（`pnpm run check:api-parity`）**：本仓库是「契约先行 + mock 顶上」的并行架构，
+  C-06 契约（[docs/contracts/api-web.ts](./contracts/api-web.ts)）与前端 mock 齐全，而后端按里程碑分批落地。
+  两侧各自的门禁都是绿的，导致「契约声明、mock 有、后端未注册」的端点只在接真实 API 后才 404。
+  该脚本把**前端调用面**（`apps/admin-web/src` 下所有 `request.<method>('<path>')`）与**后端路由面**
+  （全仓 `*.controller.ts` 的 `@Controller` + 方法装饰器）逐一对撞，前端调了而后端没有即失败；
+  后端有而前端未调用（演示 / 运维端点）仅提示。已在 CI 的 base 作业阻断合并。
 - 变更流程：改接口 → 更新本文档与 spec → 评审 → 合并。

@@ -165,19 +165,17 @@ erDiagram
         datetime expire_at
     }
     dict_categories {
-        bigint id PK
-        bigint tenant_id FK
-        varchar code UK "字典分类编码"
+        varchar id PK
+        varchar code UK "字典分类编码（软删追加重删后缀释放唯一键）"
         varchar name
-        tinyint is_system
+        varchar remark "备注 可选"
     }
     dict_items {
-        bigint id PK
-        bigint category_id FK
-        varchar value "存储值"
+        varchar id PK
+        varchar category_id FK
+        varchar value "存储值（软删追加重删后缀释放唯一键）"
         varchar label "展示值"
         varchar color "标签色 可选"
-        tinyint is_default
         int sort
     }
     audit_logs {
@@ -343,29 +341,34 @@ erDiagram
 > 解密只发生在租户存储适配层，明文经进程内请求上下文传递给数据源路由，禁止写入日志/审计/队列消息。
 > sqlite 相对路径（`file:./xxx.db`）按 `prisma/schema.prisma` 所在目录解析，与主库 `DB_URL` 语义一致。
 
-### 3.11 `dict_categories` 字典分类（M5）
+### 3.11 `dict_categories` 字典分类（M5 契约声明，2026-10-14 落地）
 
 | 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
 |---|---|---|---|---|---|
-| `id` | bigint | 是 | — | 主键 | PK |
-| `tenant_id` | bigint | 是 | 0 | 租户 ID | — |
-| `code` | varchar(64) | 是 | — | 分类编码，如 `order_status` | UK（租户内唯一） |
+| `id` | varchar(36) | 是 | uuid | 主键（框架统一字符串主键，D-04） | PK |
+| `code` | varchar(64) | 是 | — | 分类编码，如 `order_status`、`user_status` | UK（全局唯一） |
 | `name` | varchar(64) | 是 | — | 分类名称 | — |
-| `is_system` | tinyint | 是 | 0 | 内置字典不可删除 | — |
-| 通用字段 | — | — | — | 同上 | — |
+| `remark` | varchar(255) | 否 | NULL | 备注 | — |
+| 通用字段 | — | — | — | 含软删 / 审计字段 | `idx_dict_cat_deleted` |
 
-### 3.12 `dict_items` 字典项（M5）
+> 与 `permissions` / `menus` 同属**系统级配置**，故不带 `tenant_id`（多租户下字典全局共享，与 D-03「框架表不带前缀」一致）。
+> 软删时 `code` 追加重删后缀释放唯一键——否则同编码分类永远无法重建（人员复用场景直接撞 409）。
+
+### 3.12 `dict_items` 字典项（M5 契约声明，2026-10-14 落地）
 
 | 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
 |---|---|---|---|---|---|
-| `id` | bigint | 是 | — | 主键 | PK |
-| `category_id` | bigint | 是 | — | 所属分类 | `idx_dict_item_cat` |
-| `value` | varchar(64) | 是 | — | 存储值 | UK（分类内唯一） |
+| `id` | varchar(36) | 是 | uuid | 主键 | PK |
+| `category_id` | varchar(36) | 是 | — | 所属分类 | `idx_dict_item_category` |
+| `value` | varchar(64) | 是 | — | 存储值（程序值） | UK（分类内唯一） |
 | `label` | varchar(64) | 是 | — | 展示文案 | — |
-| `color` | varchar(32) | 否 | NULL | 标签色 | — |
-| `is_default` | tinyint | 是 | 0 | 是否默认值 | — |
+| `color` | varchar(32) | 否 | NULL | 标签色，取值 `primary/success/warning/danger/info` | — |
 | `sort` | int | 是 | 0 | 排序 | — |
-| 通用字段 | — | — | — | 同上 | — |
+| 通用字段 | — | — | — | 含软删 / 审计字段 | `idx_dict_item_deleted` |
+
+> 契约（C-06 §3.6）不含 `is_default`：默认值由前端表单自行决定，落库会把「展示策略」固化进数据层，故不建。
+> 软删时 `value` 追加重删后缀释放 `(category_id, value)` 唯一键，理由同分类。
+> 种子基线四类：`user_status`（用户管理页）、`data_scope`（角色数据范围四档）、`audit_action`（审计筛选）、`order_channel`（订单演示页）。
 
 ### 3.13 `audit_logs` 审计日志（M3）
 

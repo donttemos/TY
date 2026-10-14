@@ -417,6 +417,8 @@ sudo tar czf /opt/1panel/backups/fw-env-$(date +%F).tar.gz -C /opt/fw/shared .en
 | 浏览器 502 | OpenResty 连不到上游 | 确认 OpenResty 是 host 网络；`curl 127.0.0.1:3000/health` 本机是否通；反代地址是否写成了容器内不可达的地址 |
 | 浏览器 404 但 API 正常 | 前端产物没同步或 SPA 回退没配 | 检查 `WEB_SYNC_DIR` 是否有 `index.html`；确认 §A 的 `location /` 片段已粘入 |
 | **点登录报 405 Not Allowed** | **前端产物缺 `VITE_API_BASE_URL`**，请求退化成了 `/auth/login` 打在静态站上 | 见 §7.3：`grep -ro '/api/v1' <站点>/assets/*.js` 应为 ≥1 次；缺则重跑发版（脚本会注入并断言） |
+| **页面报 `Cannot GET /api/v1/...`（code=1002）** | 前端调用的端点后端未注册。本仓库是「契约先行 + mock 顶上」，C-06 契约与 mock 齐全而后端分批落地，**缺口不会在任何单测/CI 里失败，只在接真实 API 后 404** | 本机跑 `pnpm run check:api-parity` 做两侧对撞（已入 CI）：它列出「前端调了、后端没有」的全部端点；确认版本 ≥ 本次 C-06 收口（补齐了 25 个端点：登录设备 / 审计详情 / 菜单维护 / 字典 / 用户维护 / 角色维护） |
+| 队列页能打开，但「手动触发 / 重放」报 404 | 前端 `queue.ts` 的这两个调用少了 `admin/` 前缀 | 确认产物含 `admin/queue/crons` 与 `admin/queue/dead-letters` |
 | 访问日志里查不到用户的请求 | 客户端**不带 SNI**（或用 IP 作 SNI）连 443，被默认站 `ssl_reject_handshake on` 硬拒，**不写日志** | 用 `openssl s_client -connect <host>:443 -servername <域名>` 复现；确认客户端/中间层保留 SNI |
 | 后台刷新页面 404 | 缺 `try_files ... /index.html` | 补上 §A 的 SPA 回退片段 |
 | 上传文件 413 | `client_max_body_size` 没加 | 在 http 层加 `client_max_body_size 16m` |
@@ -456,7 +458,8 @@ journalctl -u fw-api -o cat --since today | jq -c 'select(.level=="error")'
 - **`.env` 以 `fw` 身份读取会被拒**：systemd 以 root 读 `EnvironmentFile`，`600 root:root` 是正确姿势；只有手工以 `fw` 跑迁移/种子时才需临时 `640 root:fw`。
 - **`docker exec -i` 会吞掉远程脚本的 stdin**：以 `ssh ... 'bash -s' < script` 执行时，脚本内 `docker exec -i` 会读走后续脚本文本导致静默截断；一律加 `</dev/null`。
 
-**仍然未验证**：HTTPS 证书签发（需已解析的域名）、`fw-worker@.service` 跨进程 worker（本次为单进程 in-process 模式）、Redis Cluster、1Panel 面板 UI 建档流程（本站点为手工写配置）、`bare-metal-deploy.sh` 的端到端自动执行（该机 `github.com` 不可达）。
+**仍然未验证**：`fw-worker@.service` 跨进程 worker（本次为单进程 in-process 模式）、Redis Cluster、1Panel 面板 UI 建档流程（本站点为手工写配置）、`bare-metal-deploy.sh` 的端到端自动执行（该机 `github.com` 不可达）。
+**C-06 收口后待真机复验**（本轮改动只在本地与 CI 验证，尚未在 `cs.donttemo.top` 上发版复验）：新增 `dict_categories` / `dict_items` 两表的 PG 迁移、25 个补齐端点、字典种子四类。发版后按 §7.3 的产物断言 + 逐个端点登录验收即可，命令见 [验证报告 §3.8](./63-1panel-real-deploy-verification.md)。
 
 另外两条**已知的仓库级遗留**（与本次部署无关，但会影响判断）：
 
