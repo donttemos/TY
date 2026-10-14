@@ -24,6 +24,9 @@
 # @modified 2026-10-14 donttemo v0.2.0 推送后首次真实 Actions 运行修复：pnpm/action-setup@v4 同时配置了
 #   version: 11 与根 package.json 的 packageManager(pnpm@11.6.0)，触发 ERR_PNPM_BAD_PM_VERSION 在多版本冲突处直接
 #   失败（第 3 步即挂，后续步骤全 skipped）；移除 action 的 version 输入，统一以 packageManager 为准（两处 job 均已改）
+# @modified 2026-10-14 donttemo v0.2.0 推送后首跑 CI 修复（二）：构建步骤此前只为 @fw/db 生成自定义输出的
+#   test-client，从未为 example-api 生成默认 @prisma/client；干净环境下该 client 仅为 postinstall 空壳，
+#   example-api 的 tsc 报 Prisma.InputJsonValue / Prisma.DbNull 缺失。改为在构建前显式生成两份 client
 # @module ci
 
 name: CI
@@ -56,6 +59,10 @@ jobs:
       - name: 构建全部包
         run: |
           pnpm --filter @fw/db exec prisma generate --schema prisma/test-schema.prisma
+          # example-api 的 Prisma Client 生成到默认 @prisma/client（@fw/db 的 test schema 用了自定义 output=prisma/test-client，
+          # 不会填充默认 client）。干净环境缺此步时，@prisma/client 只是 postinstall 留下的空壳，example-api 的 tsc 会报
+          # Prisma.InputJsonValue / Prisma.DbNull 不存在。DB_URL 仅占位，generate 不连库。
+          DB_URL="file:./dev.db" pnpm --filter example-api exec prisma generate --schema prisma/schema.prisma
           for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/tenant @fw/transport @fw/telemetry; do
             pnpm --filter $pkg run build
           done
