@@ -27,6 +27,10 @@
 # @modified 2026-10-14 donttemo v0.2.0 推送后首跑 CI 修复（二）：构建步骤此前只为 @fw/db 生成自定义输出的
 #   test-client，从未为 example-api 生成默认 @prisma/client；干净环境下该 client 仅为 postinstall 空壳，
 #   example-api 的 tsc 报 Prisma.InputJsonValue / Prisma.DbNull 缺失。改为在构建前显式生成两份 client
+# @modified 2026-10-14 donttemo v0.2.0 推送后首跑 CI 修复（三）：把 example-api 的 .env 生成提前到 prisma generate 之前。
+#   Prisma 生成的 client 会把「生成时 .env 是否存在」固化进运行期环境解析：CI 原先在 M3 步骤才 cp .env，
+#   而 client 已在更早的构建步生成，导致运行期读不到 DB_URL（seed 报 PrismaClientInitializationError）。
+#   本地已双向复现/验证（无 .env 生成 → seed 失败；带 .env 生成 → seed 通过）
 # @module ci
 
 name: CI
@@ -54,6 +58,12 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+
+      # example-api 的 .env 必须在 prisma generate 之前就位：生成的 client 会把「生成时 .env 是否存在」
+      # 固化进运行期环境解析，缺失时运行期直接读不到 DB_URL（migrate / seed / 起服务全部受影响）
+      - name: 准备 example-api 环境文件
+        working-directory: apps/example-api
+        run: cp .env.example .env
 
       # 构建（含 prisma generate——切换 provider 后必须重新生成，防缓存旧 client 假绿）
       - name: 构建全部包
@@ -90,10 +100,10 @@ jobs:
         run: node packages/cli/dist/index.js gen crud demo-item --dry
 
       # M3 端到端冒烟：迁移 + 种子 + 起服务 + TC-AUTH 断言（PRD-003 AC）
+      # .env 已由前置「准备 example-api 环境文件」步骤生成（须早于 prisma generate）
       - name: M3 鉴权端到端冒烟（SQLite）
         working-directory: apps/example-api
         run: |
-          cp .env.example .env
           pnpm exec prisma migrate deploy --schema prisma/schema.prisma
           pnpm exec tsx prisma/seed.ts
           node dist/main.js & echo $! > /tmp/fw-api.pid
