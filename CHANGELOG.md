@@ -40,9 +40,10 @@
 - **`deploy/systemd/fw-api.service` / `fw-worker@.service`**：针对小内存机器补资源约束——`NODE_OPTIONS=--max-old-space-size`（API 640 / worker 512）与 `MemoryHigh`/`MemoryMax`（API 768M/1024M，worker 384M/512M）。作用是让内存压力由 **cgroup OOM killer 只杀本进程**（systemd 随即按 `Restart=always` 拉起），而非整机 OOM 时内核按 `oom_score` 误杀 PostgreSQL/MySQL 把数据库一并带走；`ExecStart` 路径同步为 bootstrap 创建的 `/usr/local/bin/node`。
 - **`deploy/systemd/fw.env.example`**：数据库段落改写为「两套 schema 如何选 + `PRISMA_SCHEMA` 归位」，并补 1Panel 本机容器 PostgreSQL 的连接串样例（host 必须写 `127.0.0.1`、端口取面板的宿主映射端口）。
 
-### Fixed（文件头门禁扫描范围遗漏 `deploy/`，2026-10-14）
+### Fixed（工程门禁扫描范围与跨平台行尾，2026-10-14）
 
 - **`scripts/check-file-headers.mjs` 的 `SCAN_DIRS` 未包含 `deploy`**：该目录下的 `.sh` / `.yml` / `.yaml` **从未被文件头门禁覆盖**——既有的 `deploy/helm/fw-app/**`、`deploy/docker-compose.prod.yml`，以及上一轮新增的 `deploy/scripts/bare-metal-deploy.sh` 全都在扫描范围之外。这违反「每源文件强制文件头」的仓库规范，却不会让门禁变红，属**静默失效的检查**。现将 `deploy` 纳入扫描（受检文件 347 → 366），并补齐 `docker-compose.prod.yml`、`helm/fw-app/Chart.yaml`、`helm/fw-app/values.yaml`、`helm/fw-app/values-prod.yaml` 四个文件的头注释（`@created` 取各自首次提交日期）。`pnpm run check:helm` 回归 **63/63**，未受影响。
+- **仓库缺 `.gitattributes`，在 `core.autocrlf=true` 下 shell 脚本存在 CRLF 风险**：本项目是「Windows 开发 + Linux 部署」的混合环境。本机 `core.autocrlf=true`，checkout 会把文本文件转成 CRLF；而带 CRLF 的 `.sh` 上传到 Linux 会直接报 `bad interpreter: /usr/bin/env bash^M`——文件内容看起来完全正常，编辑器也不显示 `^M`，属最难排查的一类部署故障。现新增 `.gitattributes` 显式声明：文本文件与脚本（含 `.sh`/`.prisma`/`.conf`/systemd 单元）一律 **LF**，仅 `*.bat` / `*.cmd` 保留 CRLF；并把 `.db` / `.node` / `.so` / 字体等标记为 `binary`，防止行尾转换损坏文件。`git add --renormalize .` 验证仓库内既有文本文件本已是 LF，故本次为纯加固、**无任何内容变更**。
 
 ### Fixed（v0.2.0 推送后首次真实 Actions 运行排障，2026-10-14）
 
