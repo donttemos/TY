@@ -13,6 +13,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
+import type { RouteRecordRaw } from 'vue-router';
 import { CATCH_ALL_NAME, LAYOUT_ROUTE_NAME, constantRoutes, notFoundRoute } from '../routes';
 import { injectDynamicRoutes } from '../inject';
 import { resolveFallback, setupRouterGuard } from '../guard';
@@ -137,6 +138,32 @@ describe('动态路由必须嵌套在全局布局内（BUG-16 回归护栏）', 
     const router = buildRouter();
     const names = matchedNames(router, '/redirect/system/users');
     expect(names).toEqual([LAYOUT_ROUTE_NAME, 'Redirect']);
+  });
+
+  it('静态路由表内不得存在同名或同路径记录（重名会被 vue-router 静默覆盖，运行时看不出问题）', () => {
+    // 断言对象是**静态定义表**而非 router.getRoutes()：vue-router 在注册时会把同名记录静默移除
+    // （实测：故意加回重复的 /redirect 后 getRoutes() 里只剩一条）→ 拿解析结果断言等于永真。
+    // 真正的风险点在「人手写的这张表」，所以在这里检查。
+    interface FlatRecord {
+      name?: unknown;
+      path: string;
+    }
+    const flatten = (routes: RouteRecordRaw[], parentPath = ''): FlatRecord[] => {
+      const out: FlatRecord[] = [];
+      for (const route of routes) {
+        const path = route.path.startsWith('/') ? route.path : `${parentPath.replace(/\/$/, '')}/${route.path}`;
+        out.push({ name: route.name, path });
+        if (route.children?.length) out.push(...flatten(route.children, path));
+      }
+      return out;
+    };
+    const flat = flatten(constantRoutes);
+    const names = flat.map((r) => r.name).filter((name): name is string => typeof name === 'string');
+    expect(names.filter((name, index) => names.indexOf(name) !== index)).toEqual([]);
+    const paths = flat.map((r) => r.path);
+    expect(paths.filter((path, index) => paths.indexOf(path) !== index)).toEqual([]);
+    // 锁定 /redirect 只存在一条且在布局内（上一轮「移入布局内」只做了一半：新增了布局内记录，漏删顶层记录）
+    expect(paths.filter((path) => path.startsWith('/redirect'))).toHaveLength(1);
   });
 
   it('公开页（登录 / 403 / 404）不挂外壳，无 Layout 祖先', () => {

@@ -7,6 +7,9 @@
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo 修复「点进功能页侧边栏消失」：布局路由补 name 供动态路由挂载；
  *   /redirect 从顶层移入布局内 —— 原先顶层注册会让标签页「刷新」把整个外壳（侧边栏/顶栏）卸载重建
+ * @modified 2026-10-14 donttemo 真机验证中清理：上一层改动只做了「新增布局内记录」而**未删除顶层同名记录**，
+ *   导致同一 path/name 注册两次（vue-router 静默以后者覆盖前者），与上方注释不符且属隐患 →
+ *   移除顶层 /redirect，仅保留布局内那一条；并由 __tests__/layout-nesting.test.ts 锁定「路由表无重名」
  * @module admin-web/router
  */
 
@@ -36,12 +39,6 @@ export const constantRoutes: RouteRecordRaw[] = [
     name: 'NotFound',
     component: () => import('@/views/error/404.vue'),
     meta: { title: '页面不存在', public: true, hiddenInTabs: true },
-  },
-  {
-    path: '/redirect/:pathMatch(.*)*',
-    name: 'Redirect',
-    component: () => import('@/views/redirect/index.vue'),
-    meta: { title: '刷新', public: true, hiddenInTabs: true },
   },
   {
     path: '/',
