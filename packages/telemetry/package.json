@@ -1,6 +1,6 @@
 {
   "name": "@fw/telemetry",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "OpenTelemetry 链路追踪：traceId 贯穿 HTTP/DB/缓存/队列/传输，OTLP 导出，日志自动注入 traceId/spanId（PRD-008 FR-07）",
   "type": "module",
   "main": "./dist/index.js",

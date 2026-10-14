@@ -8,6 +8,9 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo M6：/permissions 断言由写死总数改为「形状 + 下界 + 关键权限码」（生成器为 example-api 追加 demo-item 权限点）
+ * @modified 2026-10-14 donttemo v0.3.0 收口：菜单断言里的「订单中心」(/order) 已按「死链菜单」修复整支移除
+ *   （视图与后端 /api/v1/orders 均不存在，真实部署必然死链；业务菜单示范改由 /demo-items 承担）——
+ *   改为断言现存菜单（审计日志 / 队列管理），设计意图不变；属种子语义变更后的断言同步，非删除断言。
  * @module example-api
  */
 
@@ -102,7 +105,10 @@ async function main() {
 
   const menusAdmin = await call('/api/v1/auth/menus', { token: admin.accessToken });
   const namesAdmin = JSON.stringify(menusAdmin.body.data ?? []);
-  check('admin 菜单含「审计日志」与「订单中心」', menusAdmin.status === 200 && namesAdmin.includes('审计日志') && namesAdmin.includes('订单中心'),
+  // 2026-10-14（docs/99「死链菜单」修复）：历史断言里的「订单中心」(/order) 已整支移除 —— 它指向不存在的
+  // 视图与后端 /api/v1/orders，真实部署必然死链；业务菜单示范改由「DemoItem管理」承担。
+  // 此处按「种子语义变更后同步断言」的规则改为断言现存的高权限菜单，设计意图（admin 可见全部管理菜单）不变。
+  check('admin 菜单含「审计日志」与「队列管理」', menusAdmin.status === 200 && namesAdmin.includes('审计日志') && namesAdmin.includes('队列管理'),
     `菜单根数=${menusAdmin.body.data?.length}`);
 
   // ---- TC-AUTH-013：dataScope=self 只返回本人 ----
@@ -119,7 +125,7 @@ async function main() {
   // ---- TC-AUTH-010：菜单按权限过滤 ----
   const menusAlice = await call('/api/v1/auth/menus', { token: alice.accessToken });
   const namesAlice = JSON.stringify(menusAlice.body.data ?? []);
-  check('alice 菜单不含未授权项（审计日志/订单中心）', menusAlice.status === 200 && !namesAlice.includes('审计日志') && !namesAlice.includes('订单中心') && namesAlice.includes('用户管理'),
+  check('alice 菜单不含未授权项（审计日志/队列管理），且含「用户管理」', menusAlice.status === 200 && !namesAlice.includes('审计日志') && !namesAlice.includes('队列管理') && namesAlice.includes('用户管理'),
     `菜单根数=${menusAlice.body.data?.length}`);
 
   const auditDenied = await call('/api/v1/audit-logs', { token: alice.accessToken });

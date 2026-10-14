@@ -270,6 +270,8 @@ gantt
 
 **Backlog**：~~M8 进行中~~ → M8 已完成（2026-10-14）；~~M3 遗留项④（refresh 过期记录定时清理）~~——**已完成（2026-10-13）**：example-api `auth.refresh-cleanup` 定时任务（`@Cron('0 3 * * *')` 加分布式锁，过期 30 天清理，`/api/v1/auth/refresh-cleanup` 快照端点），冒烟阶段 A 覆盖注册与手动触发。当前剩余可跟进项：M8 遗留 L-01（真实 K8s 集群部署冒烟）、L-02（FR-08 配置中心占位与热更新审计）、L-04（Redis Cluster 实跑）。
 
+> **v0.3.0 已发布（2026-10-14，「真机可用性收口」）**：在 M1–M8 全交付的基础上，把管理后台从「文档标注已交付」拉到「真机可用的同源状态」——修复前端 15 项缺陷、路由与登录态生命周期 4 项、工作台权限取数（BUG-16~22），纳入 C-06 契约收口与 1Panel/裸机真机部署路径。本机门禁全量实跑：单测 **782**、端到端冒烟 **203** + mock **65**、静态门禁 4 项（文件头 376 / 裸 SQL 248 / 接口对撞 / Helm 63）。判定与遗留见 **[v0.3.0 发布验收报告](./90-release-v0.3.0.md)**（R3-01 租户管理页、R3-02 异步导出、R3-03 整页 403、R3-04 菜单选择器、R3-07 死信分页、R3-08 沿用 L-01/L-02/L-04/L-05）。
+
 **M7 验收待补（TC-JOB-008）——已完成（2026-10-13）**：真实 Redis 失速恢复演练通过并固化进 `smoke-queue.mjs` 阶段 F（31/31），恢复窗口 ≈ lockDuration 30s + `MQ_STALLED_MS` 检测间隔；演练暴露并修复「register 未建消费器」「ensureWorker 自递归死锁与重复建」两个框架缺陷，记录见 `docs/94-queue-stall-drill.md`。memory 驱动不承诺跨进程持久化。
 
 > **v0.1.0 遗留项（不阻塞发布）**：① ~~`@nestjs/core <=11.1.17` 与 `file-type` 的 3 项 moderate 依赖漏洞需随 NestJS 10 → 11 升级解决~~ → **✅ 已闭环（2026-10-13）**：全仓升 NestJS **11.2.7**（Express 5.2.1 / `@types/express` 5 / file-type 21.3.4 / multer 2.4.0），`pnpm audit --prod` **零漏洞**；② ~~dev 工具链大版本升级（vitest 2→3、tinypool 1→2、happy-dom 15→20、vite 5→6）~~ → **✅ 已闭环（2026-10-13）**：vitest **4.1.11** / vite **8.3.4**（rolldown + oxc）/ happy-dom **21.0.1** / plugin-vue 6 / vue-tsc 3 / unplugin-vue-components 32，`tinypool` 随 vitest 4 整条链路消失；**全仓 `pnpm audit`（含 dev）零漏洞**，全套门禁复跑通过（框架包 366/366、example-api 50/50、admin-web 29+40）；③ ~~`braces` 暂无可用补丁版本~~ → **✅ 已消除（2026-10-13）**：`braces` 随 vite 8 不再进入依赖树，无需补丁。

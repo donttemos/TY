@@ -1,6 +1,6 @@
 {
   "name": "example-api",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "示例应用：每个里程碑的验证载体（M1 验证配置/日志/错误码/健康检查/优雅停机；M2 验证 Repository/迁移/切换）",
   "type": "module",

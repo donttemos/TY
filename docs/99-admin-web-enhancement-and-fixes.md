@@ -1,6 +1,6 @@
 # 管理后台前端功能补充与缺陷修复方案
 
-> 版本 v0.4（待发布）｜ 状态：**已实施 + 已在真机（1Panel / `106.55.32.251`）验证** ｜ 关联：[PRD-005 管理后台模板](./prd/prd-005-admin-template.md) ｜ [原型与 UI 规范](./25-ui-prototype.md) ｜ [API 文档](./40-api-spec.md) ｜ [C-06 前端契约](./contracts/api-web.ts) ｜ [C-06 契约定稿记录](../CHANGELOG.md) ｜ 更新：2026-10-14 ｜ 负责人：donttemo
+> 版本 v0.4.2 ｜ 状态：**已实施 + 已在真机（1Panel / `106.55.32.251`）验证 + 已随 [v0.3.0](./90-release-v0.3.0.md) 发布（2026-10-14）** ｜ 关联：[PRD-005 管理后台模板](./prd/prd-005-admin-template.md) ｜ [原型与 UI 规范](./25-ui-prototype.md) ｜ [API 文档](./40-api-spec.md) ｜ [C-06 前端契约](./contracts/api-web.ts) ｜ [C-06 契约定稿记录](../CHANGELOG.md) ｜ 更新：2026-10-14 ｜ 负责人：donttemo
 >
 > 定位：本轮把管理后台前端从「文档标注已交付」拉到「**真机可用的同源状态**」。所有缺陷均在代码层复核过根因
 > （后端权限码常量、菜单种子、`import.meta.glob` 解析规则、mock 与真机差异、路由注入与登录态生命周期），

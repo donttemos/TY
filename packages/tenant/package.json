@@ -1,6 +1,6 @@
 {
   "name": "@fw/tenant",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "多租户：三级回退租户解析（子域名/请求头/JWT claim，顺序与开关可配）、租户信息服务、fail-closed 上下文注入（PRD-008 FR-01）",
   "type": "module",
   "main": "./dist/index.js",

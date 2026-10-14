@@ -1,6 +1,6 @@
 {
   "name": "@fw/cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "脚手架与工程命令：fw new / dev / build / check",
   "type": "module",
   "bin": {

@@ -2,7 +2,7 @@
 
 > 一套「框架之上的框架」：用它在 1 天内搭出任意业务系统的可运行骨架，小到内部工具站、大到多租户 SaaS，规模升级时业务代码零重写。
 >
-> **当前状态：v0.2.0 已发布（2026-10-14）** —— v0.1.0 交付 M1 核心骨架 + M2 数据库抽象层 + M3 鉴权与权限 + M4 缓存层；本次 **v0.2.0 一次性纳入 M5 管理后台前端（PRD-005）、M6 CRUD 代码生成器（PRD-006）、M7 队列与定时任务（PRD-007）、M8 多租户与规模化演进（PRD-008）**，**M1–M8 全部交付**：`@fw/tenant` 租户三级回退与 fail-closed / `@fw/db` dedicated 独立库路由 / `@fw/auth` 组织架构与数据权限四档 / `@fw/transport` 双驱动传输层 / `@fw/telemetry` OpenTelemetry 链路追踪 / Helm Chart 与部署模板 / 三大关键演练与终验（演练 25/25、Chart 清单校验 63/63、压测基线已建立），M8 判定「条件通过」。发布验收记录见 [v0.2.0 发布验收报告](./docs/90-release-v0.2.0.md)，M8 记录见 [M8 三大关键演练与终验](./docs/96-m8-drills.md)。
+> **当前状态：v0.3.0 已发布（2026-10-14）** —— v0.1.0 交付 M1–M4，v0.2.0 一次性纳入 **M5 管理后台前端（PRD-005）、M6 CRUD 代码生成器（PRD-006）、M7 队列与定时任务（PRD-007）、M8 多租户与规模化演进（PRD-008）**，**M1–M8 全部交付**；本次 **v0.3.0 做「真机可用性收口」**：修复管理后台 15 项前端缺陷（操作列整列消失、字典按钮不渲染、生成器页面菜单不可达、个人中心保存必失败、越权按钮可点、死链菜单等）、路由与登录态生命周期 4 项（「点进功能页侧边栏消失」、403 判定死代码、换号后仍是上一账号菜单、mock 与后端漂移）与工作台对低权限账号刷 403 并显示误导性 `0`，并纳入 **C-06 契约收口**（补齐 25 个后端未注册端点 + 前后端接口对撞门禁）、分派入参写库前校验、以及 **1Panel / 裸机真机部署路径**（PostgreSQL schema 变体、HTTPS 上线）。真机验收：数据面 24/24 + 27/27、真实 Chromium 端到端 **26/26 且全程 0 条 4xx**。发布验收记录见 [v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md)。
 >
 > **仓库与流水线**：[`donttemos/TY`](https://github.com/donttemos/TY)（private）。CI（GitHub Actions）在 v0.2.0 推送后**首次真实运行**；经修复 6 处「只在干净环境复现」的流水线/环境适配缺陷后，**四大作业全绿**（基础门禁 24 步 + sqlite/postgres/mysql 三库集成矩阵），见 [发布报告 §5.1 / §8](./docs/90-release-v0.2.0.md)。
 
@@ -81,6 +81,8 @@ framework/
     80-project-plan.md        # 项目计划与任务板
     85-parallel-workstreams.md # 并行开发工作线划分（契约 / 所有权 / 集成点）
     90-release-v0.1.0.md      # v0.1.0 发布验收报告
+    90-release-v0.2.0.md      # v0.2.0 发布验收报告（M5–M8，M1–M8 全部交付）
+    90-release-v0.3.0.md      # v0.3.0 发布验收报告（真机可用性收口）
     95-doc-audit.md           # 文档一致性核对报告
     99-admin-web-enhancement-and-fixes.md # 管理后台前端功能补充与缺陷修复方案
     adr/                      # 架构决策记录 0001–0010
@@ -134,7 +136,7 @@ fw gen crud order
 | [云服务器裸机部署手册](./docs/61-bare-metal-deploy.md) | 不用容器的服务器部署：systemd 进程托管、release 软链发版与秒级回滚、nginx 静态托管与 HTTPS、数据库档位与 provider 约束、备份监控与排障速查 |
 | [1Panel 真机部署手册](./docs/62-1panel-real-deploy.md) | 已有 1Panel 面板的服务器落地：OpenResty host 网络反代、容器化数据库的宿主端口接入、PostgreSQL schema 变体与迁移重建、2C2G 内存约束（V8 堆 + cgroup MemoryMax）、站点目录与 HTTPS |
 | [1Panel 真机部署验证报告](./docs/63-1panel-real-deploy-verification.md) | 上述手册在腾讯云 2C2G4M 上的**完整实测记录**：逐项耗时与内存数据、三条约束的实测结论、端到端冒烟结果、**5 个只有真机才会暴露的缺陷**（队列权限缺失、dedicated 租户连接串、pnpm bin 时序、迁移计数、镜像配置）与结清后的遗留清单 |
-| [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.2.0 已发布，M1–M8 全部交付） |
+| [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.3.0 已发布：真机可用性收口） |
 | [ADR 架构决策记录](./docs/adr/README.md) | 12 条决策：NestJS / Prisma（已定稿）/ monorepo / 缓存 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 |
 | [编码 Git PR 规范](./docs/70-engineering-standards.md) | 编码规范、**中文注释规范（文件头含作者与日期）**、反模式清单、分支与提交约定、PR 与评审规则 |
 | [项目计划与任务板](./docs/80-project-plan.md) | 15 周甘特、M1–M8 WBS（40+ 任务）、任务板列与标签、当前快照 |
@@ -144,6 +146,7 @@ fw gen crud order
 | [贡献指南](./CONTRIBUTING.md) | 三步上手与硬性规则入口 |
 | [PRD 索引](./docs/prd/README.md) | 迭代清单与 PRD 模板约定 |
 | PRD-001 ~ PRD-008 | 见 `docs/prd/`，每个功能 / 迭代一份 |
+| [v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md) | 「真机可用性收口」发布门禁逐条判定、升级影响（种子语义与标签键变更）、验证证据清单（单测 782 + 冒烟 203 + 静态 4 项 + 真机）、遗留问题与发布结论（通过） |
 | [v0.2.0 发布验收报告](./docs/90-release-v0.2.0.md) | M5–M8 发布门禁逐条判定、验证证据清单、遗留问题与发布结论（条件通过） |
 | [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md) | M1–M4 发布门禁逐条判定、验证证据清单、遗留问题与发布结论（条件通过） |
 | [测试数据库环境](./docs/92-test-databases.md) | 远程共用测试实例（MySQL / PostgreSQL / Redis）连接登记与测试切换方式（含明文凭证，仅测试用） |
