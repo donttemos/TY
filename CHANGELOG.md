@@ -14,6 +14,23 @@
 
 ## [Unreleased]
 
+### Fixed（真机部署验证：2C2G 云服务器 + 1Panel + PostgreSQL，2026-10-14）
+
+> 在腾讯云 2C2G4M（Ubuntu 22.04 + 1Panel + PostgreSQL 18.6 + Redis 8.10）上完整跑通部署与端到端冒烟，
+> 期间暴露 5 个**本地单测与 CI 均为绿、只有走完整真机流程才会出现**的缺陷。实测数据与复现要点见
+> [1Panel 真机部署验证报告](./docs/63-1panel-real-deploy-verification.md)。
+
+- **队列管理功能面对任何角色都不可达（功能级）**：M7 的 `/api/v1/admin/queue/*` 共 11 个端点由 `system:queue:list` / `system:queue:manage` 守卫，但 `example-api` 的种子从未创建这两个权限点，故连持有全部已建权限的 `admin` 也返回 `3002 无操作权限`。现随 `FRAMEWORK_PERMISSIONS` 建出并自动授予 admin（权限点 26 → 28）。真机复验：不施加任何手工 SQL，`list` 全部端点与 cron 手动触发均 `code:0`，`alice` 仍被正确拒绝。
+- **`dedicated` 独立库租户的连接串写死为 SQLite 路径**：`seed.ts` 的 `DEDICATED_DB_URL` 固定为 `file:./tenant-dedicated.db`，在 PostgreSQL/MySQL 部署下会写入一个 `provider` 与连接串不匹配、**永远连不上**的密文（Prisma 的 provider 在 `generate` 时已固定，故障只会在真正访问该租户时爆发）。现优先取 `SEED_DEDICATED_DB_URL`，未配置时仅当 `DB_DRIVER` 为 `sqlite`（或未设置）才回退本地文件，其他驱动留 `NULL`。
+- **`fw` CLI 的 bin 链接缺失，导致迁移与种子不可用**：pnpm 在 install 阶段创建 workspace bin，而那一刻 `packages/cli/dist/index.js` 尚未构建 → `.bin/fw` 被静默跳过（仅一条 WARN），且此后 `pnpm install` 与 `pnpm install --force` 都判 `Already up to date` **不再补建**，`pnpm run db:migrate` 直接报 `fw: not found`（先有鸡还是先有蛋的时序问题）。发版脚本现于构建后删掉应用自身 `node_modules` 重装一次（工作区内该目录只是一组软链，重建约 1.6 s）并断言 `.bin/fw` 可执行。
+- **`fw db:migrate` 的迁移数量取自错误目录（误导排障）**：`listMigrations()` 固定读 `prisma/migrations`、忽略 `--schema`，故 `--schema=prisma/pg/schema.prisma` 时打印「共 4 个迁移」而实际只应用 1 个（Prisma 侧行为本就正确，错的是数字）。现由 schema 路径推导迁移目录，`db:rollback` 的目标目录与临时 SQL 路径同步修正。
+- **`server-bootstrap.sh` 未配置依赖镜像**：实测该机器上 `registry.npmjs.org` 约 0.86 MB/s（单包元数据 18 s）、`registry.npmmirror.com` 约 18.7 MB/s，**相差约 20 倍**——不换源时 `pnpm install` 会从分钟级拖成小时级。现写入 Node 前缀 / `root` / `fw` 三处 `npmrc`，并给 corepack 指定 `COREPACK_NPM_REGISTRY`；同时在脚本注释中注明**不要依赖镜像的 `latest-v22.x` 索引**（实测陈旧，仍指向 `22.0.0`，而 pnpm 11 要求 Node ≥ 22.13）。
+
+### Added（真机部署验证报告，2026-10-14）
+
+- **`docs/63-1panel-real-deploy-verification.md`**：真机实测记录（**非估算、非设计推演**）。含：被测环境逐项勘察结果；`pnpm install`（415 包 / 1m12s，swap 峰值 197 MB）、`prisma generate`（150 ms，产物 `libquery_engine-debian-openssl-3.0.x.so.node`）、前后端构建（1.74 s）、单 release 体积（612 MB）等实测数字；`/health` `/ready` `systemctl` 记账与各容器内存占用；**回滚实测 6.07 s 且数据完好**；三条容器跨界约束的实测结论（OpenResty `host` 网络、`/opt/fw` 不可见、数据库容器回环可达）与手册未覆盖的三处环境适配（**1Panel Redis 的 `requirepass`**、`.env` 权限对 `fw` 身份读取的影响、**`docker exec -i` 会吞掉远程脚本 stdin 导致静默截断**）；端到端冒烟结果（含真实 Redis 缓存链路、真实 BullMQ 队列链路、多租户 fail-closed）；以及结清后**仍然未验证**的诚实清单（HTTPS 签发、跨进程 worker、Redis Cluster、面板 UI 建档、发版脚本端到端自动执行）。
+- **`docs/62-1panel-real-deploy.md` §12 / §4.1**：原「待真机确认」7 项逐条补上实测结论（6 项已结清），并补充手册未覆盖的三处环境适配与更新后的遗留清单。
+
 ### Added（云服务器裸机部署资产，2026-10-14）
 
 > 补齐「不用容器」的部署路径：容器档位（单机 Docker / compose / Helm）此前只有编排模板，没有进程托管与宿主侧发版能力。

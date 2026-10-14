@@ -141,7 +141,7 @@ sudo bash /tmp/fw-src/deploy/scripts/server-bootstrap.sh
    - **宿主端口**（1Panel 安装时设定的端口映射；与 §2 勘察结果应一致）
    - 连接地址在面板里可能显示为内网 IP，**这里一律改用 `127.0.0.1`**
 
-若 1Panel 安装 PostgreSQL 时未放行宿主回环访问（应用连接被拒），需在 1Panel 的 PostgreSQL 配置中确认 `postgresql.conf` 的 `listen_addresses = '*'` 且 `pg_hba.conf` 含 `host all all all md5`。**此项待真机确认**（多数 1Panel 默认安装已满足）。
+若 1Panel 安装 PostgreSQL 时未放行宿主回环访问（应用连接被拒），需在 1Panel 的 PostgreSQL 配置中确认 `postgresql.conf` 的 `listen_addresses = '*'` 且 `pg_hba.conf` 含 `host all all all md5`。**此项已于 2026-10-14 在真机上确认：默认安装即含 `host all all 127.0.0.1/32 trust`，宿主回环连库无需密码，无需改动**（见 [验证报告](./63-1panel-real-deploy-verification.md) §1.1）。
 
 ### 4.2 schema 一致性校验（每次改模型后都该跑）
 
@@ -426,17 +426,25 @@ journalctl -u fw-api -o cat --since today | jq -c 'select(.level=="error")'
 
 ## 12. 未验证项与已知限制
 
-本手册的脚本、配置与命令**已通过本地静态校验**（`bash -n` 全部通过、迁移 SQL 方言逐项核对、两份 schema 模型段 md5 一致），但以下项**依赖真实服务器环境，尚未在真机上执行**，首次部署时请重点观察：
+> **2026-10-14 更新**：本手册已在腾讯云 2C2G4M（Ubuntu 22.04 + 1Panel + PostgreSQL 18.6 + Redis 8.10）上**完整跑通**，原列 7 项已结清 6 项，并额外修掉 5 个只有真机才会暴露的缺陷。逐条实测数据见 [1Panel 真机部署验证报告](./63-1panel-real-deploy-verification.md)。下表保留原格式，新增「实测结论」列。
 
-| # | 未验证项 | 风险 | 验证方式 |
+| # | 未验证项 | 风险 | 实测结论 |
 |---|---|---|---|
-| 1 | 1Panel 的 OpenResty 实际网络模式 | 若非 host 网络，所有 `127.0.0.1:3000` 需改为宿主机内网 IP | §2 勘察脚本会直接判定 |
-| 2 | 1Panel 站点目录的真实路径 | `WEB_SYNC_DIR` 填错会导致前端 404 | 创建站点后在面板里确认实际路径 |
-| 3 | PG 容器是否接受宿主回环连接 | `pg_hba.conf` 未放行则应用连不上 | §4.1 的确认步骤 |
-| 4 | 2C2G 上的构建峰值与总耗时 | 可能仍需 swap 且耗时较长（4M 带宽下 `pnpm install` 是主要瓶颈） | 首次发版时观察 `free -h` 与耗时 |
-| 5 | 1Panel 是否有站点级配置覆写行为 | 面板升级/重存配置可能覆盖手工粘贴的 location | 发版或改站点设置后回看配置 |
-| 6 | Node 二进制在目标发行版上的兼容性 | glibc 版本过低可能无法启动 | `node -v` 能输出版本即可 |
-| 7 | 应用实际内存占用与 `MemoryMax=1024M` 的匹配度 | 若业务量上涨可能触顶被杀 | `systemctl show fw-api -p MemoryCurrent` 持续观察 |
+| 1 | 1Panel 的 OpenResty 实际网络模式 | 若非 host 网络，所有 `127.0.0.1:3000` 需改为宿主机内网 IP | ✅ **实测为 `host`**，`127.0.0.1:3000` 直接可用 |
+| 2 | 1Panel 站点目录的真实路径 | `WEB_SYNC_DIR` 填错会导致前端 404 | ✅ 前端根 `/opt/1panel/www/<目录>`（容器内 `/www/<目录>`）；站点配置 `/opt/1panel/www/conf.d/` |
+| 3 | PG 容器是否接受宿主回环连接 | `pg_hba.conf` 未放行则应用连不上 | ✅ `host all all 127.0.0.1/32 trust`，**无需改配置** |
+| 4 | 2C2G 上的构建峰值与总耗时 | 可能仍需 swap 且耗时较长 | ✅ `pnpm install` 415 包 / 1m12s，swap 峰值 197 MB；加 2G swap 后构建全程无 OOM |
+| 5 | 1Panel 是否有站点级配置覆写行为 | 面板升级/重存配置可能覆盖手工粘贴的 location | ⚠️ **仍未验证**（本次为手工写 `conf.d`，未经面板 UI 重存） |
+| 6 | Node 二进制在目标发行版上的兼容性 | glibc 版本过低可能无法启动 | ✅ v22.22.2 正常启动运行 |
+| 7 | 应用实际内存占用与 `MemoryMax=1024M` 的匹配度 | 若业务量上涨可能触顶被杀 | ✅ RSS≈130 MB / cgroup 72 MB，余量充足（业务量上涨仍需观测） |
+
+**手册未覆盖、真机踩到的三处环境适配**（详见验证报告 §3.6）：
+
+- **1Panel 的 Redis 设了 `requirepass`**：连接串必须带密码（`redis://:<密码>@127.0.0.1:6379/<db>`，密码在 `/opt/1panel/apps/redis/redis/.env`），否则 `NOAUTH` → 缓存降级、`/ready` 503。
+- **`.env` 以 `fw` 身份读取会被拒**：systemd 以 root 读 `EnvironmentFile`，`600 root:root` 是正确姿势；只有手工以 `fw` 跑迁移/种子时才需临时 `640 root:fw`。
+- **`docker exec -i` 会吞掉远程脚本的 stdin**：以 `ssh ... 'bash -s' < script` 执行时，脚本内 `docker exec -i` 会读走后续脚本文本导致静默截断；一律加 `</dev/null`。
+
+**仍然未验证**：HTTPS 证书签发（需已解析的域名）、`fw-worker@.service` 跨进程 worker（本次为单进程 in-process 模式）、Redis Cluster、1Panel 面板 UI 建档流程（本站点为手工写配置）、`bare-metal-deploy.sh` 的端到端自动执行（该机 `github.com` 不可达）。
 
 另外两条**已知的仓库级遗留**（与本次部署无关，但会影响判断）：
 
