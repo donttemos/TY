@@ -398,6 +398,17 @@ const MOCK_USER_SORT_FIELDS: Record<string, string> = {
 const MOCK_SORT_MAX_ITEMS = 5;
 
 /**
+ * 审计日志排序白名单（BUG-15，与 example-api 的 AUDIT_SORT_FIELDS 逐项一致）
+ */
+const MOCK_AUDIT_SORT_FIELDS: Record<string, string> = {
+  id: 'id',
+  module: 'module',
+  action: 'action',
+  target_type: 'targetType',
+  created_at: 'createdAt',
+};
+
+/**
  * 解析 sort 查询参数（BUG-15）——与后端 `parseSortQuery` 同语义：
  * 未知字段 / 非法方向 / 超出上限一律返回 `error`（由调用方回 400/1001），**不静默忽略**。
  * 空串或未传返回空数组（调用方回落默认排序）。
@@ -1225,7 +1236,12 @@ export async function handleMockRequest(
     if (from) items = items.filter((a) => a.createdAt >= from);
     const to = query.get('to');
     if (to) items = items.filter((a) => a.createdAt <= to);
-    items.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    const parsedSort = parseMockSort(query.get('sort'), MOCK_AUDIT_SORT_FIELDS);
+    if ('error' in parsedSort) {
+      send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
+      return { handled: true };
+    }
+    items = applyMockSort(items, parsedSort.items, 'createdAt', 'desc');
     send(res, CODE.OK, 'ok', paginate(items, page, pageSize), traceId);
     return { handled: true };
   }

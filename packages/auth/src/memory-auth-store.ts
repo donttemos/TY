@@ -297,8 +297,19 @@ export class MemoryAuthStore implements AuthStore {
     if (query.targetId) rows = rows.filter((r) => r.targetId === query.targetId);
     if (query.from) rows = rows.filter((r) => r.createdAt >= (query.from as Date));
     if (query.to) rows = rows.filter((r) => r.createdAt <= (query.to as Date));
-    // 最新在前（与数据字典索引 audit(user_id, created_at) 的查询期望一致）
-    rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    // 排序（BUG-15）：字段白名单已在 HTTP 层校验，这里只负责方向；
+    // 未传时回落「最新在前」（与数据字典索引 audit(user_id, created_at) 的查询期望一致），
+    // 两种情况都追加主键 tie-breaker，保证 skip/take 分页稳定（TC-ORM-002）
+    const sortEntries = Object.entries(query.sort ?? { createdAt: 'desc' }) as Array<[string, 'asc' | 'desc']>;
+    rows.sort((a, b) => {
+      const left = a as unknown as Record<string, unknown>;
+      const right = b as unknown as Record<string, unknown>;
+      for (const [field, direction] of sortEntries) {
+        const diff = compareValues(left[field], right[field]);
+        if (diff !== 0) return direction === 'desc' ? -diff : diff;
+      }
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
     const total = rows.length;
     const items = rows.slice((page - 1) * pageSize, page * pageSize);
     return { items, total, page, pageSize, hasMore: page * pageSize < total };

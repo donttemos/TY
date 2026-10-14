@@ -20,6 +20,8 @@
 
 - **列表排序参数前端接线（BUG-15 前端部分）**：`CrudTable` 原先发出的是列 `prop` 原值（camelCase，如 `createdAt:asc`），与 api-spec §1.5 的 snake_case 约定不符——后端白名单会**拒绝**它，即「后端做完仍不可用」。现抽出可测纯函数 `buildSortParam()`（`toSnakeCase` + 列 `sortField` 显式覆盖），`CrudTable` 统一走它构造 `sort`；列类型新增 `sortField`（用于「展示字段 ≠ 排序字段」）。`users` 页为账号/昵称/状态/最近登录/创建时间 5 列开启 `sortable`（此前无任何页面启用，该路径从未被执行过）。**mock 同步真实后端语义**（同一白名单、未知字段/非法方向 `400/1001`、默认 `created_at desc` + `id asc` 次级键）——mock 放宽校验会产生「dev 全绿、真机 400」的假绿。验证：`vue-tsc` 0 错误、前端单测 **69** 通过（新增 9 条）、`smoke-mock` **68/68**（新增 3 条排序断言）。
 
+- **列表排序覆盖扩展至审计日志**：`GET /api/v1/audit-logs` 接入同一 `parseSortQuery`（白名单 `id` / `module` / `action` / `target_type` / `created_at`），`AuditQuery` 新增 `sort`，Prisma 与内存两套 store 均消费并追加 `id asc` 次级键（原实现只按 `createdAt desc`，分页在相同时间戳下不稳定）；前端审计日志页为模块/动作/对象/时间 4 列开启 `sortable`，mock 同步同语义。验证：`smoke-admin` 新增 3 条排序断言、`smoke-mock` **71/71**（含本条目新增的 3 条）、`@fw/auth` 111 通过、`@fw/db` 83 通过、`tsc` / `vue-tsc` 0 错误。
+
 ## [0.3.0] - 2026-10-14
 
 > 发布说明与验收证据见 **[v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md)**。

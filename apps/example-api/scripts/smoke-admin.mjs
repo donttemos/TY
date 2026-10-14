@@ -10,6 +10,7 @@
  *   前置：已执行 fw db:migrate + fw db:seed，且服务监听 127.0.0.1:3000。
  * @author donttemo
  * @created 2026-10-14
+ * @modified 2026-10-14 donttemo BUG-15：新增 /audit-logs 排序断言（升序生效 + 未知字段 / 非法方向 → 400/1001）
  * @module example-api
  */
 
@@ -477,6 +478,24 @@ async function main() {
   const firstAudit = (auditList.body.data?.items ?? [])[0];
   check('GET /audit-logs 分页列表（取详情用的样本）',
     isOk(auditList.status) && !!firstAudit?.id, `http=${auditList.status}`);
+
+  // 排序（BUG-15，api-spec §1.5）：白名单外字段 / 非法方向一律 400/1001
+  const auditSorted = await call('/api/v1/audit-logs?page=1&pageSize=10&sort=created_at:asc', { token });
+  const auditTimes = (auditSorted.body.data?.items ?? []).map((a) => a.createdAt);
+  const auditAscending = auditTimes.every((t, index) => index === 0 || auditTimes[index - 1] <= t);
+  check('GET /audit-logs sort=created_at:asc 生效（升序，长度 ≥ 2）',
+    isOk(auditSorted.status) && auditTimes.length >= 2 && auditAscending,
+    `times=${JSON.stringify(auditTimes)}`);
+
+  const auditBadField = await call('/api/v1/audit-logs?sort=password:desc', { token });
+  check('GET /audit-logs sort 未知字段 → 400/1001',
+    auditBadField.status === 400 && auditBadField.body.code === 1001,
+    `http=${auditBadField.status} code=${auditBadField.body.code}`);
+
+  const auditBadDir = await call('/api/v1/audit-logs?sort=module:up', { token });
+  check('GET /audit-logs sort 非法方向 → 400/1001',
+    auditBadDir.status === 400 && auditBadDir.body.code === 1001,
+    `http=${auditBadDir.status} code=${auditBadDir.body.code}`);
 
   if (firstAudit) {
     const auditDetail = await call(`/api/v1/audit-logs/${firstAudit.id}`, { token });

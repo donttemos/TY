@@ -452,10 +452,19 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
       };
     }
 
+    // 排序（BUG-15）：query.sort 已由 HTTP 层按字段白名单解析（未知字段在到达这里前即 400）；
+    // 未传时回落 createdAt desc（与索引 audit(user_id, created_at) 的查询期望一致）。
+    // 无论哪种情形都以 id asc 收尾，保证分页在同一排序键下稳定（TC-ORM-002）。
+    const sortEntries = Object.entries(query.sort ?? {});
+    const orderBy: Array<Record<string, string>> = sortEntries.length
+      ? sortEntries.map(([field, direction]) => ({ [field]: direction }))
+      : [{ createdAt: 'desc' }];
+    if (!sortEntries.some(([field]) => field === 'id')) orderBy.push({ id: 'asc' });
+
     const [rows, total] = await Promise.all([
       this.delegate('auditLog').findMany({
         where,
-        orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+        orderBy,
         skip: (page - 1) * pageSize,
         take: pageSize,
       }) as Promise<AuditLogRow[]>,

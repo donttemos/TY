@@ -6,12 +6,14 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo M8 T-M8-04：self 收敛之外支持 org / org_below（部门成员展开）
+ * @modified 2026-10-14 donttemo BUG-15：GET /audit-logs 支持 `sort=<snake_case 字段>:<asc|desc>`（api-spec §1.5），
+ *   经 @fw/db 的 parseSortQuery 按 AUDIT_SORT_FIELDS 白名单解析后透传存储层；未知字段 / 非法方向 / 超上限一律 400
  * @module example-api/auth
  */
 
 import { Controller, Get, Inject, Param, Query } from '@nestjs/common';
 import { BizError, ErrorCode } from '@fw/core';
-import type { PageResult } from '@fw/db';
+import { parseSortQuery, type PageResult } from '@fw/db';
 import {
   AuthService,
   CurrentUser,
@@ -26,6 +28,20 @@ import {
 } from '@fw/auth';
 import { ADMIN_STORE } from '../admin/admin-store.js';
 import type { AdminStore } from '../admin/admin-store.js';
+
+/**
+ * 审计日志可排序字段白名单（api-spec §1.5，BUG-15）
+ *
+ * 键为 HTTP 参数名（snake_case），值为实体字段名。白名单外字段一律 400 ——
+ * 既避免把任意 query 参数拼进 orderBy，也避免通过排序推断未暴露字段。
+ */
+const AUDIT_SORT_FIELDS = {
+  id: 'id',
+  module: 'module',
+  action: 'action',
+  target_type: 'targetType',
+  created_at: 'createdAt',
+} as const;
 
 /**
  * 审计日志控制器：/api/v1/audit-logs
@@ -52,8 +68,11 @@ export class AuditController {
     @Query('target_id') targetId?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('sort') sort?: string,
   ): Promise<PageResult<AuditLogRecord>> {
     const scope = await resolveDataScopeFilter(user, this.org);
+    // 排序解析放在数据范围解析之后、查询之前：非法 sort（未知字段 / 非法方向 / 超上限）直接 400（BUG-15）
+    const parsedSort = parseSortQuery<AuditLogRecord>(sort, AUDIT_SORT_FIELDS);
     // 数据范围 → 归属人约束：self 只允许查询本人记录（忽略传入的 user_id）；
     // org / org_below 展开为部门成员集合（与传入 user_id 取交集）；all 不约束
     let scopeUserIds: string[] | undefined;
@@ -71,6 +90,7 @@ export class AuditController {
       targetId,
       from: from ? new Date(from) : undefined,
       to: to ? new Date(to) : undefined,
+      sort: parsedSort,
     });
   }
 

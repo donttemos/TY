@@ -22,12 +22,12 @@ import type { AuditLogRecord, UserListItem } from '@/api/types';
 
 const columns: CrudColumn[] = [
   { prop: 'userId', label: '操作人', width: 120, slot: 'user' },
-  { prop: 'module', label: '模块', width: 100, align: 'center' },
-  { prop: 'action', label: '动作', width: 100, align: 'center', slot: 'action' },
-  { prop: 'targetType', label: '对象', width: 140, slot: 'target' },
+  { prop: 'module', label: '模块', width: 100, align: 'center', sortable: true },
+  { prop: 'action', label: '动作', width: 100, align: 'center', slot: 'action', sortable: true },
+  { prop: 'targetType', label: '对象', width: 140, slot: 'target', sortable: true },
   { prop: 'ip', label: 'IP', width: 130 },
   { prop: 'traceId', label: 'traceId', minWidth: 160 },
-  { prop: 'createdAt', label: '时间', width: 180, slot: 'createdAt' },
+  { prop: 'createdAt', label: '时间', width: 180, slot: 'createdAt', sortable: true },
 ];
 
 const searchForm: SearchField[] = [

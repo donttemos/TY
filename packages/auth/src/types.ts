@@ -209,6 +209,12 @@ export interface AuditQuery extends PageParams {
   from?: Date;
   /** 结束时间（含） */
   to?: Date;
+  /**
+   * 排序（BUG-15）：实体字段名 → 方向。由 HTTP 层 `parseSortQuery` 按白名单解析后注入
+   * （未知字段在前置校验即 400，不会到达存储层）。未传时按 `createdAt desc, id asc` 排序。
+   * 存储层须始终追加主键 tie-breaker，保证分页结果稳定（TC-ORM-002）。
+   */
+  sort?: Sort<AuditLogRecord>;
 }
 
 /** 用户列表查询入参 */

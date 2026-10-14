@@ -307,6 +307,19 @@ async function main() {
     const auditList = audit.body?.data ?? [];
     check('审计日志可按模块查询', audit.body?.code === 0 && Array.isArray(auditList?.items), `${auditList?.total ?? 0} 条 user 模块`);
     check('审计记录含变更前后值', auditList.items?.some((a) => a.beforeValue !== null || a.afterValue !== null));
+    // 排序（BUG-15）：mock 必须与后端同语义，白名单外字段 / 非法方向一律 400/1001
+    const auditSorted = await api('GET', '/audit-logs?page=1&pageSize=10&sort=created_at:asc', { token: newAccess });
+    const auditTimes = (auditSorted.body?.data?.items ?? []).map((a) => a.createdAt);
+    const auditAscending = auditTimes.every((t, index) => index === 0 || auditTimes[index - 1] <= t);
+    check('审计日志 sort=created_at:asc 生效（升序，长度 ≥ 2）',
+      auditSorted.body?.code === 0 && auditTimes.length >= 2 && auditAscending,
+      `times=${JSON.stringify(auditTimes)}`);
+    const auditBadField = await api('GET', '/audit-logs?sort=password:desc', { token: newAccess });
+    check('审计日志 sort 未知字段 → 400/1001', auditBadField.status === 400 && auditBadField.body?.code === 1001,
+      `status=${auditBadField.status} code=${auditBadField.body?.code}`);
+    const auditBadDir = await api('GET', '/audit-logs?sort=module:up', { token: newAccess });
+    check('审计日志 sort 非法方向 → 400/1001', auditBadDir.status === 400 && auditBadDir.body?.code === 1001,
+      `status=${auditBadDir.status} code=${auditBadDir.body?.code}`);
 
     const orders = await api('GET', '/orders?page=1&pageSize=5', { token: newAccess });
     check('订单演示域可查', orders.body?.code === 0 && Array.isArray(orders.body?.data?.items), `total=${orders.body?.data?.total}`);
