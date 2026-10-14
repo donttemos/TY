@@ -1,0 +1,102 @@
+[
+  {
+    "id": "8c8bca0c-ff0b-409e-9f2a-680a330d7649",
+    "name": "DemoItem管理",
+    "path": "/demo-items",
+    "component": "views/demo-item/index",
+    "icon": "List",
+    "permissionCode": "demo-item:read",
+    "visible": true,
+    "sort": 0,
+    "children": []
+  },
+  {
+    "id": "6b7e9d75-21bb-40de-8e30-efaac8ce4769",
+    "name": "控制台",
+    "path": "/dashboard",
+    "component": "dashboard/index",
+    "icon": "home",
+    "permissionCode": null,
+    "visible": true,
+    "sort": 1,
+    "children": []
+  },
+  {
+    "id": "a0338b5f-dbf7-4e8a-8a82-c55ddb18e931",
+    "name": "系统管理",
+    "path": "/system",
+    "component": "layout/blank",
+    "icon": "setting",
+    "permissionCode": null,
+    "visible": true,
+    "sort": 2,
+    "children": [
+      {
+        "id": "133438b4-2e07-4b59-9300-1b2d34f73e77",
+        "name": "用户管理",
+        "path": "/system/users",
+        "component": "system/users",
+        "icon": "user",
+        "permissionCode": "user:read",
+        "visible": true,
+        "sort": 1,
+        "children": []
+      },
+      {
+        "id": "8429f184-35c2-4a07-bb02-62a1938dae9e",
+        "name": "角色权限",
+        "path": "/system/roles",
+        "component": "system/roles",
+        "icon": "shield",
+        "permissionCode": "role:read",
+        "visible": true,
+        "sort": 2,
+        "children": []
+      },
+      {
+        "id": "7d8ae78b-fd12-4579-9ab4-a8738102ecf8",
+        "name": "审计日志",
+        "path": "/system/audit-logs",
+        "component": "system/audit-logs",
+        "icon": "file-text",
+        "permissionCode": "audit:read",
+        "visible": true,
+        "sort": 3,
+        "children": []
+      },
+      {
+        "id": "7d22cd53-8c1e-4d1f-a8ff-5697f40fb534",
+        "name": "菜单管理",
+        "path": "/system/menus",
+        "component": "system/menus",
+        "icon": "menu",
+        "permissionCode": "menu:read",
+        "visible": true,
+        "sort": 4,
+        "children": []
+      },
+      {
+        "id": "28d095d6-ce90-4345-84b6-e13e90053f40",
+        "name": "字典管理",
+        "path": "/system/dict",
+        "component": "system/dict",
+        "icon": "collection",
+        "permissionCode": "dict:read",
+        "visible": true,
+        "sort": 5,
+        "children": []
+      },
+      {
+        "id": "b1a57d8c-4059-4144-b29d-cfc3d7b6fb65",
+        "name": "队列管理",
+        "path": "/system/queue",
+        "component": "system/queue",
+        "icon": "list",
+        "permissionCode": "system:queue:list",
+        "visible": true,
+        "sort": 6,
+        "children": []
+      }
+    ]
+  }
+]
