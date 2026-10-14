@@ -12,6 +12,19 @@
 - **来源**：需求变更先记入对应 PRD 的「变更记录」，发布时汇总到本文件。本文件只记**对外可见**的变更，内部重构不在此记录。
 - **频率**：每个发布版本一条记录；`Unreleased` 区间持续累积，发布时转为版本条目并清空。
 
+## [Unreleased]
+
+### Fixed（v0.2.0 推送后首次真实 Actions 运行排障，2026-10-14）
+
+> 仓库首次推送 GitHub 后 CI 在真实 Actions 上连续暴露 6 处**只在干净环境（无本地 `.env`、无既有 `node_modules`/`dist`）才复现**的缺陷，逐层修复后 [run 38513416509](https://github.com/donttemos/TY/actions/runs/38513416509) 四大作业（基础门禁 24 步 + 三库集成矩阵）全绿，耗时 4m28s。以下修复均不改变已发布产物的运行期行为。
+
+- **流水线无法启动：`pnpm/action-setup@v4` 与 `packageManager` 版本双指定**：action 配了 `version: 11`，根 `package.json` 又有 `packageManager: pnpm@11.6.0`，第 3 步即抛 `ERR_PNPM_BAD_PM_VERSION`，后续步骤全 skipped。移除 action 的 `version` 输入，统一以 `packageManager` 为准（两处 job）。
+- **`pnpm install --frozen-lockfile` 中断：`allowBuilds` 存在自动写入的占位值**：`pnpm-workspace.yaml` 中 `msgpackr-extract` / `protobufjs` 的值为占位串 `"set this to true or false"`（非布尔），在 pnpm 11 默认 `strictDepBuilds=true` 下抛 `ERR_PNPM_IGNORED_BUILDS`。改为显式 `false`（二者构建脚本非运行期必需：msgpackr-extract 缺失时 msgpackr 回退纯 JS，protobufjs 的 postinstall 仅服务其 CLI）。
+- **构建失败：缺少 example-api 的默认 `@prisma/client` 生成**：流水线只为 `@fw/db` 生成自定义输出的 `prisma/test-client`，从未生成默认 client；干净环境下该包仅为 postinstall 空壳，`example-api` 的 `tsc` 报 `Prisma.InputJsonValue` / `Prisma.DbNull` 不存在。构建步骤中补 `example-api` 的 `prisma generate`。
+- **构建失败：`example-api` 的 `.env` 必须早于 `prisma generate`**：生成的 client 会把「生成时 `.env` 是否存在」固化进运行期环境解析；原先 `.env` 在 M3 步骤才创建，导致运行期读不到 `DB_URL`（`seed.ts` 报 `PrismaClientInitializationError`）。新增前置步骤「准备 example-api 环境文件」，在构建前生成 `.env`。
+- **M5 门禁失败：`admin-web` 单测隐式依赖被 gitignore 的 `.env.test`**：`src/utils/token.ts` 的存储启停以 `import.meta.env.VITE_API_BASE_URL` 是否定义判断，而该变量只来自 `apps/admin-web/.env.test`（被 `.env.*` 规则忽略），干净环境下 3 个「无感刷新」用例必挂。在 `vitest.config.ts` 的 `test.env` 中显式注入，单测不再依赖本地 env 文件。
+- **集成矩阵失败：作业缺框架包构建**：`integration` 是与 `base` 平行的独立 runner，拿不到 `base` 的 `dist`，而集成用例经 vitest 从源码运行却 import `@fw/*` 的包入口，三库同时报 `Failed to resolve entry for package "@fw/logger"`。新增「构建框架包」步骤（`pnpm --filter "@fw/db..." run build`，自动覆盖 `@fw/db` 全部依赖，避免再维护易漏的手写列表）。
+
 ## [0.2.0] - 2026-10-14
 
 > 本次发布纳入 **M5–M8** 四个里程碑的完整交付（M1–M4 已于 [`[0.1.0]`](#010---2026-10-13) 发布）。以下条目按里程碑倒序排列；M8 与 M7 的验证证据、演练记录与压测基线见对应文档。

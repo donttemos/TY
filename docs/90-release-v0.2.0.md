@@ -182,6 +182,23 @@
 
 **修复后回归**：`@fw/tenant` 单测 33/33、覆盖率 99%/94.5%/96%/98.9%；构建 13/13；文件头门禁 347 通过；CI 配置经静态核对（两份包列表含 tenant、多租户冒烟步骤就位）。
 
+### 5.1 推送后首次真实 Actions 运行暴露的缺陷（F2-05 ~ F2-10，2026-10-14）
+
+> v0.2.0 是仓库**首次推送 GitHub**，CI 此前**从未在真实 Actions 上执行**过。首跑连续暴露 6 处**只在干净环境**（无本地 `.env`、无既有 `node_modules`/`dist`、非交互式）才复现的缺陷；本地因环境已"预热"而不复现，逐一排障后 [run 38513416509](https://github.com/donttemos/TY/actions/runs/38513416509) 四大作业全绿（基础门禁 24 步 + sqlite/postgres/mysql 三库集成矩阵），耗时 4m28s。**以下修复均不改变已发布产物的运行期行为**（仅流水线配置、本地测试配置与一处 workspace 配置）。
+
+| 编号 | 缺陷 | 失败点 | 修复 |
+|---|---|---|---|
+| **F2-05** | **`pnpm/action-setup@v4` 与 `packageManager` 双指定版本**：action 配 `version: 11`，根 `package.json` 又有 `packageManager: pnpm@11.6.0` | 第 3 步即抛 `ERR_PNPM_BAD_PM_VERSION`，其后 17 步全 skipped | 两处 job 移除 action 的 `version` 输入，统一以 `packageManager` 为准 |
+| **F2-06** | **`allowBuilds` 存在 pnpm 自动写入的占位值**：`msgpackr-extract` / `protobufjs` 的值为 `"set this to true or false"`（非布尔），pnpm 11 默认 `strictDepBuilds=true` | `pnpm install --frozen-lockfile` 抛 `ERR_PNPM_IGNORED_BUILDS` 退出 1 | 改为显式 `false`（msgpackr-extract 缺失时 msgpackr 回退纯 JS；protobufjs 的 postinstall 仅服务其 CLI），并加注释说明「不可留占位值」 |
+| **F2-07** | **缺少 example-api 默认 `@prisma/client` 生成**：流水线只为 `@fw/db` 生成自定义输出的 `prisma/test-client`；干净环境下默认 client 仅为 postinstall 空壳 | 构建 `example-api` 时 `prisma-auth-store.ts(560)` 报 `Prisma.InputJsonValue` / `Prisma.DbNull` 不存在 | 构建步骤中先执行 `example-api` 的 `prisma generate`（`DB_URL` 仅占位，generate 不连库） |
+| **F2-08** | **`example-api` 的 `.env` 必须早于 `prisma generate`**：生成的 client 会把「生成时 `.env` 是否存在」固化进运行期环境解析 | M3 冒烟 `prisma/seed.ts` 报 `PrismaClientInitializationError: Environment variable not found: DB_URL` | 新增前置步骤「准备 example-api 环境文件」，在构建（generate）之前 `cp .env.example .env`；M3 步骤移除重复的 `cp` |
+| **F2-09** | **`admin-web` 单测隐式依赖被 gitignore 的 `.env.test`**：`token.ts` 的存储启停以 `VITE_API_BASE_URL` 是否定义判断，而该变量只来自 `.env.test`（`.gitignore` 的 `.env.*` 规则） | M5 门禁 3 个「无感刷新与重放」用例失败（`expected "vi.fn()" to be called 1 times, but got 0 times`） | `vitest.config.ts` 的 `test.env` 显式注入 `VITE_API_BASE_URL`，单测不再依赖本地 env 文件 |
+| **F2-10** | **集成矩阵作业缺框架包构建**：`integration` 是与 `base` 平行的独立 runner，拿不到 `base` 的 `dist`，而集成用例经 vitest 从源码运行却 import `@fw/*` 的包入口 | 三库（sqlite/mysql/postgres）同时报 `Failed to resolve entry for package "@fw/logger"` | 在「生成 `<db>` 客户端与表结构」之后新增「构建框架包」步骤：`pnpm --filter "@fw/db..." run build`（自动覆盖 `@fw/db` 全部依赖，避免再维护易漏的手写包列表） |
+
+**排障方法**：本地逐条**双向复现**再修复，而非据日志猜测——F2-08 采用「移走 `.env` 后重新 generate → seed 失败（EXIT=1）；带 `.env` generate → seed 通过」的对照实验确认因果；F2-09 采用「移走 `.env.test` → 3 用例失败；注入 `test.env` → 9/9、全量 29/29」；F2-06 通过阅读 pnpm 11.6 `dist/pnpm.mjs` 的 `handleIgnoredBuilds` / `reportIgnoredBuilds` 确认 `strictDepBuilds` 为 v11 默认值；F2-05 从 Actions 步骤日志定位。
+
+**说明**：附注标签 `v0.2.0` 指向发版提交 `ce48433`（发布内容本身，未包含上述 6 个 CI 修复提交 `b9c53ed..bc167f8`）；因修复不触碰产物代码，标签语义不变。若希望标签自身即对应全绿流水线，可将标签前移至 `bc167f8` 后重新推送。
+
 ## 6. 遗留问题
 
 | 编号 | 描述 | 等级 | 责任人 | 闭环条件 |
@@ -190,7 +207,7 @@
 | R2-02 | **FR-08「配置中心占位与热更新审计」未实现**（PRD-008 §2 列入范围，但不在 §7 AC 内） | P2 | donttemo | 后继里程碑以 `ConfigCenterPort` + 本地文件适配落地 |
 | R2-03 | 压测为单机 SQLite 短时基线：未做 50 并发 × 5 分钟长压（受登录限流约束）、百万行分页未覆盖 | P2 | donttemo | 独立压测环境（放宽限流 + 指向 PG/MySQL）复跑 |
 | R2-04 | **Redis Cluster 实跑未执行**（v0.1.0 遗留延续）：驱动已实现 cluster 分支并有单测，实跑仅 standalone | P2 | donttemo | 具备 Cluster 环境时补 |
-| R2-05 | **本机沙箱批量删除守卫**（`SAFE_DELETE_BULK_CONFIRM_REQUIRED`，按 turn 累计、阈值 50）会中断 `admin-web` 构建的清空 outDir 与 `drill-m8.mjs` 的测试库清理步骤。**属宿主环境限制，非代码缺陷**，CI / 真实环境不受影响 | P2 | donttemo | 引入容器化本地环境 |
+| R2-05 | **本机沙箱批量删除守卫**（`SAFE_DELETE_BULK_CONFIRM_REQUIRED`，按 turn 累计、阈值 50）会中断 `admin-web` 构建的清空 outDir 与 `drill-m8.mjs` 的测试库清理步骤。**属宿主环境限制，非代码缺陷**；真实环境不受影响——已在 §8 的真实 Actions runner 上得到验证（`admin-web` 构建与 `drill-m8` 均正常通过） | P2 | donttemo | 引入容器化本地环境 |
 
 > **v0.1.0 遗留项状态**：R-01（三库矩阵与切库演练）、R-05（dev 工具链漏洞）、R-06（NestJS 11 升级）、R-07（真实 Redis standalone）均已闭环；R-09（临时文件）已闭环；R-02（turbo 管道）与 R-08（admin-web 依赖）随 M5 完成与环境问题自然消解。详见 [90-release-v0.1.0.md](./90-release-v0.1.0.md) §6。
 
@@ -202,11 +219,26 @@
 
 1. **无 P0 阻断红线**：未发现越权漏洞、数据丢失/不一致、密钥硬编码、依赖不可用即整体 500（缓存/队列故障均有降级且实跑验证）、AC 未执行却标记通过。
 2. **代码层门禁全绿且可复现**：构建 13/13、单测 **748/748**、端到端冒烟 **223/223**、三大演练 **25/25**（含远程三库与真实 Redis）、Chart 校验 63/63、文件头与裸 SQL 门禁通过、`pnpm audit` 全量零漏洞。
-3. **本次验收发现并修复了 4 项真实缺陷**（§5），其中 **F2-01（CI 漏包）与 F2-02（覆盖率不达标）为发布阻塞级**——若不修，CI 在干净环境下必红；修复后 `@fw/tenant` 覆盖率与 CI 门禁均达标。
+3. **本次验收发现并修复了 4 项真实缺陷**（§5），其中 **F2-01（CI 漏包）与 F2-02（覆盖率不达标）为发布阻塞级**——若不修，CI 在干净环境下必红；修复后 `@fw/tenant` 覆盖率与 CI 门禁均达标。**推送后首次真实 Actions 运行又暴露并修复 6 项流水线/环境适配缺陷（§5.1）**，最终 `bc167f8` 上四大作业全绿（§8）。
 4. **判为「条件通过」的原因**：M8 §7 七条 AC 虽全绿，但存在 **P2 遗留**——R2-01 真实 K8s 集群部署未执行、R2-02 FR-08 未实现（范围外）、R2-03 长压与百万行分页未覆盖、R2-04 Redis Cluster 未实跑。这些**均为环境能力缺失或范围外事项，而非代码缺陷**，且每条均登记了责任人与闭环条件，符合验收总纲 §7.5「P1/P2 未通过可留条件通过」。
 
 **发布动作**：
 
 1. 版本号：根与 11 个框架包 + 2 个应用统一 **`0.2.0`**。
 2. 打附注标签 **`v0.2.0`**，与 [CHANGELOG](../CHANGELOG.md) 的 `[0.2.0] - 2026-10-14` 条目一一对应。
-3. 推送后触发 CI，用真实 Actions 结果复核 F2-01/F2-03 的修复（此前 CI 从未在真实 Actions 上执行过三库矩阵与 M8 步骤）。
+3. 推送 GitHub（`donttemos/TY`）触发 CI，用真实 Actions 结果复核（此前 CI 从未在真实 Actions 上执行过三库矩阵与 M8 步骤）——见 §8。
+
+## 8. 真实 Actions 复核（2026-10-14 完成）
+
+| 项 | 结果 |
+|---|---|
+| 仓库 | `https://github.com/donttemos/TY`（private），首次推送 |
+| 推送内容 | `main` 分支（2 个里程碑提交 + 6 个 CI 修复提交）+ 附注标签 `v0.1.0`、`v0.2.0` |
+| CI 首跑（`ce48433`） | **failure** —— 第 3 步 `pnpm/action-setup` 即挂（§5.1 F2-05） |
+| 排障提交 | `b9c53ed`（F2-05）→ `d68ada1`（F2-06）→ `6f99bba`（F2-07）→ `dcad1e2`（F2-09）→ `73fad18`（F2-08）→ `bc167f8`（F2-10） |
+| **最终 CI（`bc167f8`）** | ✅ **success**，[run 38513416509](https://github.com/donttemos/TY/actions/runs/38513416509)，4m28s |
+| 作业级结果 | `构建 / 单测(SQLite) / 静态检查`（24 步）✅；`集成测试 / sqlite` ✅；`集成测试 / postgres` ✅；`集成测试 / mysql` ✅ |
+
+**据此对 §5 F2-01/F2-03 的复核结论**：真实 Actions 上「构建全部包」正常取到 `@fw/tenant` 的 `dist`（F2-01 修复有效），且「M8 多租户端到端冒烟（SQLite）」步骤在真实 runner 上通过（F2-03 就位）。三库集成矩阵（sqlite 8 / mysql 8 / postgres 15 service 容器）首次在真实 CI 上跑通。
+
+**对判定的影响**：§7 判定仍为**条件通过**；§5.1 的 6 项属**流水线/环境适配缺陷（非产品代码缺陷）**，且已全部修复并由真实流水线验证；遗留项（R2-01 ~ R2-05）不变。仓库从未在干净环境跑通的这一「盲区」已消除——CI 现在有真实运行记录，后续每次 push/PR 均自动复核。

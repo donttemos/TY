@@ -3,6 +3,8 @@
 > 一套「框架之上的框架」：用它在 1 天内搭出任意业务系统的可运行骨架，小到内部工具站、大到多租户 SaaS，规模升级时业务代码零重写。
 >
 > **当前状态：v0.2.0 已发布（2026-10-14）** —— v0.1.0 交付 M1 核心骨架 + M2 数据库抽象层 + M3 鉴权与权限 + M4 缓存层；本次 **v0.2.0 一次性纳入 M5 管理后台前端（PRD-005）、M6 CRUD 代码生成器（PRD-006）、M7 队列与定时任务（PRD-007）、M8 多租户与规模化演进（PRD-008）**，**M1–M8 全部交付**：`@fw/tenant` 租户三级回退与 fail-closed / `@fw/db` dedicated 独立库路由 / `@fw/auth` 组织架构与数据权限四档 / `@fw/transport` 双驱动传输层 / `@fw/telemetry` OpenTelemetry 链路追踪 / Helm Chart 与部署模板 / 三大关键演练与终验（演练 25/25、Chart 清单校验 63/63、压测基线已建立），M8 判定「条件通过」。发布验收记录见 [v0.2.0 发布验收报告](./docs/90-release-v0.2.0.md)，M8 记录见 [M8 三大关键演练与终验](./docs/96-m8-drills.md)。
+>
+> **仓库与流水线**：[`donttemos/TY`](https://github.com/donttemos/TY)（private）。CI（GitHub Actions）在 v0.2.0 推送后**首次真实运行**；经修复 6 处「只在干净环境复现」的流水线/环境适配缺陷后，**四大作业全绿**（基础门禁 24 步 + sqlite/postgres/mysql 三库集成矩阵），见 [发布报告 §5.1 / §8](./docs/90-release-v0.2.0.md)。
 
 ## 设计原则
 
