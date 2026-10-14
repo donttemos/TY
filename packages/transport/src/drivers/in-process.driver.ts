@@ -13,6 +13,7 @@ import { assertAddress, HandlerNotRegisteredError } from '../errors.js';
 import type { TransportDriverPort } from '../driver.port.js';
 import type { TransportRegistry } from '../registry.js';
 import { withTimeout } from '../async.js';
+import { withServerSpan } from '../trace.js';
 import type { CallOptions, TransportContext, TransportHandlerFn } from '../types.js';
 
 /** in-process 驱动构造选项 */
@@ -68,8 +69,11 @@ export class InProcessTransportDriver implements TransportDriverPort {
       receivedAt: Date.now(),
     };
     this.handled += 1;
-    // 与 redis 驱动一致：超时窗口内执行（防本地处理器挂死拖住调用方）
-    return (await withTimeout(() => handler(payload, ctx), options?.timeoutMs ?? 0, address)) as TRes;
+    // SERVER span：同进程直通，父上下文取当前活跃上下文（即调用方 CLIENT span），
+    // 父子关系天然成立，无需信封过线。与 redis 驱动一致：超时窗口内执行（防本地处理器挂死拖住调用方）
+    return (await withServerSpan(address, undefined, () =>
+      withTimeout(() => handler(payload, ctx), options?.timeoutMs ?? 0, address),
+    )) as TRes;
   }
 
   /** 可用性探测：本进程直连，恒可用 */

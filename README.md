@@ -2,7 +2,7 @@
 
 > 一套「框架之上的框架」：用它在 1 天内搭出任意业务系统的可运行骨架，小到内部工具站、大到多租户 SaaS，规模升级时业务代码零重写。
 >
-> **当前状态：v0.1.0 已发布（M1 核心骨架 + M2 数据库抽象层 + M3 鉴权与权限 + M4 缓存层）**；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；M7 队列与定时任务（PRD-007）已完成实现与全量验收（含真实 Redis 失速恢复演练 TC-JOB-008，见 docs/94-queue-stall-drill.md），未发版；**M8 多租户与规模化演进（PRD-008）进行中：T-M8-01 租户上下文 / T-M8-02 dedicated 独立库路由 / T-M8-04 组织架构与数据权限四档 / T-M8-05 transport 切换已完成（冒烟 48/48 + 17/17），未发版**。发布验收记录见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
+> **当前状态：v0.1.0 已发布（M1 核心骨架 + M2 数据库抽象层 + M3 鉴权与权限 + M4 缓存层）**；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；M7 队列与定时任务（PRD-007）已完成实现与全量验收（含真实 Redis 失速恢复演练 TC-JOB-008，见 docs/94-queue-stall-drill.md），未发版；**M8 多租户与规模化演进（PRD-008）进行中：T-M8-01 租户上下文 / T-M8-02 dedicated 独立库路由 / T-M8-04 组织架构与数据权限四档 / T-M8-05 transport 切换 / T-M8-06 OpenTelemetry 链路追踪已完成（冒烟 48/48 + 17/17 + 14/14），未发版**。发布验收记录见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
 
 ## 设计原则
 
@@ -39,6 +39,7 @@ framework/
     auth/                     # M3 鉴权与权限
     cache/                    # M4 缓存
     queue/                    # M7 队列与调度
+    tenant/ transport/ telemetry/  # M8 多租户 / 传输层 / 链路追踪
   templates/
     admin/ api/ cms/          # 项目模板（M5 起）
   apps/
@@ -100,7 +101,7 @@ fw gen crud order
 | 管理后台模板 | `apps/admin-web`（Vue3 + Vite + Element Plus：登录、动态路由、按钮级权限、用户/角色/菜单/字典/审计页、`<CrudTable>` 标准组件；mock 全链路冒烟 40/40、单测 29） | M5 | ✅ 已完成（未发版） |
 | CRUD 代码生成器 | `@fw/cli gen`（schema 解析 + 类型映射 + 模板引擎 + 后端/前端/seed 生成 + dry-run/diff/回滚；模板外置 `templates/codegen/`；单测 116 / 覆盖率 94.7%） | M6 | ✅ 已完成（未发版） |
 | 队列与定时任务 | `@fw/queue`（统一 Job 抽象 + memory/bullmq 双驱动 + `@JobHandler`/`@Cron` 自动扫描 + 重试退避 + 死信重放 + 幂等 + 令牌桶限速 + cron 分布式锁 + 优雅停机 + 队列管理页；单测 135 / 覆盖率 93.1%、example-api 冒烟 27/27 含真实 Redis 的 bullmq 全链路） | M7 | 已实现（重启验收待补，未发版） |
-| 多租户与规模化 | `@fw/tenant`（三级回退租户解析 + fail-closed + 上下文透传）+ `@fw/db` TenantDataSource（dedicated 独立库路由：懒创建 + LRU/空闲淘汰 + Repository 按上下文选路）+ `@fw/auth` 数据权限四档（`DataScopeOrgPort` + all/org_below/org/self 解析与详情越权校验 + `departments`/`user_department` 模型）+ `@fw/transport` 传输层（in-process/redis 双驱动端口 + redis RPC 协议 + `@TransportHandler` 声明式注册 + 客户端代理，切换不改调用方代码）；OTel / Helm 待启动 | M8 | 进行中（T-M8-01/02/04/05 已完成，冒烟 48/48 + 17/17，未发版） |
+| 多租户与规模化 | `@fw/tenant`（三级回退租户解析 + fail-closed + 上下文透传）+ `@fw/db` TenantDataSource（dedicated 独立库路由：懒创建 + LRU/空闲淘汰 + Repository 按上下文选路）+ `@fw/auth` 数据权限四档（`DataScopeOrgPort` + all/org_below/org/self 解析与详情越权校验 + `departments`/`user_department` 模型）+ `@fw/transport` 传输层（in-process/redis 双驱动端口 + redis RPC 协议 + `@TransportHandler` 声明式注册 + 客户端代理，切换不改调用方代码）+ `@fw/telemetry` 链路追踪（OTel：HTTP 中间件 + 尾采样错误全采 + OTLP 导出 + 日志 span 桥接 + DB/缓存/队列/传输插桩）；Helm 待启动 | M8 | 进行中（T-M8-01/02/04/05/06 已完成，冒烟 48/48 + 17/17 + 14/14，未发版） |
 
 ## 文档索引
 
@@ -141,7 +142,7 @@ fw gen crud order
 | M5 | 管理后台模板 | [005](./docs/prd/prd-005-admin-template.md) | ✅ 已完成（未发版） |
 | M6 | 代码生成器 | [006](./docs/prd/prd-006-code-generator.md) | ✅ 已完成（未发版） |
 | M7 | 队列与定时任务 | [007](./docs/prd/prd-007-queue-scheduler.md) | 已实现（重启验收待补，未发版） |
-| M8 | 多租户与规模化 | [008](./docs/prd/prd-008-multitenancy-scale.md) | 进行中（T-M8-01/02/04/05 已完成，未发版） |
+| M8 | 多租户与规模化 | [008](./docs/prd/prd-008-multitenancy-scale.md) | 进行中（T-M8-01/02/04/05/06 已完成，未发版） |
 
 ## 开发规范
 

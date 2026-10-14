@@ -61,6 +61,9 @@ export { CronExpression, parseCron } from './cron-expression.js';
 export { backoffFor, parseBackoffSequence, parseDurationMs } from './duration.js';
 export { delay, withTimeout } from './async.js';
 
+// ---------- 链路追踪插桩（M8 T-M8-06） ----------
+export { currentTraceparent, parentFromTraceparent, withConsumerSpan, withProducerSpan } from './trace.js';
+
 // ---------- 异常 ----------
 export {
   CronExpressionError,

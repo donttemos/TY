@@ -13,6 +13,7 @@ import { Inject, Injectable, Optional } from '@nestjs/common';
 import { DiscoveryService, MetadataScanner } from '@nestjs/core';
 import { assertAddress, TransportTimeoutError } from './errors.js';
 import { scanTransportHandlers } from './discovery.js';
+import { withClientSpan } from './trace.js';
 import { TRANSPORT_DRIVER, TRANSPORT_OPTIONS, TRANSPORT_REGISTRY } from './tokens.js';
 import type { TransportDriverPort } from './driver.port.js';
 import type { TransportRegistry } from './registry.js';
@@ -81,7 +82,11 @@ export class TransportService {
     assertAddress(address);
     this.calls += 1;
     try {
-      const result = await this.driver.call<TRes>(address, payload, options);
+      // CLIENT span 包裹整次调用：该 span 期间发起的传输操作共享同一 traceId
+      // （未启用追踪时为非记录 span，零开销）
+      const result = await withClientSpan(address, this.driver.kind, () =>
+        this.driver.call<TRes>(address, payload, options),
+      );
       this.successes += 1;
       return result;
     } catch (error) {

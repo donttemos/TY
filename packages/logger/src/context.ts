@@ -1,8 +1,9 @@
 /*
  * @file 请求上下文（AsyncLocalStorage）
- * @description 进程内单例的异步上下文存储：traceId / spanId / 当前用户；由 @fw/core 的 trace 中间件写入，日志与后续 DAO 层默认携带；M8 接入 OTel 前 spanId 为空串。
+ * @description 进程内单例的异步上下文存储：traceId / spanId / 当前用户；由 @fw/core 的 trace 中间件写入，日志与后续 DAO 层默认携带。M8 T-M8-06 起可经 setSpanContextProvider 注入 OTel 活跃 span 提供者，使 traceId/spanId 与链路追踪对齐（未注入时行为不变）。
  * @author donttemo
  * @created 2026-10-09
+ * @modified 2026-10-14 donttemo M8 T-M8-06：新增 setSpanContextProvider 桥接（OTel 活跃 span 优先，回退请求上下文）
  * @module logger
  * @since v0.1.0
  */
@@ -37,6 +38,34 @@ export interface RequestContext {
 
 /** 全局异步上下文存储（进程单例） */
 export const requestContextStorage = new AsyncLocalStorage<RequestContext>();
+
+/**
+ * span 上下文提供者（M8 T-M8-06 接入 OTel 时由 @fw/telemetry 注册）：
+ * 返回当前活跃 span 的 ID 对；未注册时日志回退读请求上下文，行为与本接入前完全一致。
+ * 设计为普通函数类型而非 OTel 依赖——@fw/logger 不感知 OpenTelemetry。
+ */
+type SpanContextProvider = () => { traceId: string; spanId: string } | undefined;
+
+let spanContextProvider: SpanContextProvider | undefined;
+
+/**
+ * 注册 span 上下文提供者（@fw/telemetry 启用时调用；幂等，后注册者覆盖）
+ * @param provider 提供者函数
+ */
+export function setSpanContextProvider(provider: SpanContextProvider): void {
+  spanContextProvider = provider;
+}
+
+/** 读取活跃 span ID（提供者未注册或读取异常时返回 undefined） */
+function activeSpanIds(): { traceId: string; spanId: string } | undefined {
+  if (!spanContextProvider) return undefined;
+  try {
+    return spanContextProvider();
+  } catch {
+    // 桥接异常不得影响日志
+    return undefined;
+  }
+}
 
 /**
  * 生成 traceId：32 位十六进制
@@ -78,7 +107,9 @@ export function patchRequestContext(patch: Partial<RequestContext>): void {
  * @returns traceId；无上下文时为空串（如启动阶段日志）
  */
 export function getTraceId(): string {
-  return requestContextStorage.getStore()?.traceId ?? '';
+  // 优先取活跃 span（OTel 接入后：span 的 traceId 即链路 ID，跨服务一致）；
+  // 无活跃 span 时回退请求上下文（未启用追踪或 span 之外的代码路径）
+  return activeSpanIds()?.traceId || requestContextStorage.getStore()?.traceId || '';
 }
 
 /**
@@ -86,5 +117,5 @@ export function getTraceId(): string {
  * @returns spanId；无上下文时为空串
  */
 export function getSpanId(): string {
-  return requestContextStorage.getStore()?.spanId ?? '';
+  return activeSpanIds()?.spanId || requestContextStorage.getStore()?.spanId || '';
 }

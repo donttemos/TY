@@ -78,6 +78,11 @@ export interface JobRecord {
   idempotencyTtlSeconds?: number;
   /** 入队时刻（epoch 毫秒） */
   enqueuedAt: number;
+  /**
+   * W3C traceparent 头（M8 T-M8-06 链路追踪）：派发时的活跃上下文序列化，消费侧据此
+   * 续接同一 traceId（含重试与跨进程消费）。未启用追踪时缺省。
+   */
+  traceparent?: string;
 }
 
 /** 任务执行上下文（处理器第二个参数） */

@@ -1,0 +1,52 @@
+{
+  "name": "@fw/telemetry",
+  "version": "0.1.0",
+  "description": "OpenTelemetry 链路追踪：traceId 贯穿 HTTP/DB/缓存/队列/传输，OTLP 导出，日志自动注入 traceId/spanId（PRD-008 FR-07）",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@fw/config": "workspace:*",
+    "@fw/logger": "workspace:*",
+    "@nestjs/common": "^11.2.7",
+    "@opentelemetry/api": "^1.9.1",
+    "reflect-metadata": "^0.2.2"
+  },
+  "peerDependencies": {
+    "@opentelemetry/exporter-trace-otlp-http": "^0.223.0",
+    "@opentelemetry/sdk-node": "^0.223.0"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/exporter-trace-otlp-http": {
+      "optional": true
+    },
+    "@opentelemetry/sdk-node": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^11.2.7",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.223.0",
+    "@opentelemetry/sdk-node": "^0.223.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^4.1.11",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.11"
+  }
+}

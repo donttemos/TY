@@ -2,13 +2,20 @@
  * @file 慢查询观测与连接池状态
  * @description 用 Prisma Client 扩展挂 query 事件：超过阈值的查询打 warn 日志（含 model/operation/耗时/SQL摘要/traceId）；
  *   连接池快照经 /ready 探针暴露（PRD-002 FR-08，TC-ORM-006）。
+ *   M8 T-M8-06：同一 $allOperations 漏斗内包一个 DB span（traceId 贯穿 DB，PRD-008 FR-07）——
+ *   只依赖 @opentelemetry/api 的全局 no-op 语义，未启用追踪时退化为非记录 span，零开销。
  * @author donttemo
  * @created 2026-10-12
+ * @modified 2026-10-14 donttemo M8 T-M8-06 新增 DB span 插桩（traceId 贯穿数据库操作）
  * @module @fw/db
  */
 
+import { SpanKind, SpanStatusCode, trace } from '@opentelemetry/api';
 import { Logger, getTraceId } from '@fw/logger';
 import type { PrismaClientLike } from './types.js';
+
+/** tracer 名（采集端按 instrumentation scope 过滤） */
+const TRACER_NAME = 'fw.db';
 
 /** 慢查询默认阈值（毫秒），PRD-002 FR-08 */
 export const DEFAULT_SLOW_QUERY_MS = 500;
@@ -52,29 +59,55 @@ export function withSlowQueryLog(
         args: unknown;
         query: (args: unknown) => Promise<unknown>;
       }) {
-        const start = Date.now();
-        try {
-          return await query(args);
-        } finally {
-          const durationMs = Date.now() - start;
-          if (durationMs >= thresholdMs) {
-            const info: SlowQueryInfo = {
-              model,
-              operation,
-              durationMs,
-              sqlSummary: summarize(args),
-              traceId: getTraceId(),
-            };
-            logger.warn('慢查询告警', {
-              model,
-              operation,
-              durationMs,
-              sqlSummary: info.sqlSummary,
-              traceId: info.traceId,
-            });
-            onSlow?.(info);
-          }
-        }
+        const spanName = model ? `db.query ${model}.${operation}` : `db.query ${operation}`;
+        // DB 插桩漏斗：所有 Prisma 操作经此，DB span 在此包住一次查询。
+        // 未注册 SDK 时 startActiveSpan 产出非记录 span：不采集但仍回传业务值，零行为变化
+        return trace.getTracer(TRACER_NAME).startActiveSpan(
+          spanName,
+          {
+            kind: SpanKind.CLIENT,
+            attributes: {
+              'db.system': 'prisma',
+              'db.operation': operation,
+              ...(model ? { 'db.collection.name': model } : {}),
+            },
+          },
+          async (span) => {
+            const start = Date.now();
+            try {
+              const result = await query(args);
+              span.setAttribute('db.query.duration_ms', Date.now() - start);
+              return result;
+            } catch (error) {
+              span.recordException(error instanceof Error ? error : String(error));
+              span.setStatus({
+                code: SpanStatusCode.ERROR,
+                message: error instanceof Error ? error.message : String(error),
+              });
+              throw error;
+            } finally {
+              const durationMs = Date.now() - start;
+              span.end();
+              if (durationMs >= thresholdMs) {
+                const info: SlowQueryInfo = {
+                  model,
+                  operation,
+                  durationMs,
+                  sqlSummary: summarize(args),
+                  traceId: getTraceId(),
+                };
+                logger.warn('慢查询告警', {
+                  model,
+                  operation,
+                  durationMs,
+                  sqlSummary: info.sqlSummary,
+                  traceId: info.traceId,
+                });
+                onSlow?.(info);
+              }
+            }
+          },
+        );
       },
     },
   }) as PrismaClientLike;

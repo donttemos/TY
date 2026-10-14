@@ -8,12 +8,13 @@
  * @author donttemo
  * @created 2026-10-12
  * @modified 2026-10-14 donttemo M8 T-M8-02 注册 TENANT_DATA_SOURCE（dedicated 独立库路由）
+ * @modified 2026-10-14 donttemo M8 T-M8-06 租户数据源默认路径改用插桩 client（避免旁路 DB span）
  * @module demo
  */
 import { Module } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { loadEnv } from '@fw/config';
-import { DbModule, DB_CLIENT, TENANT_DATA_SOURCE, type DbReadinessProbe, type PrismaClientLike } from '@fw/db';
+import { DbModule, DB_CLIENT, TENANT_DATA_SOURCE, withSlowQueryLog, type DbReadinessProbe, type PrismaClientLike } from '@fw/db';
 import { DemoController } from './demo.controller.js';
 import { DemoItemRepository } from './demo-item.repository.js';
 import { DemoTenantItemsController } from './demo-tenant-items.controller.js';
@@ -31,11 +32,18 @@ export const dbReadinessProbe: DbReadinessProbe = DbModule.readinessProbe(
   env.DB_SLOW_MS,
 );
 
-/** 共享库 client：DbModule 与 TenantDataSource 共用同一实例 */
+/** 共享库 client：DbModule 与 TenantDataSource 共用同一物理连接 */
 const prismaClient = new PrismaClient() as unknown as PrismaClientLike;
 
-/** 租户数据源（M8 T-M8-02）：dedicated 租户按上下文路由独立库，其余回退共享库 */
-export const tenantDataSource = createTenantDataSource(prismaClient, env.DB_SLOW_MS);
+/**
+ * 插桩后的共享库 client：慢查询观测 + DB span（M8 T-M8-06）挂在 Prisma 的 $allOperations 漏斗上。
+ * 供 TenantDataSource 的默认（共享库）路径使用——否则经租户数据源解析的查询会旁路掉 DB 链路追踪。
+ * DbModule.forRoot 内部对原始 client 再包装一层，两者指向同一物理库、各自持有插桩扩展，互不影响。
+ */
+const instrumentedClient = withSlowQueryLog(prismaClient, env.DB_SLOW_MS);
+
+/** 租户数据源（M8 T-M8-02）：dedicated 租户按上下文路由独立库，其余回退共享库（插桩版） */
+export const tenantDataSource = createTenantDataSource(instrumentedClient, env.DB_SLOW_MS);
 
 @Module({
   imports: [

@@ -27,6 +27,7 @@ import {
 import type { TransportDriverPort } from '../driver.port.js';
 import type { TransportRegistry } from '../registry.js';
 import { withTimeout } from '../async.js';
+import { extractTraceparent, injectTraceparent, withServerSpan } from '../trace.js';
 import { createRedisClient, MISSING_REDIS_URL_MESSAGE, type RedisLike } from './redis-client.js';
 import type { CallOptions, TransportContext, TransportEnvelope, TransportHandlerFn, TransportReply } from '../types.js';
 
@@ -123,6 +124,9 @@ export class RedisTransportDriver implements TransportDriverPort {
     const caller = await this.getCallerClient();
     const id = newId();
     const replyTo = this.replyKey(id);
+    // 链路追踪（M8 T-M8-06）：把调用方活跃上下文序列化为 traceparent 随信封过线，
+    // 处理方续接同一 traceId（未启用追踪时为空对象，不写字段）
+    const traceparent = injectTraceparent().traceparent;
     const envelope: TransportEnvelope = {
       id,
       address,
@@ -131,6 +135,7 @@ export class RedisTransportDriver implements TransportDriverPort {
       callerId: this.options.instanceId,
       sentAt: Date.now(),
       timeoutMs,
+      ...(traceparent ? { traceparent } : {}),
     };
     let raw: string;
     try {
@@ -285,8 +290,12 @@ export class RedisTransportDriver implements TransportDriverPort {
     let reply: TransportReply;
     try {
       if (!handler) throw new HandlerNotRegisteredError(address);
+      // SERVER span：父上下文从信封 traceparent 提取，跨进程续接调用方链路（TC-TNT-006）；
+      // 信封无 traceparent（上游未启用追踪）时按根 span 处理。
       // 执行上限取调用方超时：双方超时语义一致，处理方不会无限挂死占用消费循环
-      const result = await withTimeout(() => handler(envelope.payload, ctx), envelope.timeoutMs, address);
+      const result = await withServerSpan(address, extractTraceparent(envelope.traceparent), () =>
+        withTimeout(() => handler(envelope.payload, ctx), envelope.timeoutMs, address),
+      );
       reply = { id: envelope.id, ok: true, result };
     } catch (error) {
       reply = { id: envelope.id, ok: false, error: serializeTransportError(error) };

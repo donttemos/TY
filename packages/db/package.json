@@ -28,9 +28,11 @@
     "@fw/core": "workspace:*",
     "@fw/logger": "workspace:*",
     "@nestjs/common": "^11.2.7",
+    "@opentelemetry/api": "^1.9.1",
     "@prisma/client": "^6.3.0"
   },
   "devDependencies": {
+    "@opentelemetry/sdk-node": "^0.223.0",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^4.1.11",
     "prisma": "^6.3.0",

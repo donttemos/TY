@@ -91,8 +91,11 @@
 | | `TRANSPORT_SHUTDOWN_TIMEOUT` | 否 | 10 | 传输优雅停机等待在途请求的超时（秒） |
 | 日志 | `LOG_LEVEL` | 否 | info | 级别 |
 | | `LOG_FORMAT` | 否 | json | 容器环境固定 json |
-| 追踪 | `OTEL_ENABLED` | 否 | false | M8 起支持 |
-| | `OTEL_EXPORTER_URL` | 条件 | — | 启用后必填 |
+| 追踪 | `OTEL_ENABLED` | 否 | false | 链路追踪总开关（M8 T-M8-06）；关闭时全短路零开销 |
+| | `OTEL_SERVICE_NAME` | 否 | `fw:<APP_ENV>` | 服务名（采集端按 `service.name` 聚合）；多服务部署必须显式区分 |
+| | `OTEL_EXPORTER_URL` | 条件 | — | OTLP/HTTP 采集端点（如 `http://otel-collector:4318/v1/traces`）；`OTEL_ENABLED=true` 时**必填，缺失启动即失败**。导出形态为 OTLP/HTTP JSON |
+| | `OTEL_SAMPLE_RATIO` | 否 | 0.1 | 采样比例（0~1，默认 10%）；按 traceId 确定性取值，同链路跨服务决策一致 |
+| | `OTEL_SAMPLE_ERRORS` | 否 | true | 错误 span 全采开关（status=ERROR 或携带 exception 事件）；true 时错误链路不丢 |
 | 前端（admin-web） | `VITE_API_BASE_URL` | 是 | — | 管理后台 API 基址（如 `https://api.example.com/api/v1`）；**构建期注入**，改值需重新构建 |
 | | `VITE_APP_TITLE` | 否 | 通用应用框架 | 站点标题 |
 | | `VITE_LOGIN_CAPTCHA` | 否 | false | 登录页验证码开关（true 时需接入验证码服务） |
@@ -119,6 +122,15 @@
 - 调用方超时（`TRANSPORT_TIMEOUT_MS`，默认 30000）到达即失败返回 503/9002，处理方执行上限取信封内调用方超时，两侧语义对等；`TRANSPORT_SHUTDOWN_TIMEOUT` 控制停机时在途请求的宽限；
 - redis 驱动复用缓存集群时建议独立 `TRANSPORT_PREFIX` 隔离键空间；对消息可靠性有要求时按缓存章节为 Redis 配置持久化；
 - `ioredis` 为 optional peer 依赖，仅 `redis` 驱动按需安装（`pnpm add ioredis`）。
+
+**链路追踪（M8 T-M8-06，PRD-008 FR-07）**：`OTEL_ENABLED=true` 后 traceId 贯穿 HTTP / DB / 缓存 / 队列 / 传输，经 OTLP/HTTP 导出到采集端（如 OTel Collector），日志自动带 traceId/spanId。运维要点：
+
+- **依赖**：`@fw/telemetry` 的 SDK 为 optional peer 依赖，启用前须安装 `@opentelemetry/sdk-node` 与 `@opentelemetry/exporter-trace-otlp-http`（未装且启用时启动即失败并给出安装提示）；
+- **端点**：`OTEL_EXPORTER_URL` 指向采集端 `/v1/traces`，导出为 JSON（`content-type: application/json`）；采集端临时不可达时丢 span 但业务不受影响（日志仍带 traceId 可定位）；
+- **采样**：默认 10%，按 traceId 低 8 位确定性取值——同一链路在所有服务上采样决策一致；`OTEL_SAMPLE_ERRORS=true`（默认）时错误链路全采；已启用尾采样，**不建议**在应用侧把 ratio 设为 1 后又在采集端重复采样（可在高 QPS 时把 ratio 设 1 并将尾采样下沉到 OTLP Collector 的 `tail_sampling` processor）；
+- **跨服务贯通**：多进程 / 多实例部署下，服务间经标准 W3C `traceparent` 头传播（transport 的 redis 信封自动携带），HTTP 入口亦兼容框架自有 `X-Trace-Id`（老客户端 / 未接 OTel 的上游仍可关联）；上游携带 `traceparent` 时服务端复用其 traceId 并续接父子关系（TC-TNT-006）；
+- **资源属性**：导出 span 携带 `service.name`（缺省 `fw:<APP_ENV>`）与 `service.version`，采集端据此区分服务与环境；
+- **停机**：优雅停机时 flush 在途 span 后关闭 provider，停机路径不因 flush 失败而中断。
 
 ## 4. 小档部署（单机 Docker）
 

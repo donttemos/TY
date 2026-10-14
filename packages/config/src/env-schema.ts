@@ -9,6 +9,7 @@
  * @modified 2026-10-13 donttemo M8 新增 6 个 TENANT_* 键（总开关/解析顺序/请求头名/基准域名/JWT claim/缓存TTL）
  * @modified 2026-10-14 donttemo M8 T-M8-02 新增 TENANT_DB_KEY（dedicated 租户独立库连接串加密密钥）
  * @modified 2026-10-14 donttemo M8 T-M8-05 新增 7 个 TRANSPORT_* 键（驱动/连接/前缀/超时/角色/实例标识/停机等待）
+ * @modified 2026-10-14 donttemo M8 T-M8-06 新增 5 个 OTEL_* 键（总开关/服务名/导出端点/采样比例/错误全采）
  * @modified 2026-10-13 donttemo 新增 MQ_STALLED_MS（bullmq 失速检测间隔，TC-JOB-008 演练可调）
  * @module config
  * @since v0.1.0
@@ -179,6 +180,18 @@ export const envSchema = z.object({
   TRANSPORT_INSTANCE_ID: optionalString().describe('传输实例标识（TRANSPORT_INSTANCE_ID）'),
   /** 传输优雅停机等待在途请求的超时（秒） */
   TRANSPORT_SHUTDOWN_TIMEOUT: z.coerce.number().int().min(1).max(300).default(10).describe('传输优雅停机等待超时（秒）'),
+  /** 链路追踪总开关（M8 T-M8-06，PRD-008 FR-07）：false 时零开销（不装 SDK，插桩点退化为非记录 span） */
+  OTEL_ENABLED: boolString(false).describe('是否启用 OpenTelemetry 链路追踪（OTEL_ENABLED）'),
+  /** 服务名（资源属性 service.name）；缺省取 `fw-<APP_ENV>` */
+  OTEL_SERVICE_NAME: optionalString().describe('链路追踪服务名（OTEL_SERVICE_NAME）'),
+  /** OTLP/HTTP 采集端点（启用后必填，如 http://otel-collector:4318/v1/traces；缺失启动即失败）。
+   *  说明：0.223 的 exporter-trace-otlp-http 硬编码 JSON 序列化（content-type: application/json），
+   *  故不提供协议配置键——配置诚实原则，无效键不留。 */
+  OTEL_EXPORTER_URL: optionalUrl().describe('OTLP/HTTP 采集端点（OTEL_EXPORTER_URL）'),
+  /** 采样比例（0~1）：按 traceId 确定性决策，同链路跨服务一致；错误 span 不受此限（见 OTEL_SAMPLE_ERRORS） */
+  OTEL_SAMPLE_RATIO: z.coerce.number().min(0).max(1).default(0.1).describe('链路追踪采样比例（0~1）'),
+  /** 错误 span 全采（status=ERROR 或记录过异常的 span 忽略比例导出，保证错误链路不丢） */
+  OTEL_SAMPLE_ERRORS: boolString(true).describe('错误 span 全采开关（OTEL_SAMPLE_ERRORS）'),
 });
 
 /** 校验后的环境变量类型 */

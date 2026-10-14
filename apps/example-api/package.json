@@ -23,6 +23,7 @@
     "@fw/db": "workspace:*",
     "@fw/logger": "workspace:*",
     "@fw/queue": "workspace:*",
+    "@fw/telemetry": "workspace:*",
     "@fw/tenant": "workspace:*",
     "@fw/transport": "workspace:*",
     "@nestjs/common": "^11.2.7",
@@ -34,6 +35,8 @@
   },
   "devDependencies": {
     "@fw/cli": "workspace:*",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.223.0",
+    "@opentelemetry/sdk-node": "^0.223.0",
     "@types/express": "^5.0.6",
     "@types/node": "^22.0.0",
     "prisma": "^6.3.0",

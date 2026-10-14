@@ -13,6 +13,7 @@
 import { hashArgs } from '@fw/cache';
 import { Logger, getTraceId } from '@fw/logger';
 import { withTimeout } from './async.js';
+import { currentTraceparent, parentFromTraceparent, withConsumerSpan, withProducerSpan } from './trace.js';
 import type { JobRunner, QueueDriverPort } from './driver.port.js';
 import { readIdempotentMeta, readJobHandlerName, type IdempotentMeta } from './decorators.js';
 import { JobNotRegisteredError, JobOptionError, JobTimeoutError } from './errors.js';
@@ -159,7 +160,11 @@ export class QueueService implements JobRunner {
   async dispatch<T>(name: string, payload: T, options: JobOptions = {}): Promise<JobHandle> {
     const record = this.buildRecord(name, payload, options);
     this.driver.ensureQueue(record.queue);
-    await this.driver.enqueue(record);
+    // PRODUCER span：dispatch 期间生成 traceparent 写入记录，随任务过线供消费侧续接链路
+    await withProducerSpan(record.name, record.queue, async () => {
+      record.traceparent = currentTraceparent();
+      await this.driver.enqueue(record);
+    });
     this.metrics.dispatch();
     logger.debug('任务入队', {
       jobId: record.id,
@@ -397,13 +402,16 @@ export class QueueService implements JobRunner {
   /** 调用处理器（带超时与上下文日志） */
   private async invoke(record: JobRecord, entry: HandlerEntry): Promise<void> {
     const ctx = this.buildContext(record);
-    await withTimeout(
-      () => entry.fn(record.payload, ctx),
-      record.timeoutMs,
-      () => {
-        this.metrics.timeout();
-        return new JobTimeoutError(record.name, record.timeoutMs);
-      },
+    // CONSUMER span：从记录 traceparent 续接派发链路（缺失时按活跃上下文/根处理）
+    await withConsumerSpan(record.name, record.queue, parentFromTraceparent(record.traceparent), () =>
+      withTimeout(
+        () => entry.fn(record.payload, ctx),
+        record.timeoutMs,
+        () => {
+          this.metrics.timeout();
+          return new JobTimeoutError(record.name, record.timeoutMs);
+        },
+      ),
     );
   }
 

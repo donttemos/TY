@@ -14,6 +14,7 @@ import { CacheUnavailableError } from './errors.js';
 import { assertLogicalKey, decodeEntry, encodeNegative, encodeValue, tagKeyOf, withPrefix } from './key.js';
 import { LockManager, type LockHandle, type LockOptions } from './lock.js';
 import { CacheMetrics } from './metrics.js';
+import { withCacheSpan } from './trace.js';
 import type { CacheStorePort } from './store.port.js';
 import type { CacheCallOptions, CacheDriverName, CacheMetricsSnapshot, CacheReadResult, CacheRuntimeOptions } from './types.js';
 
@@ -367,7 +368,8 @@ export class CacheService {
   ): Promise<T> {
     const start = Date.now();
     try {
-      return await run();
+      // 缓存插桩漏斗：全部存储操作经 guarded，缓存 span 在此包住一次调用（未启用追踪时为非记录 span）
+      return await withCacheSpan(op, this.store.kind, run);
     } catch (error) {
       this.metrics.error();
       const failOpen = options?.failOpen ?? this.opt.failOpen;

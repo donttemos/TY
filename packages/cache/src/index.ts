@@ -59,3 +59,6 @@ export type {
   CacheReadResult,
   CacheRuntimeOptions,
 } from './types.js';
+
+// ---------- 链路追踪插桩（M8 T-M8-06） ----------
+export { withCacheSpan } from './trace.js';

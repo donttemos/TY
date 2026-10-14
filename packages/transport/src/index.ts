@@ -54,6 +54,9 @@ export {
 // ---------- 异步工具 ----------
 export { delay, withTimeout } from './async.js';
 
+// ---------- 链路追踪插桩（M8 T-M8-06；也可供业务自定义 span 使用） ----------
+export { extractTraceparent, injectTraceparent, withClientSpan, withServerSpan } from './trace.js';
+
 // ---------- 类型 ----------
 export type {
   CallOptions,

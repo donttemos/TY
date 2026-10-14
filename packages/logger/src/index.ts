@@ -17,5 +17,6 @@ export {
   patchRequestContext,
   getTraceId,
   getSpanId,
+  setSpanContextProvider,
 } from './context.js';
 export type { RequestContext } from './context.js';

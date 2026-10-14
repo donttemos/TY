@@ -52,6 +52,12 @@ export interface TransportEnvelope {
   sentAt: number;
   /** 调用方超时（毫秒）；处理方同步作为执行上限 */
   timeoutMs: number;
+  /**
+   * W3C traceparent 头（M8 T-M8-06 链路追踪）：调用方发起时的活跃上下文序列化，
+   * 处理方据此提取父上下文续接同一 traceId（TC-TNT-006 跨服务链路）。
+   * 未启用追踪或注入了空载体时缺省；处理方按根 span 处理。
+   */
+  traceparent?: string;
 }
 
 /** 序列化后的错误（跨进程回传） */

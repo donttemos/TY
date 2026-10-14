@@ -24,6 +24,7 @@ allowBuilds:
   esbuild: true
   msgpackr-extract: set this to true or false
   prisma: true
+  protobufjs: set this to true or false
   vue-demi: false
 
 # 依赖漏洞修复（pnpm 11 起 overrides 写在 workspace 文件里，package.json 的 pnpm 字段已不再读取）

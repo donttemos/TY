@@ -11,6 +11,7 @@
  * @modified 2026-10-13 donttemo M7 接入 QueueModule（memory 默认）+ 队列就绪探针 + 队列演示模块
  * @modified 2026-10-13 donttemo M8 接入 TenantModule（默认单租户模式；TENANT_ENABLED 一改即切多租户）
  * @modified 2026-10-14 donttemo M8 接入 TransportModule（in-process 默认）+ 传输就绪探针 + 传输演示模块
+ * @modified 2026-10-14 donttemo M8 T-M8-06 接入 TelemetryModule（OTEL_ENABLED=false 零开销）
  * @module example-api
  */
 import { Module } from '@nestjs/common';
@@ -18,6 +19,7 @@ import { CacheModule, createCacheReadinessProbe } from '@fw/cache';
 import { DB_CLIENT } from '@fw/db';
 import { FwCoreModule } from '@fw/core';
 import { QueueModule, createQueueReadinessProbe } from '@fw/queue';
+import { TelemetryModule } from '@fw/telemetry';
 import { TenantModule } from '@fw/tenant';
 import { TransportModule, createTransportReadinessProbe } from '@fw/transport';
 import { AppAuthModule } from './modules/auth/app-auth.module.js';
@@ -53,6 +55,9 @@ export const transportReadinessProbe = createTransportReadinessProbe();
     // 多租户（M8）：默认 TENANT_ENABLED=false（单租户模式，解析直接短路）；
     // 冒烟与多租户部署通过环境变量一改即切，业务代码零改动（PRD-008 FR-01）
     TenantModule.forRoot({ store: PrismaTenantStore, inject: [DB_CLIENT] }),
+    // 链路追踪（M8 T-M8-06 / PRD-008 FR-07）：默认 OTEL_ENABLED=false（零开销，SDK 为 optional peer）。
+    // 接追踪时置 OTEL_ENABLED=true + OTEL_EXPORTER_URL，并安装 @opentelemetry/sdk-node 与导出器
+    TelemetryModule.forRoot(),
     AppAuthModule,
     DemoModule,
     CacheDemoModule,

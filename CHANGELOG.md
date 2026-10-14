@@ -2,7 +2,7 @@
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
-> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；M7 队列与定时任务（PRD-007）已完成实现与全量验收（含真实 Redis 失速恢复演练 TC-JOB-008，见 docs/94-queue-stall-drill.md），未发版；**M8 多租户与规模化演进（PRD-008）进行中：T-M8-01 租户上下文 / T-M8-02 dedicated 独立库路由 / T-M8-04 组织架构与数据权限四档 / T-M8-05 transport 切换已完成（冒烟 48/48 + 17/17）**；运行时已升级 NestJS 11 / Express 5，dev 工具链升至 vitest 4 / vite 8，**`pnpm audit` 生产与 dev 全量零漏洞**。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
+> **当前状态：v0.1.0 已发布（2026-10-13）** —— 含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层；M5 管理后台前端（PRD-005）与 M6 CRUD 代码生成器（PRD-006）已完成实现与验证，未发版；M7 队列与定时任务（PRD-007）已完成实现与全量验收（含真实 Redis 失速恢复演练 TC-JOB-008，见 docs/94-queue-stall-drill.md），未发版；**M8 多租户与规模化演进（PRD-008）进行中：T-M8-01 租户上下文 / T-M8-02 dedicated 独立库路由 / T-M8-04 组织架构与数据权限四档 / T-M8-05 transport 切换 / T-M8-06 OpenTelemetry 链路追踪已完成（冒烟 48/48 + 17/17 + 14/14）**；运行时已升级 NestJS 11 / Express 5，dev 工具链升至 vitest 4 / vite 8，**`pnpm audit` 生产与 dev 全量零漏洞**。验收结论与证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
 
 ## 版本与变更规则
 
@@ -16,7 +16,7 @@
 
 ### Added（M8 多租户与规模化演进，2026-10-14）
 
-> PRD-008 进行中：T-M8-01（租户上下文与 shared 隔离）、T-M8-02（dedicated 独立库路由）、T-M8-04（组织架构与数据权限四档）与 T-M8-05（transport 切换）已完成实现与验证，未发版。
+> PRD-008 进行中：T-M8-01（租户上下文与 shared 隔离）、T-M8-02（dedicated 独立库路由）、T-M8-04（组织架构与数据权限四档）、T-M8-05（transport 切换）与 T-M8-06（OpenTelemetry 链路追踪）已完成实现与验证，未发版。
 
 - **`@fw/tenant`（新框架包）**：三级回退租户解析（子域名 → 请求头 `X-Tenant-Id` → JWT claim，顺序与各级开关可配，PRD-008 §9 定稿）+ TTL 缓存 + fail-closed（缺失/不存在/停用/过期租户 → 403/4001 `TENANT_INVALID`）。
   - **上下文透传**：解析结果经 `@fw/logger` AsyncLocalStorage 传递（`tenantId` / `tenantIsolation` / `tenantDbUrl`），日志自动携带 `tenantId`；dedicated 连接串仅进程内传递，禁入日志/审计。
@@ -39,6 +39,18 @@
   - **声明式注册与客户端代理**：`@TransportHandler('demo-transport.echo')` 类装饰器 + 启动期 `scanTransportHandlers` 扫描 Nest 容器（对齐 `@JobHandler`）；`createTransportProxy<T>(transport, prefix)` 以 Proxy 把端口方法映射为 `<前缀>.<方法名>` 调用（NON_METHOD_PROPS 黑名单 + 哑构造器，防生命周期钩子与序列化误触发）。
   - **配置**：`@fw/config` 新增 7 个 `TRANSPORT_*` 键（driver / url / prefix / timeoutMs / role / instanceId / shutdownTimeout）；`tcp` / `kafka` 仅预留不入枚举（非法值启动即失败）；redis 缺 `TRANSPORT_URL` 时回退 `CACHE_URL`，两者皆缺**启动即失败**（配置守卫，与 M7 一致）；ioredis 为 optional peerDependency 懒加载，in-process 驱动零 Redis 依赖。
 - **example-api 传输演示模块**（`demo-transport`）：`EchoPort` 端口契约 + `ECHO_PORT` 代理工厂（`@TransportHandler('demo-transport.echo')` 提供方）+ `/api/v1/demo-transport/echo`（返回 callerId，冒烟据此判定跨进程）与 `/api/v1/demo-transport/stats`（driver / role / 地址 / 调用与处理计数）；错误映射：BizError 原样 / 超时与驱动不可用→9002 / 未注册→1002 / 其它→9001。
+- **`@fw/telemetry`（新框架包，T-M8-06，PRD-008 FR-07 / TC-TNT-006）**：OpenTelemetry 链路追踪——traceId 贯穿 HTTP/DB/缓存/队列/传输，导出 OTLP，日志自动注入 traceId/spanId。
+  - **双轨依赖模式**（沿用 M7 ioredis 先例）：`@opentelemetry/api` 为轻量硬依赖（未装 SDK 时全局 no-op，span 非记录态零开销）；`@opentelemetry/sdk-node` + `@opentelemetry/exporter-trace-otlp-http` 为 optional peerDependency 懒加载。**插桩点与框架包解耦**：db / cache / queue / transport 各自只 `import { trace, propagation } from '@opentelemetry/api'`，与负责 SDK 装配的 `@fw/telemetry` 经全局 tracer provider 解耦。
+  - **`TelemetryModule.forRoot()`**：按 `OTEL_ENABLED` 装配 SDK（未启用全短路，零开销）；`register({ propagator })` 显式注册 W3C traceparent + baggage 组合传播器（`register()` 不装默认传播器，不注册则跨进程 inject/extract 静默变 no-op）；资源含 `service.name`（缺省 `fw-<APP_ENV>`）与 `service.version`；`onModuleDestroy` flush 在途 span 后 shutdown。
+  - **尾采样处理器**（`RatioErrorSamplingProcessor`）：SDK sampler 保持 AlwaysOn（全记录），`onEnd` 决策导出——错误 span（status=ERROR 或 exception 事件）全采；其余按 traceId 低 8 位十六进制归一化与 `sampleRatio` 比较，**同一 traceId 决策恒定**（同链路跨服务不出现半链路）。默认采样率 10%。
+  - **HTTP 中间件**：每请求一个 SERVER span，父上下文三级解析（标准 `traceparent` → 框架自有 `X-Trace-Id` 合成远端父 → 根）；span 的 traceId/spanId 回写 `@fw/logger` ALS 与 `X-Trace-Id` 响应头（日志 / trace / 响应头三者同 ID），响应 finish 时按路由模板刷新 span 名（`HTTP GET /:id`），5xx 记 ERROR（4xx 不记，错误全采据此生效）。工厂 `createOtelExpressMiddleware({ enabled })` + `OTEL_MIDDLEWARE` 令牌（对齐 `@fw/tenant` 模式），经 bootstrap `beforeListen` 钩子无条件注册。
+  - **日志 span 桥接**：`registerLoggerSpanBridge()` 使 `@fw/logger` 输出的每条日志自动带当前活跃 span 的 traceId/spanId。
+  - **跨进程传播（transport）**：调用方 `call` 包 CLIENT span，redis 驱动把活跃上下文 inject 成 `traceparent` 写入 `TransportEnvelope`，处理方 extract 后包 SERVER span——父子跨进程成立（in-process / redis 同一语义）。
+  - **异步传播（queue）**：`dispatch` 包 PRODUCER span 并把 traceparent 写入 `JobRecord.traceparent`（随任务过线），`invoke` 从记录提取父上下文包 CONSUMER span——任务执行续接派发链路（跨进程 / 跨重试亦可关联）。
+  - **DB / 缓存插桩**：`@fw/db` 的 `$allOperations` 漏斗包 CLIENT span（`db.query <Model>.<op>`，属性 db.system/db.operation/db.collection.name/db.query.duration_ms）；`@fw/cache` 的 `guarded` 守卫点包 CLIENT span（`cache.<op>`，属性 db.system=cache/cache.operation/cache.driver）——均只依赖 api 的 no-op 语义，未启用追踪时零行为变化。
+  - **配置**：`@fw/config` 新增 5 个 `OTEL_*` 键（enabled / serviceName / exporterUrl / sampleRatio / sampleErrors）；`OTEL_ENABLED=true` 但缺 `OTEL_EXPORTER_URL` 时**启动即失败**（不静默丢 span），与 M7/M8 配置守卫一致。导出形态为 OTLP/HTTP JSON（`content-type: application/json`）。
+- **example-api 追踪装配**：`TelemetryModule.forRoot()` 接入 `AppModule`；bootstrap `beforeListen` 按 `OTEL_MIDDLEWARE` → `TENANT_MIDDLEWARE` 顺序注册（追踪 span 先建立，租户解析并入链路）；`demo.module` 的租户数据源默认路径改用插桩 client（避免 dedicated 路由旁路 DB span）。
+
 
 ### M8 验证（2026-10-14，全量实跑）
 
@@ -47,6 +59,10 @@
 - `@fw/transport` 单测 **78/78**，覆盖率 **lines 95.09% / functions 93.82% / statements 94.33% / branches 90.54%**（门禁 85/85/65/85）：fake redis 经 `createClient` 注入驱动，覆盖 in-process 本地分发与角色语义、redis 协议往返（键命名/信封字段/应答清理/60s 兜底 TTL）、错误跨进程重建、无处理方与处理方双路径超时、启动后注册补起消费循环、坏消息丢弃、启动期 URL 守卫、装配与探针绑定。
 - `@fw/db` 单测 **67/67**（新增 `TenantDataSource` 14 项：选路回退 / 缓存复用 / LRU 与空闲淘汰 / 创建失败重试 / 停机断开 / Repository 三条路径选路）；`@fw/logger` 17/17、`@fw/tenant` 19/19 全绿；**`@fw/auth` 108/108**（新增四档解析 / 越权校验 / 闭包算法 14 项）；`@fw/config` 10/10。
 - 回归：队列冒烟 22/22、缓存冒烟 12/12、鉴权冒烟 25/25、多租户冒烟 48/48、传输冒烟 17/17；文件头门禁 313、裸 SQL 门禁 225。
+- 链路追踪冒烟 `smoke-telemetry.mjs` **14/14**（T-M8-06，PRD-008 FR-07 / TC-TNT-006）：**阶段 A 未启用**（服务正常、`X-Trace-Id` 响应头与响应信封 traceId 一致）+ **阶段 B 启用全采**（本地 mock OTLP 收集器收到 SERVER span，traceId 与响应头一致、资源 `service.name` 生效、DB 操作产生 `db.query` 子 span）+ **阶段 C 跨服务同 traceId**（上游 `traceparent` 请求，服务端 SERVER span 复用其 traceId 且父 spanId = 上游 spanId，父子跨进程成立）+ **阶段 D 采样门控**（ratio=0 时普通链路 0 导出且服务不报错）+ **阶段 E 错误全采**（ratio=0 下 5xx 的 ERROR span 仍被导出）+ **阶段 F 配置守卫**（启用但缺 `OTEL_EXPORTER_URL` 启动即失败 exit=1）。使用本地 mock 收集器，无需外部采集端。
+- `@fw/telemetry` 单测 **50/50**，覆盖率 **lines 92.56% / functions 80.18% / statements 97.05% / branches 93.12%**（门禁 85/85/65/85）：options 解析、尾采样（确定性 traceIdRatio / 错误全采 / 边界）、SDK 懒加载形状、span 桥接（有/无 SDK）、HTTP 中间件（根 span / traceparent / X-Trace-Id 归一化与非法回退 / 数组头 / 5xx vs 4xx / 同步异常 / ALS 回写 / 工厂开关）、模块装配（成功 / 失败路径不 close）、服务生命周期（本地 http 收集器端到端 + 部分 mock loader）。
+- 插桩回归（T-M8-06c）：`@fw/db` **70/70**（12 skipped 为三库矩阵，未设 DB_DRIVER 时跳过）、`@fw/cache` **77/77**、`@fw/queue` **138/138**，三包覆盖率均远超门禁、`tsc`/文件头全过；新增 `trace.test.ts`（db 3 例 / cache 4 例 / queue 3 例）验证 DB/缓存/队列 span 名与属性、跨 async 边界父子续接、异常记 ERROR。
+
 
 ### Added（M7 队列与定时任务，2026-10-13）
 
