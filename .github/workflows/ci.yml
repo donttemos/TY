@@ -31,6 +31,10 @@
 #   Prisma 生成的 client 会把「生成时 .env 是否存在」固化进运行期环境解析：CI 原先在 M3 步骤才 cp .env，
 #   而 client 已在更早的构建步生成，导致运行期读不到 DB_URL（seed 报 PrismaClientInitializationError）。
 #   本地已双向复现/验证（无 .env 生成 → seed 失败；带 .env 生成 → seed 通过）
+# @modified 2026-10-14 donttemo v0.2.0 推送后首跑 CI 修复（四）：集成矩阵作业缺框架包构建。
+#   该作业是独立 runner（无 base 的 dist），集成用例经 vitest 从源码运行却 import @fw/* 的包入口，
+#   三库同时报 "Failed to resolve entry for package @fw/logger"。新增「构建框架包」步骤，
+#   用 --filter "@fw/db..." 一次覆盖 @fw/db 及其全部依赖（config/logger/core），避免再维护易漏的手写列表
 # @module ci
 
 name: CI
@@ -231,6 +235,13 @@ jobs:
             pnpm exec prisma generate --schema "prisma/test-schema.${DIALECT}.prisma"
             DB_DRIVER="${{ matrix.db }}" DB_URL="${{ matrix.url }}" node scripts/matrix-db-setup.mjs
           fi
+
+      # 本作业是独立 runner，没有 base 作业产出的 dist；集成用例经 vitest 从源码运行，
+      # 但 import 的是 @fw/* 的包入口（exports → dist）。缺 dist 时 vitest 直接报
+      # "Failed to resolve entry for package @fw/logger"。用 "...过滤器" 一次覆盖 @fw/db 及其全部依赖，
+      # 避免再维护一份易漏的手写包列表。
+      - name: 构建框架包（集成测试依赖其 dist）
+        run: pnpm --filter "@fw/db..." run build
 
       - name: 集成测试 / ${{ matrix.db }}
         env:
