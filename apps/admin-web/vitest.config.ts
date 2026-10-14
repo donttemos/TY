@@ -7,6 +7,8 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo 适配 vite 8（rolldown + oxc）：显式开启 legacy 装饰器，使测试中声明的装饰器类可被正确降级
+ * @modified 2026-10-14 donttemo 注入测试期 VITE_API_BASE_URL：.env.* 被 gitignore，干净环境（CI）缺少
+ *   .env.test 时 token 存储判定为未启用，「无感刷新」3 个用例必挂；改为在 config 内固定，测试不依赖本地 env 文件
  * @module admin-web
  */
 
@@ -39,5 +41,10 @@ export default defineConfig({
     include: ['src/**/__tests__/**/*.test.ts'],
     globals: true,
     setupFiles: ['./src/test-setup.ts'],
+    // 测试期环境变量：token 存储是否启用取决于 VITE_API_BASE_URL 是否已定义（见 src/utils/token.ts
+    // 的 storageEnabled），而 .env.* 在仓库被 .gitignore 忽略（仅保留 .env.example）。干净环境（CI）
+    // 没有 .env.test，会让「无感刷新」相关用例全部走「本地存储未启用」分支而失败。此处显式注入，
+    // 使单测不依赖任何本地 env 文件。
+    env: { VITE_API_BASE_URL: '/api/v1' },
   },
 });
