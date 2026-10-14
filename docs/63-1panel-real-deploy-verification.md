@@ -171,6 +171,30 @@
 - **`.env` 权限**：systemd 以 root 读 `EnvironmentFile`，故 **`600 root:root` 是正确姿势**；但若要以 `fw` 身份手工执行迁移/种子（如本次排障），需临时放宽为 **`640 root:fw`**，否则 `Permission denied`。
 - **`docker exec -i` 会吞掉脚本的标准输入**：以 `ssh ... 'bash -s' < script` 方式远程执行脚本时，脚本里的 `docker exec -i psql ...` 会把**后续脚本文本当成自己的 stdin 读走**，导致脚本中途截断且不报错。加固：所有 `docker exec` 加 `</dev/null`。
 - **已存在的 `framework_test` 库**：目标机上本就有一个含 12 张同名表的数据库（结构与本仓库 schema 一致），说明该机此前跑过同类迁移。本次新建独立库 `fw`，未触碰它。
+- **1Panel 的 Redis 有 `requirepass`**：密码在 `/opt/1panel/apps/redis/redis/.env`。连接串必须写成 `redis://:<密码>@127.0.0.1:6379/<db>`，否则 `NOAUTH` → 缓存降级 → `/ready` 503。
+- **`ssl_reject_handshake` 的静默拒绝**：默认站开启了 `ssl_reject_handshake on`，**不带 SNI（或用 IP 作 SNI）连 443 会被硬拒（`SSL alert 112 unrecognized_name`）且不写访问日志**。排查「访问日志里查不到用户请求」时先想到这一条。
+
+### 3.7 HTTPS 上线后暴露：生产前端构建缺 API 基址，登录返回 405（配置级，最隐蔽的一个）
+
+- **现象**：域名 HTTPS 打开后点「登录」→ `405 Not Allowed`（响应头 `server: openresty`）。
+- **定位过程**（关键在于**先看访问日志而不是猜**）：
+  - 访问日志显示真实浏览器发的是 `POST /auth/login`，**而不是** `POST /api/v1/auth/login` —— 请求路径本身就不对；
+  - 直接复现：`POST /api/v1/auth/login` → `201`，`POST /auth/login` → `405`；
+  - 查部署产物：`grep -ro '/api/v1' <站点>/assets/*.js` 返回 **0 次**。
+- **根因**：`apps/admin-web/.env.production` 被 `.gitignore` 的 `.env.*` 规则排除（仅放行 `.env.example`），而 release 取自 `git archive`（**只含被跟踪的文件**）→ 服务器构建时 `VITE_API_BASE_URL` **缺失** → `axios.create({ baseURL: undefined })` → 请求退化为同源相对路径 `/auth/login` → 被静态站 `location /` 接管 → nginx 对静态资源**拒绝 POST** 并返回 405。
+- **同源的次生缺陷**：`token.ts` 的 `storageEnabled()` 借用「`VITE_API_BASE_URL` 是否已定义」作环境哨兵 —— 同一个变量缺失会**连带关闭令牌本地存储**。即使 405 修好，登录成功也会立刻掉线（「记住我」失效、刷新页面即回登录页）。属**变量语义错配**，一并修掉。
+- **修复（三层，缺一层都会复发）**：
+  1. `request.ts`：API 基址按同源反代约定兜底 `import.meta.env.VITE_API_BASE_URL ?? '/api/v1'`；
+  2. `token.ts`：改用专用开关 `VITE_AUTH_STORAGE`（**默认启用**，置 `none` 关闭），不再借无关变量作哨兵；
+  3. `bare-metal-deploy.sh`：前端构建**显式注入** `VITE_API_BASE_URL`（新增 `WEB_API_BASE`，默认 `/api/v1`），并在构建后**断言产物确含该基址**，缺失即中止发布 —— 新增的发布闸门，杜绝「站点能打开但登不进去」的版本上线。
+- **复验（实测）**：
+  - 移走 `.env.production` 后本地构建，产物含 `var fr=\`/api/v1\``（**修复前为 0 次**）；
+  - 发版脚本断言双向验证：含基址 → 通过；查一个不存在的基址 → 正确报缺失（会触发 `die` 中止发布）；
+  - 公网验收：站点 `assets/request-*.js` 内出现 `/api/v1`，`POST /api/v1/auth/login` 返回 `code:0`，`/ready` 四项全 ok；
+  - `admin-web` 单测 29/29（含「无感刷新」3 例，改动后不再依赖任何 env 变量）。
+
+> **可复用的教训**：任何**构建期输入**都不能只存在于被 `gitignore` 的文件里。`git archive` / CI 干净检出取不到它，本地却永远正常 —— 这类缺陷**本地全绿、只在真机或 CI 上炸**。凡是「构建产物应当包含的常量」，都应同时具备**代码内默认值**与**产物断言**。
+
 
 ---
 
@@ -186,9 +210,15 @@
 | 6 | Node 二进制兼容性 | ✅ v22.22.2 正常启动运行 |
 | 7 | 应用内存与 `MemoryMax=1024M` 的匹配度 | ✅ 实测 RSS≈130 MB / cgroup 72 MB，余量充足（业务量上涨仍需持续观察） |
 
+### 后续轮次已消除的未验证项
+
+- **HTTPS 证书签发** —— 已完成：`cs.donttemo.top` 经 certbot（apt 内网源 1.21.0）webroot 签发 Let's Encrypt 证书，
+  实测 `CN=cs.donttemo.top`、有效期至 2027-01-12；`certbot.timer` 已激活且 `renew --dry-run` 通过，
+  续期后由 `renew_hook`（`/usr/local/bin/fw-cert-deploy.sh`）把证书同步进**容器可见**路径并热加载。
+  80 强制跳 443、TLS 1.2/1.3、HTTP/2 协商均正常。上线后暴露的 405 缺陷见 §3.7。
+
 ### 仍然未验证（诚实清单）
 
-- **HTTPS 证书签发**：本次以公网 IP 走 HTTP 验证全链路；**未执行** Let's Encrypt 签发（需用户提供已解析的域名，且 80 端口需对 ACME 可达）。
 - **`fw-worker@.service` worker 进程**：本次只跑了 API 主进程（`TRANSPORT_DRIVER=in-process` 单进程模式），**未验证**跨进程 worker 单元。
 - **Redis Cluster**：`CACHE_DRIVER=redis-cluster` 仍未在真实集群上验证（与 62 文档 §12 一致）。
 - **1Panel 面板 UI 建档**：站点与反代是**手工写配置文件**实现的，未走面板「创建网站」流程；面板侧的「网站」列表里不会出现该站点。
@@ -201,6 +231,9 @@
 1. 服务器上**先加 swap**（`2G`），再装 Node（**用 npmmirror 并显式指定 v22.22.2**，不要用 `latest-v22.x`）。
 2. `npm config set registry https://registry.npmmirror.com`（Node 前缀 / root / fw 三处）。
 3. 代码**从本地 `git archive` 打包投送**，不要在服务器上 clone（`github.com` 不可达）。
+   ⚠️ `git archive` **只含被跟踪的文件** —— `.env.*` 一律不在包内。凡「构建产物应包含的常量」
+   （最典型是前端 API 基址）都必须有**代码内默认值**，并由发版脚本**注入 + 断言产物**，否则会得到
+   「站点能打开但登不进去」（登录 405）的构建（见 §3.7）。
 4. PostgreSQL 用 **PG 变体 schema**（`prisma/pg/schema.prisma`），`prisma generate` 必须在 **Linux 上**执行。
 5. `pnpm install` → `prisma generate` → **构建** → **重链 bin（关键）** → `db:migrate` → `db:seed`。
 6. `.env` 权限 `600 root:root`；以 root 执行迁移/种子，或临时 `640 root:fw`。

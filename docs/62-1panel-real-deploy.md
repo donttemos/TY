@@ -321,12 +321,22 @@ journalctl -u fw-api -n 50 --no-pager
 
 ### 7.3 前端 API 地址
 
-前端构建时的 `VITE_API_BASE_URL` 决定它请求哪里：
+前端在**构建时**由 `VITE_API_BASE_URL` 决定请求前缀，发版脚本的参数名叫 `WEB_API_BASE`（默认 `/api/v1`，与后端控制器前缀一致）：
 
-- **方案 A（单域名）**：留空或设为 `/api`（同源，无 CORS）
-- **方案 B（双域名）**：必须设为 `https://api.example.com`，且后端要放行该 Origin
+- **方案 A（单域名，推荐）**：保持默认 `/api/v1`，同源无 CORS
+- **方案 B（双域名）**：`WEB_API_BASE=https://api.example.com/api/v1`，且后端要放行该 Origin
 
-> 前端构建发生在发版脚本里（`pnpm --filter admin-web run build`），环境变量在**构建时**注入。要改 API 地址需重跑发版。
+> **⚠️ 这一项踩过坑，务必理解**：`apps/admin-web/.env.*` 被 `.gitignore` 排除，而 release 取自 `git archive`（只含跟踪文件）——
+> 服务器上**根本没有** `.env.production`。一旦 `VITE_API_BASE_URL` 缺失，axios 的 `baseURL` 会退化为 `undefined`，
+> 请求变成 `/auth/login` 这类同源相对路径，被静态站接管，nginx 对静态资源**拒绝 POST 并返回 405**，
+> 表现为「站点能打开、但一点登录就 405」。因此本框架做了**三重保障**：
+> 1. 代码内兜底 `import.meta.env.VITE_API_BASE_URL ?? '/api/v1'`（`src/utils/request.ts`）；
+> 2. 发版脚本构建时**显式注入** `WEB_API_BASE`；
+> 3. 发版脚本构建后**断言产物确含该基址**，缺失即中止发布。
+>
+> 排查同类问题的正确姿势：先看 **nginx 访问日志里浏览器实际请求的路径**，再 `grep -ro '/api/v1' <站点>/assets/*.js`
+> 看产物里有没有基址——**不要靠猜**。
+
 
 ---
 
@@ -406,6 +416,8 @@ sudo tar czf /opt/1panel/backups/fw-env-$(date +%F).tar.gz -C /opt/fw/shared .en
 | 应用报 `Connection refused` 连的是容器名 | 把容器名写进了 `DB_URL` | 改成 `127.0.0.1`（应用在宿主机上） |
 | 浏览器 502 | OpenResty 连不到上游 | 确认 OpenResty 是 host 网络；`curl 127.0.0.1:3000/health` 本机是否通；反代地址是否写成了容器内不可达的地址 |
 | 浏览器 404 但 API 正常 | 前端产物没同步或 SPA 回退没配 | 检查 `WEB_SYNC_DIR` 是否有 `index.html`；确认 §A 的 `location /` 片段已粘入 |
+| **点登录报 405 Not Allowed** | **前端产物缺 `VITE_API_BASE_URL`**，请求退化成了 `/auth/login` 打在静态站上 | 见 §7.3：`grep -ro '/api/v1' <站点>/assets/*.js` 应为 ≥1 次；缺则重跑发版（脚本会注入并断言） |
+| 访问日志里查不到用户的请求 | 客户端**不带 SNI**（或用 IP 作 SNI）连 443，被默认站 `ssl_reject_handshake on` 硬拒，**不写日志** | 用 `openssl s_client -connect <host>:443 -servername <域名>` 复现；确认客户端/中间层保留 SNI |
 | 后台刷新页面 404 | 缺 `try_files ... /index.html` | 补上 §A 的 SPA 回退片段 |
 | 上传文件 413 | `client_max_body_size` 没加 | 在 http 层加 `client_max_body_size 16m` |
 | 服务被反复重启 | 触发了 `MemoryMax` 的 cgroup OOM | `journalctl -u fw-api \| grep -i oom`；按 §8 停掉多余数据库或放宽 `MemoryMax` |
