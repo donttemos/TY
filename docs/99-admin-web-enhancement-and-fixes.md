@@ -1,14 +1,15 @@
 # 管理后台前端功能补充与缺陷修复方案
 
-> 版本 v0.4（待发布）｜ 状态：**已实施（前端 + 相关后端小改，含验证证据）** ｜ 关联：[PRD-005 管理后台模板](./prd/prd-005-admin-template.md) ｜ [原型与 UI 规范](./25-ui-prototype.md) ｜ [API 文档](./40-api-spec.md) ｜ [C-06 前端契约](./contracts/api-web.ts) ｜ [C-06 契约定稿记录](../CHANGELOG.md) ｜ 更新：2026-10-14 ｜ 负责人：donttemo
+> 版本 v0.4（待发布）｜ 状态：**已实施 + 已在真机（1Panel / `106.55.32.251`）验证** ｜ 关联：[PRD-005 管理后台模板](./prd/prd-005-admin-template.md) ｜ [原型与 UI 规范](./25-ui-prototype.md) ｜ [API 文档](./40-api-spec.md) ｜ [C-06 前端契约](./contracts/api-web.ts) ｜ [C-06 契约定稿记录](../CHANGELOG.md) ｜ 更新：2026-10-14 ｜ 负责人：donttemo
 >
 > 定位：本轮把管理后台前端从「文档标注已交付」拉到「**真机可用的同源状态**」。所有缺陷均在代码层复核过根因
 > （后端权限码常量、菜单种子、`import.meta.glob` 解析规则、mock 与真机差异、路由注入与登录态生命周期），
 > 并按 PRD-005 的四个交付面（页面清单 / 组件规范 / 交互规范 / 兼容要求）给出**修复后预期行为**与验证方式。
 >
 > 一句话结论：**P0 缺陷集中在「路由与权限的数据源在前后端不同源」**——本地 mock 全绿、真机才炸。
-> v0.4 追加 4 项（BUG-16~19），其中 **BUG-16「点进功能页侧边栏消失」与 BUG-19「换号后仍是上一个账号的菜单」**
-> 属布局外壳与登录态生命周期，均已带**可失败的反向验证**。
+> v0.4 追加 5 项（BUG-16~20），其中 **BUG-16「点进功能页侧边栏消失」与 BUG-19「换号后仍是上一个账号的菜单」**
+> 属布局外壳与登录态生命周期，均已带**可失败的反向验证**；v0.4.1 追加 BUG-21（静态路由表重名僵尸记录）。
+> 真机验证方式见 **§8.1**（真实 Chromium 端到端 25/25），数据面复核见 `verify-webfix7.sh` 24/24 与 `verify-c06.sh` 27/27。
 
 ## 1. 现状核对：文档承诺 vs 代码实现
 
@@ -76,6 +77,8 @@
 | **BUG-18** | **P2** | mock 下永远看不出「隐藏菜单仍进侧边栏」类缺陷 | 在菜单管理里把某菜单设为隐藏，用 mock 跑 | mock 的 `GET /auth/menus` 比真实后端**多做了一层 `visible` 过滤**，而真实后端只按权限码过滤、可见性由前端剪枝 → 前端 `visibleMenus()` 剪枝路径在 dev 下**永不执行**，「mock 全绿、真机炸」的经典温床 | mock 去掉 `visible` 过滤，与后端行为对齐（可见性在前端剪枝）；`订单中心` 菜单标注为 mock-only 演示菜单（生产 seed 已移除该分支） | ✅ |
 | **BUG-19** | **P0** | **登出后换另一个账号登录，侧边栏仍显示上一个账号的菜单**，且上一个账号有权限的页面（如用户管理）仍可路由进入（渲染别人的页面，只是接口 3002） | 同一浏览器标签页内：admin 登录 → 退出登录 → 用 alice 登录（不刷新页面） | ① 守卫判据只有 `if (!permission.routesAdded)`，而 `routesAdded` **登出后从未复位**——`permission.reset()` 在生产代码里**没有任何调用点**（只有单测调用）→ 换号后整个「加载菜单 + 注入路由」步骤被跳过；② 动态路由也不会随登出自动出表 | ① 判据改为「**菜单所属用户 id** 是否变化」（`menusOwnerId`）：登出与换号都能自愈，即使多入口登出（顶栏、个人中心、被踢下线）也无需逐一改；② 重建时传入上一轮注入的记录名，先 `removeRoute` 再注入 → 上一个账号的路径彻底出表，直输 URL 落 403（`TC-WEB-001 未授权路径不进路由表`）；③ `reset()` 刻意保留 `injectedRouteNames`（否则换号时无从移除旧记录） | ✅ |
 | **BUG-20** | **P2** | 换号后**标签页仍列出上一个账号开过的标签**（点进去落 403） | 与 BUG-19 同场景；标签本地持久化在 `localStorage` | `TagsView` 所有账号共用一个存储键 `fw_admin_tags`，既不隔离也不清理 → 新账号继承旧账号的标签，且两边互相覆盖写入 | 存储键按用户隔离为 `fw_admin_tags:<用户 id>`，并让键随登录用户变化 → 换号即自动切到该账号自己的标签集合（首个账号视为空）；不做旧键迁移（无法判断标签归属，迁移等于把上一个账号的标签泄露给新账号）。另修正装配顺序：`restore()` 必须放在持久化 watcher **之后**，否则初始状态不写回本地（刷新即丢标签） | ✅ |
+
+| **BUG-21** | **P2** | 静态路由表里 **`/redirect` 存在两条同名同路径记录** | 阅读 `src/router/routes.ts`；或调试标签页「刷新」时观察 | 上一轮「`/redirect` 从顶层移入布局内」只做了一半：**新增了布局内记录，却漏删顶层同名记录**。vue-router 在注册时会把同名记录**静默移除**（先者被后者覆盖），因此运行时表现为正常、只留一条永远不可达的僵尸定义，且与文件头注释「从顶层移入布局内」自相矛盾 | 删除顶层 `/redirect`，仅保留布局内那一条；新增断言「静态路由表内不得存在同名或同路径记录」。**注意首版断言写在 `router.getRoutes()` 上是假绿** —— 实测故意加回重名后它仍然通过（vue-router 已静默去重），改为断言静态定义表 `constantRoutes` 本身后，加回重名 → FAIL、去掉 → PASS | ✅ |
 
 ## 4. 交互流程（涉及改动的关键路径）
 
@@ -159,7 +162,7 @@
 - `src/components/CrudTable/types.ts`：新增 `permissionActions`、`FormField.multiple`。
 - `src/components/FormDialog/index.vue`：下拉支持 `multiple`。
 - `src/store/permission.ts`：`component` 归一化解析；`KNOWN_SYSTEM_PATHS` 与真实菜单对齐；`visibleMenus()` 递归剪枝；新增 `menusOwnerId` / `injectedRouteNames`（换号重建，BUG-19）。
-- `src/router/routes.ts`：布局路由具名 `LAYOUT_ROUTE_NAME`；`/redirect` 移入布局内（标签页刷新不再卸载外壳）；导出 `CATCH_ALL_NAME`。
+- `src/router/routes.ts`：布局路由具名 `LAYOUT_ROUTE_NAME`；`/redirect` 移入布局内（标签页刷新不再卸载外壳）；导出 `CATCH_ALL_NAME`；**删除顶层重复的 `/redirect` 记录**（BUG-21）。
 - `src/router/inject.ts`（**新增**）：`injectDynamicRoutes()` —— 动态路由挂到布局之下 + 同路径去重 + 换号时先移除上一轮记录。
 - `src/router/guard.ts`：改用 `injectDynamicRoutes`（BUG-16）；抽出纯函数 `resolveFallback()` 修掉 403 死代码（BUG-17）；按 `menusOwnerId` 判定换号重建（BUG-19）。
 - `src/router/__tests__/layout-nesting.test.ts`（**新增**）：16 条护栏 —— 匹配链含 Layout、静态路由去重、`/redirect` 在布局内、公开页无外壳、真实挂载出 `.fw-sidebar`、换号后旧页面落 403、`resolveFallback` 三分支。
@@ -169,6 +172,8 @@
 - `src/layout/AppMain.vue`：keep-alive 修复。
 - `src/layout/TagsView.vue`：标签存储键按用户隔离 + 修正装配顺序（BUG-20）。
 - `src/layout/__tests__/tags-view.test.ts`（**新增**）：2 条护栏 —— 新账号看不到上一个账号的标签、切回原账号恢复、两端存储键互不污染。
+- `src/router/__tests__/fixtures/real-menus.json`（**新增**）：真机 `GET /api/v1/auth/menus`（admin）**原样转储**的响应 `data` 段，非手写 mock。
+- `src/router/__tests__/real-menus.test.ts`（**新增**）：6 条集成护栏 —— 用**真机菜单数据**跑真实管线（`generateRoutes` → `injectDynamicRoutes`），断言每个菜单页都命中自身记录且匹配链以 `Layout` 开头。专治「mock 形状 ≠ 真机形状」：生成器写法的 `views/<model>/index` 能否解析、目录节点子页是否嵌在布局内。
 - `mock/handlers.ts`：新增 `GET/PUT /auth/profile`；`DELETE /auth/sessions/:id` 补权限校验；`/auth/me` 与 profile 共用视图构造；`/auth/menus` 去掉 `visible` 过滤与后端对齐（BUG-18）。
 - `mock/db.ts`：标注 `订单中心` 为 mock-only 演示菜单。
 - `scripts/smoke-mock.mjs`：新增「个人资料自服务」冒烟段（8 条断言）。
@@ -187,13 +192,16 @@
 | 验证项 | 命令 | 结果 |
 |---|---|---|
 | 前端类型检查 | `cd apps/admin-web && ./node_modules/.bin/vue-tsc --noEmit` | ✅ 通过（0 错误） |
-| 前端单测 | `./node_modules/.bin/vitest run --no-file-parallelism` | ✅ 6 文件 / **48 通过**（含 16 条路由/布局护栏 + 1 条标签页隔离护栏） |
-| **护栏反向验证** | 临时回退修复后复跑同组测试 | ✅ **能失败才算数**：回退 BUG-16 → 3 条 FAIL（含 `.fw-sidebar` 挂载断言）；回退 BUG-19 → 3 条 FAIL；回退 BUG-20 → 1 条 FAIL |
+| 前端单测 | `./node_modules/.bin/vitest run --no-file-parallelism` | ✅ 7 文件 / **55 通过**（16 条路由/布局护栏 + 6 条真机菜单数据集成护栏 + 1 条标签页隔离护栏 + 静态表重名校验） |
+| **护栏反向验证** | 临时回退修复后复跑同组测试 | ✅ **能失败才算数**：回退 BUG-16 → 3 条 FAIL（含 `.fw-sidebar` 挂载断言）；回退 BUG-19 → 3 条 FAIL；回退 BUG-20 → 1 条 FAIL；回退 BUG-21 → 1 条 FAIL；对**真机菜单数据**回退 BUG-16 → 3 条 FAIL |
 | mock 全链路冒烟 | `node scripts/smoke-mock.mjs` | ✅ **65/65 通过**（含新增 8 条自服务断言 + bundle gzip 门禁 311.5 kB / 231.6 kB） |
 | 后端类型检查 | `cd apps/example-api && ./node_modules/.bin/tsc -p tsconfig.json --noEmit` | ✅ 通过 |
-| 文件头门禁 | `node scripts/check-file-headers.mjs` | ✅ 373 个文件通过 |
+| 文件头门禁 | `node scripts/check-file-headers.mjs` | ✅ 375 个文件通过 |
 | 接口一致性 | `node scripts/check-api-parity.mjs` | ✅ 前端调用面全部有对应后端路由 |
-| 真机回归（1Panel / 裸机） | 见 [1Panel 实测手册](./63-1panel-real-deploy-verification.md)：重新发版 + `pnpm db:seed` + 重登 | ⛔ **未执行**（本轮未连真机；改动含种子，需重跑种子后按 §4.1 复验菜单与页面） |
+| 真机部署 + 本轮验收 | `106.55.32.251`：重建前端产物 → 同步 `/opt/1panel/www/fw-web` → `wb-ssh/verify-webfix7.sh` | ✅ **24/24 通过**（产物为按用户隔离键的新 TagsView、站点 200、后端 `/ready` ok 且未重启、菜单树 8 条路径齐全且无 `/order` 死链、`/auth/profile` 可达） |
+| 真机全量回归 | `wb-ssh/verify-c06.sh`（C-06 契约面 27 项） | ✅ **27/27 通过**，无回退 |
+| **真机浏览器端到端** | `wb-ssh/shots/`（真实 Chromium 经 SSH 动态转发访问 `https://cs.donttemo.top`） | ✅ **25/25 通过**（见下方 §8.1） |
+| 真机菜单数据 × 真实管线 | `vitest run src/router/__tests__/real-menus.test.ts` | ✅ **6/6 通过**（夹具为真机 `/auth/menus` 原样转储；反向验证：撤掉修复 → 3 条 FAIL） |
 
 **BUG-16 的原始证据（修复前实测）**：以现有注入方式构造路由表后 `router.resolve('/system/users').matched` =
 `["/system","/system/users"]` —— 匹配链里没有 `Layout`，即外壳未被挂载。修复后为
@@ -210,10 +218,30 @@
 > cd ../.. && node scripts/check-file-headers.mjs && node scripts/check-api-parity.mjs
 > ```
 
+### 8.1 真机浏览器端到端实测（2026-10-14，`106.55.32.251`）
+
+方法：真实 Chromium（Playwright 内核，`chromium-1223`）访问 `https://cs.donttemo.top`，**网络经 SSH 动态转发从远端出网**
+（本机直连 `106.55.32.251:443` 的 TLS 握手被本地网络重置，出网本身正常）。断言全部限定在 `.fw-sidebar` **内部** ——
+页面正文里也有「角色权限」「审计日志」等快捷入口卡片标题，用全页文本断言会误判（首版脚本就踩了这个坑）。
+
+| 组 | 断言 | 结果 |
+|---|---|---|
+| 1 登录 | 未登录访问站点 → 重定向 `/login`；admin 登录落 `/dashboard`；侧边栏与标签页渲染 | ✅ |
+| 2 **报障路径** | **点击**「系统管理 → 用户管理」→ URL `/system/users`，且侧边栏 / 顶栏 / 标签页**全部仍在**；侧边栏实测宽度 200px；菜单含 6 个系统管理子项与「队列管理」、无「订单中心」 | ✅ |
+| 3 冷启动路径 | 直输 `/system/roles`、`/system/menus`、`/system/dict`、`/system/audit-logs`、`/system/queue`、`/demo-items`：URL 未被改写、侧边栏在、面包屑渲染出该页菜单名 | ✅ 6/6 |
+| 4 换号登录 | admin（标签页已积累 7 个标签）→ 退出 → alice 登录：alice 侧边栏文本为 `控制台 / 系统管理 / 用户管理 / 字典管理`，**admin 独有的「角色权限 / 菜单管理 / 审计日志 / 队列管理 / DemoItem管理」全部消失**；标签页只剩「工作台」 | ✅ |
+| 5 JS 运行时报错 | 全程无 `pageerror` 与非资源类 `console.error` | ✅ |
+
+截图证据：`wb-ssh/shots/01-system-users.png`（功能页外壳完整）、`page_system_*.png`（6 个功能页）、`02-alice-after-switch.png`（换号后）。
+
+> 实测中出现的 3 条 `403`（`GET /permissions`、`/roles`、`/audit-logs?pageSize=1`）**不是本轮回归**：工作台视图
+> （`views/dashboard/index.vue`，v0.1.0 起未改动）对低权限账号无条件并发请求这四个端点，故 alice 登录后必然 403。
+> 这正是 §9 第 4 项登记的「E-05 工作台统计三态」体验债 —— 已实测确认现象，本轮**未修**（需产品先定降级呈现方式）。
+
 ## 9. 遗留与后续（按优先级）
 
 1. **必须配套后端**：N-01 租户管理、N-02 异步导出、BUG-15 排序参数消费、N-03 整页 403（纯前端可先做）。
-2. **发版注意**：本轮改了菜单与角色种子 → 真机必须**重跑 `db:seed` 并让用户重新登录**（动态路由与权限码均为登录时快照）；权限码新增 `dict:read` 授予普通角色后，已有角色的授权记录不会被自动补齐，需在角色页保存一次或在种子中确认。
+2. **发版注意（分两段）**：① **BUG-01~15 那一段**改了菜单与角色种子 → 真机必须**重跑 `db:seed` 并让用户重新登录**（动态路由与权限码均为登录时快照）；权限码新增 `dict:read` 授予普通角色后，已有角色的授权记录不会被自动补齐，需在角色页保存一次或在种子中确认。② **BUG-16~21 这一段（含 §8.1 真机实测的交付内容）只改了前端与前端 mock**，不需要重跑种子、不需要重新登录 —— 只需重新构建 `apps/admin-web` 并把 `dist/` 同步到站点目录（本轮做法：从 `git archive` 打包 → `/opt/fw/web-fix/<ts>` 建依赖与构建 → `rsync -a --delete` 到 `/opt/1panel/www/fw-web`；后端进程、`/opt/fw/current` 软链与数据库均未触碰）。
 3. **产品待决策**：`GET /dict/:code` 是「登录即可读」还是「必须 `dict:read`」——本轮的折中是「授权 + 前端降级」；若后续放宽端点权限，请同步 `docs/40-api-spec.md` §3.6 与 `PERM.DICT_READ` 的说明。
 4. **体验债**：E-06 菜单图标/权限码选择器、E-05 工作台统计三态、死信列表无分页（后端 `listDeadLetters` 全量返回，规模大时需加窗口）。
 5. **标签页迁移说明（BUG-20 的副作用，可接受）**：标签存储键由 `fw_admin_tags` 改为 `fw_admin_tags:<用户 id>`，**不做旧键迁移**

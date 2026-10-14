@@ -80,14 +80,51 @@
   刻意不做旧键迁移（无法判断标签归属，迁移等于把上一个账号的标签泄露给新账号）。同时修正装配顺序：
   `restore()` 须在持久化 watcher **之后**执行，否则初始状态不写回本地（刷新即丢标签）。
 
+### Fixed（真机验证：静态路由表重名僵尸记录 + 清理，2026-10-14）
+
+> 真机验证前置核对时发现：上一轮「`/redirect` 从顶层移入布局内」只做了一半 —— 新增了布局内记录，
+> 却**漏删顶层同名记录**，同一 `path`/`name` 注册两次。vue-router 注册时会静默移除先者，
+> 运行时看不出问题，只留一条永远不可达的僵尸定义，且与文件注释自相矛盾。
+
+- **`src/router/routes.ts`**：删除顶层 `/redirect` 记录，仅保留布局内那一条；
+  `/redirect` 在静态表中恰好出现 1 次由单测锁定。
+- **回归护栏（含一次自我纠错）**：新增「静态路由表内不得存在同名或同路径记录」断言。**首版写在
+  `router.getRoutes()` 上是假绿** —— 实测故意加回重名后它仍然通过（vue-router 已静默去重），
+  改为断言静态定义表 `constantRoutes` 本身后：加回重名 → FAIL、去掉 → PASS。
+
+### Added（真机菜单数据 × 真实路由管线：夹具驱动集成护栏，2026-10-14）
+
+> 本仓库反复被「mock 形状 ≠ 真机形状」咬到（本地全绿、部署后才炸）。本组护栏用**真机实际数据**
+> 跑**真实管线**，把这类缺陷前移到单测阶段。
+
+- 新增夹具 `apps/admin-web/src/router/__tests__/fixtures/real-menus.json`：2026-10-14 从真机
+  `GET /api/v1/auth/menus`（admin）**原样转储**的响应 `data` 段，非手写 mock。
+- 新增 `apps/admin-web/src/router/__tests__/real-menus.test.ts`（6 条）：每个菜单页都命中自身路由记录
+  （无静默跳过）、匹配链必须以布局路由开头、目录类节点三层嵌套、生成器写法的
+  `views/<model>/index` 两层嵌套、与静态路由重名的 `/dashboard` 只保留一条。断言只依赖结构关系、
+  不依赖菜单条数，故种子调整不会使其变脆。前端单测 49 → **55**。
+
+### Verified（真机端到端：`106.55.32.251` / `https://cs.donttemo.top`，2026-10-14）
+
+- **前端专用发版**：`git archive` 打包 → `/opt/fw/web-fix/<ts>` 装依赖并构建（显式注入 `VITE_API_BASE_URL=/api/v1`）
+  → 产物断言 → `rsync -a --delete` 到 `/opt/1panel/www/fw-web`（41 → 41 文件，旧分片已清）。
+  入口分片由 `index-CZavIGkr.js` 变为 `index-ro_5WPJ_.js`；**后端未改、未重跑种子、未重启服务、未动 `/opt/fw/current`**。
+- **数据面验收** `wb-ssh/verify-webfix7.sh`：**24/24**（站点 200、`POST /auth/login` 仍 405、`/ready` ok、
+  菜单树 8 条路径齐全且已无 `/order` 死链、`/auth/profile` 可达、产物中的 TagsView 为按用户隔离键的新版）。
+- **全量回归** `wb-ssh/verify-c06.sh`：**27/27**，无回退。
+- **真实 Chromium 端到端**：**25/25** —— 点击「系统管理 → 用户管理」后侧边栏/顶栏/标签页全部在位（侧边栏实测 200px）；
+  6 个功能页直输 URL 均正确渲染；admin（已积累 7 个标签）→ 退出 → alice 登录后，侧边栏只剩
+  `控制台 / 系统管理 / 用户管理 / 字典管理`（admin 独有菜单全部消失）、标签页只剩「工作台」；全程无 JS 运行时报错。
+  截图见 `wb-ssh/shots/`。详见 [方案文档 §8.1](./docs/99-admin-web-enhancement-and-fixes.md)。
+
 ### Added（管理后台前端：方案文档与验证）
 
 - 新增 **[管理后台功能补充与缺陷修复方案](./docs/99-admin-web-enhancement-and-fixes.md)**：逐页现状核对、待新增模块
   （租户管理页 / 异步导出任务中心 / 403 整页视图）与待完善模块（字典消费、工作台三态、菜单图标与权限码选择器、审计模块字典化）、
-  **19 项缺陷表**、交互流程与数据展示规范、兼容性要求、验证证据与遗留项。
+  **21 项缺陷表**、交互流程与数据展示规范、兼容性要求、验证证据与遗留项。
 - 新增 `apps/admin-web/src/router/__tests__/layout-nesting.test.ts`：16 条路由/布局护栏 —— 匹配链必须含布局、
   静态路由去重、`/redirect` 在布局内、公开页无外壳、**真实挂载出 `.fw-sidebar`**、换号后旧页面落 403、
-  `resolveFallback` 三个分支。前端单测 31 → **47**。
+  `resolveFallback` 三个分支、静态路由表无重名。前端单测 31 → **49**（含真机菜单数据集成护栏后为 **55**）。
 - `apps/admin-web/scripts/smoke-mock.mjs`：新增「个人资料自服务」冒烟段 8 条断言（含 `409`/`1001`/越权字段拒收/
   「alice 可自助保存」回归）；冒烟总数 57 → **65（全通过）**。
 - `apps/admin-web/src/store/__tests__/permission.test.ts`：新增 2 条回归护栏（`visibleMenus` 递归剪枝、
