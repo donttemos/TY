@@ -9,6 +9,8 @@
  * @modified 2026-10-13 donttemo M7：新增 §3.8 队列管理端点与类型（与 C-08 Job 契约同源，PRD-007 FR-09）
  * @modified 2026-10-14 donttemo 新增 §3.2 的 GET / PUT /auth/profile 类型（ProfileResult / ProfileUpsertInput）：
  *   非破坏性新增（追加响应字段与端点），后端 example-api 与前端 mock 已同时实现，避免「mock 全绿、真机 404」
+ * @modified 2026-10-15 donttemo M9/PRD-009：新增 §3.10 参数配置类型（ConfigEntry / ConfigCenterMetaInfo /
+ *   ConfigListResult / ConfigUpsertInput / ConfigWriteResult）——GET / PUT /configs 两端点的结构基线
  * @module docs/contracts
  */
 
@@ -428,4 +430,51 @@ export interface CronTickResult {
 export interface DeadLetterRequeueResult {
   id: ID;
   requeued: boolean;
+}
+
+// ---------- §3.10 参数配置（M9 / PRD-009 FR-06） ----------
+
+/** 配置键视图（GET /configs 列表项；boot 键 env 独占不进列表） */
+export interface ConfigEntry {
+  /** 点路径（如 log.level） */
+  key: string;
+  /** 当前生效值（运行时覆盖优先于 env 快照） */
+  value: unknown;
+  /** 生效来源：runtime = 被运行时覆盖；env = 仍取 env 快照 */
+  source: 'runtime' | 'env';
+  /** 是否可热更新（本列表只含白名单键，恒为 true） */
+  hot: true;
+  /** 对应 Env 键名（LOG_LEVEL 等，诊断用） */
+  envKey: string;
+  /** 最近一次生效时间（env 来源且从未被覆盖为 null） */
+  updatedAt: string | null;
+}
+
+/** 配置中心运行元信息（诊断展示；不阻塞就绪判定） */
+export interface ConfigCenterMetaInfo {
+  driver: string;
+  snapshotVersion: number;
+  pollSeconds: number | null;
+  lastAppliedAt: string | null;
+  lastError: string | null;
+}
+
+/** GET /configs 响应 */
+export interface ConfigListResult {
+  configs: ConfigEntry[];
+  meta: ConfigCenterMetaInfo;
+}
+
+/** PUT /configs/:key 请求体 */
+export interface ConfigUpsertInput {
+  /** 新值（JSON 语义：数字 / 字符串；服务端复用 env 同一份校验器） */
+  value: unknown;
+}
+
+/** PUT /configs/:key 响应 */
+export interface ConfigWriteResult {
+  key: string;
+  oldValue: unknown;
+  newValue: unknown;
+  snapshotVersion: number;
 }

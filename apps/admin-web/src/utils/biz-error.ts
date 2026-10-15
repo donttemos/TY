@@ -21,6 +21,12 @@ export const BIZ_CODE = {
   TOKEN_EXPIRED: 3003,
   ACCOUNT_LOCKED: 3004,
   TENANT_INVALID: 4001,
+  /** 该配置键不可热更新（M9/PRD-009：boot 键或不在白名单） */
+  CONFIG_NOT_HOT: 5001,
+  /** 配置新值非法（M9/PRD-009：details 带原因） */
+  CONFIG_INVALID_VALUE: 5002,
+  /** 配置键不存在（M9/PRD-009） */
+  CONFIG_NOT_FOUND: 5003,
   INTERNAL: 9001,
   DEPENDENCY_UNAVAILABLE: 9002,
   RATE_LIMITED: 9003,
@@ -82,6 +88,12 @@ export function describeBizError(error: BizError): string {
       return error.traceId ? `系统开小差了（已上报，traceId：${error.traceId}）` : '系统开小差了，请稍后重试';
     case BIZ_CODE.DEPENDENCY_UNAVAILABLE:
       return '依赖服务暂不可用，请稍后重试';
+    case BIZ_CODE.CONFIG_NOT_HOT:
+      return error.message || '该配置键不可热更新（boot 键或不在白名单）';
+    case BIZ_CODE.CONFIG_INVALID_VALUE:
+      return error.details?.length ? `新值非法：${error.details.map((d) => d.message).join('；')}` : error.message || '新值非法，请检查后重试';
+    case BIZ_CODE.CONFIG_NOT_FOUND:
+      return error.message || '配置键不存在';
     case BIZ_CODE.RATE_LIMITED:
       return error.message || '操作过于频繁，请稍后重试';
     default:
@@ -90,7 +102,8 @@ export function describeBizError(error: BizError): string {
 }
 
 /** 从信封体构造 BizError（code≠0 时；code 缺省按 9001 处理，data 可为 null） */
-export function toBizError(body: { code?: number; message?: string; traceId?: string; data?: { details?: FieldError[] } | null }): BizError {
-  const details = Array.isArray(body.data?.details) ? (body.data?.details as FieldError[]) : null;
+export function toBizError(body: { code?: number; message?: string; traceId?: string; details?: FieldError[]; data?: { details?: FieldError[] } | null }): BizError {
+  // 真实后端（GlobalExceptionFilter）把 details 放在信封顶层；兼容 data.details（历史 mock 形态）
+  const details = Array.isArray(body.details) ? body.details : Array.isArray(body.data?.details) ? (body.data?.details as FieldError[]) : null;
   return new BizError(body.code ?? BIZ_CODE.INTERNAL, body.message ?? '', body.traceId ?? null, details);
 }

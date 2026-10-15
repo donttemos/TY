@@ -7,6 +7,8 @@
  * @modified 2026-10-14 donttemo C-06 收口：新增 dict:read / dict:write / auth:revoke-session（补齐管理后台契约声明的权限点）
  * @modified 2026-10-15 donttemo N-01/N-02：新增 tenant:read/create/update/delete/manage（api-spec §3.9 租户端点守卫）
  *   与 audit:export（§3.7 异步导出）
+ * @modified 2026-10-15 donttemo M9/PRD-009 FR-06：新增 system:config:read / system:config:write（配置中心
+ *   管理端点守卫；读写分离——只读用户可查当前生效值，写权限独立授予）
  * @module @fw/auth
  */
 
@@ -71,6 +73,10 @@ export const PERM = {
   TENANT_DELETE: 'tenant:delete',
   /** 隔离级别迁移（shared ↔ dedicated，长任务） */
   TENANT_MANAGE: 'tenant:manage',
+  /** 配置中心读（M9/PRD-009：GET /configs 当前生效值与运行元信息） */
+  CONFIG_READ: 'system:config:read',
+  /** 配置中心写（M9/PRD-009：PUT /configs/:key 白名单键热更） */
+  CONFIG_WRITE: 'system:config:write',
 } as const;
 
 /** 权限码字面量类型 */

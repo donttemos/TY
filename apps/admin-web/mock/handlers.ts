@@ -67,6 +67,10 @@ const CODE = {
   ACCOUNT_LOCKED: 3004,
   INTERNAL: 9001,
   RATE_LIMITED: 9003,
+  // M9 配置中心（PRD-009 §6，与 @fw/core ErrorCode 同源）
+  CONFIG_NOT_HOT: 5001,
+  CONFIG_INVALID_VALUE: 5002,
+  CONFIG_NOT_FOUND: 5003,
 } as const;
 
 /** HTTP 状态码映射 */
@@ -82,6 +86,9 @@ const HTTP_STATUS: Record<number, number> = {
   [CODE.ACCOUNT_LOCKED]: 403,
   [CODE.INTERNAL]: 500,
   [CODE.RATE_LIMITED]: 429,
+  [CODE.CONFIG_NOT_HOT]: 400,
+  [CODE.CONFIG_INVALID_VALUE]: 400,
+  [CODE.CONFIG_NOT_FOUND]: 404,
 };
 
 /** 请求上下文：鉴权解析后的用户视图 */
@@ -202,9 +209,11 @@ function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
 }
 
 /** 响应信封 */
-function send<T>(res: ServerResponse, code: number, message: string, data: T, traceId: string): void {
+function send<T>(res: ServerResponse, code: number, message: string, data: T, traceId: string, details?: Array<{ field: string; message: string }>): void {
   const status = HTTP_STATUS[code] ?? 500;
-  const body: Envelope<T> = { code, message, data, traceId };
+  // details 与真实后端 GlobalExceptionFilter 同构：放信封顶层（data=null 的错误形态）
+  const body: Envelope<T> & { details?: Array<{ field: string; message: string }> } = { code, message, data, traceId };
+  if (details) body.details = details;
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('X-Trace-Id', traceId);
@@ -1849,6 +1858,56 @@ export async function handleMockRequest(
     return { handled: true };
   }
 
+  // ---- M9 配置中心域（PRD-009 FR-08：与真实后端同白名单 / 同校验语义 / 同错误码 / 同审计可见性） ----
+  if (path === '/configs' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'system:config:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    send(res, CODE.OK, 'ok', { configs: mockConfigList(database), meta: mockConfigMeta(database) }, traceId);
+    return { handled: true };
+  }
+  const configKeyMatch = /^\/configs\/([\w.-]+)$/.exec(path);
+  if (configKeyMatch && method === 'PUT') {
+    const perm = requirePermission(database, ctx, 'system:config:write');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const key = configKeyMatch[1] as string;
+    const entry = MOCK_CONFIG_ENTRIES.find((item) => item.key === key);
+    if (!entry) {
+      // 已知但不可热更（boot 键）→ 5001；完全未知 → 5003（与 @fw/config-center describeKey 同语义）
+      const known = MOCK_KNOWN_CONFIG_PATHS.has(key);
+      send(res, known ? CODE.CONFIG_NOT_HOT : CODE.CONFIG_NOT_FOUND, known ? `配置键 ${key} 不可热更新（boot 键或不在白名单）` : `配置键 ${key} 不存在`, null, traceId);
+      return { handled: true };
+    }
+    if (body.value === undefined) {
+      send(res, CODE.BAD_REQUEST, 'body.value 必填（新配置值，JSON 语义）', null, traceId);
+      return { handled: true };
+    }
+    const invalid = validateMockConfigValue(entry, body.value);
+    if (invalid) {
+      database.configLastError = `键「${key}」新值非法：${invalid}`;
+      mockRecordConfigAudit(database, ctx, key, mockCurrentValue(database, entry), body.value, false, invalid, traceId);
+      send(res, CODE.CONFIG_INVALID_VALUE, `配置键 ${key} 的新值非法`, null, traceId, [{ field: key, message: invalid }]);
+      return { handled: true };
+    }
+    const oldValue = mockCurrentValue(database, entry);
+    if (JSON.stringify(oldValue) === JSON.stringify(body.value)) {
+      send(res, CODE.OK, 'ok', { key, oldValue, newValue: oldValue, snapshotVersion: database.configVersion }, traceId);
+      return { handled: true };
+    }
+    // 应用覆盖 + 版本号推进 + 审计（与真实管道一致：成功变更才生效）
+    database.configOverrides[key] = body.value;
+    database.configUpdatedAt[key] = new Date().toISOString();
+    database.configVersion += 1;
+    mockRecordConfigAudit(database, ctx, key, oldValue, body.value, true, null, traceId);
+    send(res, CODE.OK, 'ok', { key, oldValue, newValue: body.value, snapshotVersion: database.configVersion }, traceId);
+    return { handled: true };
+  }
+
   // ---- N-02 异步任务域（登录即可；归属人校验在处理器内，不泄露存在性一律 404） ----
   const jobProgressMatch = /^\/jobs\/([\w-]+)\/progress$/.exec(path);
   if (jobProgressMatch && method === 'GET') {
@@ -2042,4 +2101,129 @@ function advanceJob(database: MockDb, job: MockJob | null): void {
     job.message = '执行中';
   }
   job.updatedAt = new Date().toISOString();
+}
+
+/** ---------- M9 配置中心（PRD-009 FR-08：与真实后端同构） ---------- */
+
+/** 白名单键定义：与 @fw/config 的 ENV_HOT_KEYS + env-schema 约束同源（type: 'string' 仅 log.level） */
+interface MockConfigEntry {
+  key: string;
+  envKey: string;
+  initial: number | string;
+  type: 'number' | 'string';
+  /** number 型的取值范围（int 表示必须整数）；string 型用 options 枚举 */
+  min?: number;
+  max?: number;
+  int?: boolean;
+  options?: readonly string[];
+}
+
+/** 热更新白名单 11 键（与 example-api 管道同一份约束语义） */
+const MOCK_CONFIG_ENTRIES: MockConfigEntry[] = [
+  { key: 'log.level', envKey: 'LOG_LEVEL', initial: 'info', type: 'string', options: ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] },
+  { key: 'log.maxBytes', envKey: 'LOG_MAX_BYTES', initial: 8192, type: 'number', min: 512, int: true },
+  { key: 'cache.ttl', envKey: 'CACHE_TTL', initial: 300, type: 'number', min: 1, max: 86400, int: true },
+  { key: 'cache.nullTtl', envKey: 'CACHE_NULL_TTL', initial: 60, type: 'number', min: 1, max: 3600, int: true },
+  { key: 'cache.ttlJitter', envKey: 'CACHE_TTL_JITTER', initial: 0.1, type: 'number', min: 0, max: 1 },
+  { key: 'cache.slowMs', envKey: 'CACHE_SLOW_MS', initial: 50, type: 'number', min: 1, max: 10000, int: true },
+  { key: 'cache.lockTtl', envKey: 'CACHE_LOCK_TTL', initial: 30, type: 'number', min: 1, max: 3600, int: true },
+  { key: 'mq.rateLimit', envKey: 'MQ_RATE_LIMIT', initial: 0, type: 'number', min: 0, max: 100000, int: true },
+  { key: 'mq.concurrency', envKey: 'MQ_CONCURRENCY', initial: 10, type: 'number', min: 1, max: 1000, int: true },
+  { key: 'otel.sampleRatio', envKey: 'OTEL_SAMPLE_RATIO', initial: 0.1, type: 'number', min: 0, max: 1 },
+  { key: 'tenant.cacheTtl', envKey: 'TENANT_CACHE_TTL', initial: 60, type: 'number', min: 1, max: 3600, int: true },
+];
+
+/** 已知键全集（boot 键 → 5001 的判别依据；与 @fw/config ENV_KEY_PATHS 值集同源） */
+const MOCK_KNOWN_CONFIG_PATHS: ReadonlySet<string> = new Set([
+  'app.env', 'app.port', 'log.level', 'log.maxBytes', 'db.driver', 'db.url', 'db.slowMs',
+  'cache.driver', 'cache.url', 'cache.prefix', 'cache.ttl', 'cache.maxItems', 'cache.failOpen',
+  'cache.nullTtl', 'cache.ttlJitter', 'cache.lockTtl', 'cache.tagTtl', 'cache.slowMs', 'cache.maxValueBytes',
+  'auth.strategy', 'auth.accessTtl', 'auth.refreshTtl', 'auth.maxFailed', 'auth.lockMinutes',
+  'auth.refreshGraceSeconds', 'auth.passwordPolicy', 'auth.allowRegister', 'auth.apiKeys',
+  'jwt.secret', 'jwt.secretPrev',
+  'mq.driver', 'mq.url', 'mq.prefix', 'mq.concurrency', 'mq.maxAttempts', 'mq.backoff', 'mq.jobTimeout',
+  'mq.cronEnabled', 'mq.rateLimit', 'mq.deadLetterMax', 'mq.shutdownTimeout', 'mq.stalledMs',
+  'shutdown.timeoutSeconds',
+  'tenant.enabled', 'tenant.order', 'tenant.headerName', 'tenant.baseDomain', 'tenant.jwtClaim',
+  'tenant.cacheTtl', 'tenant.dbKey',
+  'transport.driver', 'transport.url', 'transport.prefix', 'transport.timeoutMs', 'transport.role',
+  'transport.instanceId', 'transport.shutdownTimeout',
+  'otel.enabled', 'otel.serviceName', 'otel.exporterUrl', 'otel.sampleRatio', 'otel.sampleErrors',
+  'configCenter.enabled', 'configCenter.driver', 'configCenter.file', 'configCenter.pollSeconds',
+]);
+
+/** 校验新值（与 env-schema 同约束）；返回 null = 合法，否则为拒绝原因 */
+function validateMockConfigValue(entry: MockConfigEntry, value: unknown): string | null {
+  if (entry.type === 'string') {
+    if (typeof value !== 'string' || !entry.options?.includes(value)) {
+      return `取值必须是 ${entry.options?.join(' / ')}`;
+    }
+    return null;
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '取值必须是数字';
+  if (entry.int && !Number.isInteger(value)) return '取值必须是整数';
+  if (entry.min !== undefined && value < entry.min) return `取值不能小于 ${entry.min}`;
+  if (entry.max !== undefined && value > entry.max) return `取值不能大于 ${entry.max}`;
+  return null;
+}
+
+/** 当前生效值（覆盖优先，回退白名单初始值） */
+function mockCurrentValue(database: MockDb, entry: MockConfigEntry): unknown {
+  if (entry.key in database.configOverrides) return database.configOverrides[entry.key];
+  return entry.initial;
+}
+
+/** GET /configs 列表（boot 键不进列表，与真实后端一致） */
+function mockConfigList(database: MockDb): Array<Record<string, unknown>> {
+  return MOCK_CONFIG_ENTRIES.map((entry) => {
+    const overridden = entry.key in database.configOverrides;
+    return {
+      key: entry.key,
+      value: mockCurrentValue(database, entry),
+      source: overridden ? 'runtime' : 'env',
+      hot: true,
+      envKey: entry.envKey,
+      updatedAt: overridden ? (database.configUpdatedAt[entry.key] ?? null) : null,
+    };
+  });
+}
+
+/** GET /configs 运行元信息 */
+function mockConfigMeta(database: MockDb): Record<string, unknown> {
+  return {
+    driver: 'file',
+    snapshotVersion: database.configVersion,
+    pollSeconds: 5,
+    lastAppliedAt: Object.values(database.configUpdatedAt).filter(Boolean).at(-1) ?? null,
+    lastError: database.configLastError,
+  };
+}
+
+/** 配置变更审计（module=config，与真实审计桥同构：before/after 值 + source/operator/ok） */
+function mockRecordConfigAudit(
+  database: MockDb,
+  ctx: AuthContext,
+  key: string,
+  oldValue: unknown,
+  newValue: unknown,
+  ok: boolean,
+  reason: string | null,
+  traceId: string,
+): void {
+  database.auditLogs.push({
+    id: `a-config-${database.auditLogs.length + 1}`,
+    userId: ctx.user.id,
+    module: 'config',
+    action: 'update',
+    targetType: 'config',
+    targetId: key,
+    beforeValue: { value: oldValue },
+    afterValue: ok
+      ? { value: newValue, source: 'api', operator: ctx.user.username, ok: true }
+      : { value: newValue, source: 'api', operator: ctx.user.username, ok: false, reason },
+    ip: '127.0.0.1',
+    userAgent: null,
+    traceId,
+    createdAt: new Date().toISOString(),
+  });
 }

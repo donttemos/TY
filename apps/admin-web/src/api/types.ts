@@ -427,3 +427,44 @@ export interface JobView {
   createdAt: string;
   updatedAt: string;
 }
+
+// ---------- M9 配置中心（PRD-009 FR-06/FR-07，api-spec §3.10） ----------
+
+/** 配置键视图（GET /configs 列表项；boot 键 env 独占不进列表） */
+export interface ConfigEntry {
+  /** 点路径（如 log.level） */
+  key: string;
+  /** 当前生效值（运行时覆盖优先于 env 快照） */
+  value: unknown;
+  /** 生效来源：runtime = 被运行时覆盖；env = 仍取 env 快照 */
+  source: 'runtime' | 'env';
+  /** 是否可热更新（本列表只含白名单键，恒为 true） */
+  hot: true;
+  /** 对应 Env 键名（LOG_LEVEL 等，诊断用） */
+  envKey: string;
+  /** 最近一次生效时间（env 来源且从未被覆盖为 null） */
+  updatedAt: string | null;
+}
+
+/** 配置中心运行元信息（诊断展示；不阻塞就绪判定） */
+export interface ConfigCenterMetaInfo {
+  driver: string;
+  snapshotVersion: number;
+  pollSeconds: number | null;
+  lastAppliedAt: string | null;
+  lastError: string | null;
+}
+
+/** GET /configs 响应 */
+export interface ConfigListResult {
+  configs: ConfigEntry[];
+  meta: ConfigCenterMetaInfo;
+}
+
+/** PUT /configs/:key 响应 */
+export interface ConfigWriteResult {
+  key: string;
+  oldValue: unknown;
+  newValue: unknown;
+  snapshotVersion: number;
+}

@@ -14,6 +14,8 @@
  * @modified 2026-10-14 donttemo M8 T-M8-06 接入 TelemetryModule（OTEL_ENABLED=false 零开销）
  * @modified 2026-10-15 donttemo N-01/N-02 接入 JobsModule（异步任务中心，@Global）与 TenantAdminModule
  *   （/api/v1/tenants 五端点）
+ * @modified 2026-10-15 donttemo M9/PRD-009 接入 ConfigCenterModule（/api/v1/configs 两端点；默认
+ *   CONFIG_CENTER_ENABLED=false 零开销，开启后 file 适配 + 热更白名单 11 键订阅生效）
  * @module example-api
  */
 import { Module } from '@nestjs/common';
@@ -26,6 +28,7 @@ import { TenantModule } from '@fw/tenant';
 import { TransportModule, createTransportReadinessProbe } from '@fw/transport';
 import { AppAuthModule } from './modules/auth/app-auth.module.js';
 import { CacheDemoModule } from './modules/cache-demo/cache-demo.module.js';
+import { ConfigCenterModule } from './modules/config-center/config-center.module.js';
 import { DemoModule, dbReadinessProbe } from './modules/demo/demo.module.js';
 import { DemoItemModule } from './modules/demo-item/demo-item.module.js';
 import { DemoQueueModule } from './modules/demo-queue/demo-queue.module.js';
@@ -72,6 +75,8 @@ export const transportReadinessProbe = createTransportReadinessProbe();
     JobsModule,
     // N-01：租户管理端点（/api/v1/tenants 五端点；跨租户维护面，标 @IgnoreTenant）
     TenantAdminModule,
+    // M9：配置中心（/api/v1/configs 查/改两端点；CONFIG_CENTER_ENABLED=false 时零开销仅 env 视图）
+    ConfigCenterModule.forRoot(),
   ],
 })
 export class AppModule {}

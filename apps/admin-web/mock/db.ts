@@ -263,6 +263,14 @@ export interface MockDb {
   sessions: MockSession[];
   tenants: MockTenant[];
   jobs: MockJob[];
+  /** M9 配置中心：运行时覆盖（点路径 → 覆盖值），镜像真实后端 overlay */
+  configOverrides: Record<string, unknown>;
+  /** M9 配置中心：各键最近生效时间（ISO 串；env 来源且未被覆盖为 null） */
+  configUpdatedAt: Record<string, string | null>;
+  /** M9 配置中心：快照版本号（每次成功应用 +1，初始 1） */
+  configVersion: number;
+  /** M9 配置中心：最近一次错误摘要（诊断展示） */
+  configLastError: string | null;
   /** refresh token 明文 → 会话 id（mock 专用；真实后端只存哈希） */
   refreshTokens: Record<string, string>;
   /** 已使用过的 refresh token 明文（检测复用泄漏） */
@@ -308,6 +316,9 @@ const PERMISSIONS: MockPermission[] = [
   { id: 'p-tenant-delete', code: 'tenant:delete', name: '租户停用', type: 'api', module: 'tenant' },
   { id: 'p-tenant-manage', code: 'tenant:manage', name: '租户隔离级别迁移', type: 'api', module: 'tenant' },
   { id: 'p-tenant-ignore', code: 'system:tenant:ignore', name: '跨租户维护', type: 'api', module: 'tenant' },
+  // M9（PRD-009 FR-06）：配置中心读写分离权限点（api-spec §3.10）
+  { id: 'p-config-read', code: 'system:config:read', name: '参数配置查询', type: 'api', module: 'config' },
+  { id: 'p-config-write', code: 'system:config:write', name: '参数配置修改', type: 'api', module: 'config' },
 ];
 
 /** 普通用户角色默认权限（刻意不含 role:read / audit:read / user:assign-role，用于验证越权拦截） */
@@ -324,6 +335,8 @@ const MENUS: MockMenu[] = [
   { id: 'm-system-audit', parentId: 'm-system', name: '审计日志', path: '/system/audit-logs', component: 'system/audit-logs', icon: 'file-text', permissionCode: 'audit:read', visible: true, sort: 5 },
   { id: 'm-system-queue', parentId: 'm-system', name: '队列管理', path: '/system/queue', component: 'system/queue', icon: 'clock', permissionCode: 'system:queue:list', visible: true, sort: 6 },
   { id: 'm-system-tenants', parentId: 'm-system', name: '租户管理', path: '/system/tenants', component: 'system/tenants', icon: 'office-building', permissionCode: 'tenant:read', visible: true, sort: 7 },
+  // M9 参数配置页（views/system/configs）：与后端 seed 同形（PRD-009 FR-07）
+  { id: 'm-system-configs', parentId: 'm-system', name: '参数配置', path: '/system/configs', component: 'system/configs', icon: 'tool', permissionCode: 'system:config:read', visible: true, sort: 8 },
   // 刻意保留的 mock-only 演示菜单：仅存在于 dev（mock 有 /orders 端点与 demo/orders 视图可跑通），
   // 生产 seed 已整支移除该分支（后端无 /api/v1/orders，挂菜单必然死链）—— 属**有意**的 dev/prod 差异。
   { id: 'm-order', parentId: '0', name: '订单中心', path: '/order', component: 'layout/blank', icon: 'shopping', permissionCode: 'order:read', visible: true, sort: 3 },
@@ -367,6 +380,8 @@ const DICT_ITEMS: MockDictItem[] = [
   { id: 'di-am-user', categoryId: 'dc-audit-module', label: '用户', value: 'user', color: 'success', sort: 2 },
   { id: 'di-am-role', categoryId: 'dc-audit-module', label: '角色', value: 'role', color: 'warning', sort: 3 },
   { id: 'di-am-tenant', categoryId: 'dc-audit-module', label: '租户', value: 'tenant', color: 'info', sort: 4 },
+  { id: 'di-am-queue', categoryId: 'dc-audit-module', label: '队列', value: 'queue', color: 'info', sort: 5 },
+  { id: 'di-am-config', categoryId: 'dc-audit-module', label: '配置', value: 'config', color: 'danger', sort: 6 },
   { id: 'di-ds-all', categoryId: 'dc-data-scope', label: '全部数据', value: 'all', color: 'primary', sort: 1 },
   { id: 'di-ds-org-below', categoryId: 'dc-data-scope', label: '本组织及下级', value: 'org_below', color: 'success', sort: 2 },
   { id: 'di-ds-org', categoryId: 'dc-data-scope', label: '本组织', value: 'org', color: 'warning', sort: 3 },
@@ -515,6 +530,10 @@ export function createDb(): MockDb {
     tenants: seedTenants(),
     jobs: [],
     sessions: [],
+    configOverrides: {},
+    configUpdatedAt: {},
+    configVersion: 1,
+    configLastError: null,
     refreshTokens: {},
     usedRefreshTokens: new Set<string>(),
   };

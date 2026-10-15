@@ -107,9 +107,13 @@ service.interceptors.response.use(
     if (body.code === BIZ_CODE.OK) {
       return body.data;
     }
-    const details = Array.isArray((body.data as { details?: FieldError[] })?.details)
-      ? ((body.data as { details?: FieldError[] }).details as FieldError[])
-      : null;
+    // 真实后端（GlobalExceptionFilter）把 details 放在信封顶层；兼容 data.details（历史 mock 形态）
+    const envelope = body as { details?: FieldError[]; data?: { details?: FieldError[] } };
+    const details = Array.isArray(envelope.details)
+      ? envelope.details
+      : Array.isArray(envelope.data?.details)
+        ? (envelope.data?.details as FieldError[])
+        : null;
     return Promise.reject(new BizError(body.code ?? BIZ_CODE.INTERNAL, body.message ?? '', body.traceId ?? null, details));
   },
   async (error: unknown) => {

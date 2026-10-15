@@ -29,6 +29,9 @@
  *   否则页面即便有路由也会被 RBAC 守卫拒绝；② 补字典 tenant_isolation / tenant_status（租户管理页标签与下拉数据源）
  * @modified 2026-10-15 donttemo E-07：补字典 audit_module（审计日志页模块筛选项数据源，取值与各控制器
  *   写入的 module 值同源：auth/user/role/tenant）
+ * @modified 2026-10-15 donttemo M9/PRD-009：① 补配置中心两权限点（system:config:read/write，api-spec §3.10
+ *   端点守卫）与「参数配置」菜单（/system/configs，需 system:config:read）——权限点与菜单同批建出；
+ *   ② audit_module 字典补 queue / config 值（队列死信重放与配置变更审计分别以两 module 落盘）
  * @module example-api
  */
 
@@ -107,6 +110,9 @@ const FRAMEWORK_PERMISSIONS: PermissionSeed[] = [
   // 跨租户维护豁免（@fw/auth 的 @IgnoreTenant）：租户管理端点是平台管理员视角，
   // 必须豁免租户解析（否则 TENANT_ENABLED=true 时自身 4001），守卫要求显式持有本权限并写豁免审计。
   { code: PERM.TENANT_IGNORE, name: '跨租户维护', type: 'api', module: 'tenant' },
+  // M9 配置中心（api-spec §3.10）：参数配置页与热更端点的读写守卫（读写分离）
+  { code: PERM.CONFIG_READ, name: '参数配置查询', type: 'api', module: 'config' },
+  { code: PERM.CONFIG_WRITE, name: '参数配置修改', type: 'api', module: 'config' },
   // M7 队列管理端点（@fw/queue 的 QueueAdminController，路径 /api/v1/admin/queue）的守卫权限。
   // 真机部署修复：缺少这两点会让整个队列管理功能面对任何角色都返回 3002，必须随种子建出并授予 admin。
   { code: QUEUE_PERM_LIST, name: '队列查看', type: 'api', module: 'queue' },
@@ -176,6 +182,8 @@ const MENU_TREE: MenuSeed[] = [
       { name: '队列管理', path: '/system/queue', component: 'system/queue', icon: 'list', permissionCode: QUEUE_PERM_LIST, sort: 6 },
       // N-01 租户管理页（views/system/tenants）：列表 / 开租户 / 改套餐状态 / 停用 / 隔离级别迁移
       { name: '租户管理', path: '/system/tenants', component: 'system/tenants', icon: 'office-building', permissionCode: PERM.TENANT_READ, sort: 7 },
+      // M9 参数配置页（views/system/configs）：键值列表 / 在线修改 / 变更历史（PRD-009 FR-07）
+      { name: '参数配置', path: '/system/configs', component: 'system/configs', icon: 'tool', permissionCode: PERM.CONFIG_READ, sort: 8 },
     ],
   },
   // 注意：历史种子在此挂了「订单中心 /order → 订单退款(order/refund)」，但 views/order/refund 视图
@@ -265,6 +273,8 @@ const DICT_SEED: DictSeed[] = [
       { label: '用户', value: 'user', color: 'success' },
       { label: '角色', value: 'role', color: 'warning' },
       { label: '租户', value: 'tenant', color: 'info' },
+      { label: '队列', value: 'queue', color: 'info' },
+      { label: '配置', value: 'config', color: 'danger' },
     ],
   },
   {
