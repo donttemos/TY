@@ -4,6 +4,7 @@
  *   暂停恢复与清空等待。查看类端点需 `system:queue:list`，变更类需 `system:queue:manage`。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo 死信列表分页（体验债）：fetchDeadLetters 增加 page / pageSize
  * @module admin-web/api
  */
 
@@ -47,11 +48,15 @@ export function tickCron(name: string): Promise<CronTickResult> {
 }
 
 /**
- * 死信列表
+ * 死信列表（分页）
  * @param queue 队列名（可选）
+ * @param page 页码（从 1 开始）
+ * @param pageSize 每页条数（默认 20，上限 200）
  */
-export function fetchDeadLetters(queue?: string): Promise<DeadLetterListResult> {
-  return request.get<DeadLetterListResult>('/admin/queue/dead-letters', { params: queue ? { queue } : undefined });
+export function fetchDeadLetters(queue?: string, page = 1, pageSize = 20): Promise<DeadLetterListResult> {
+  return request.get<DeadLetterListResult>('/admin/queue/dead-letters', {
+    params: { ...(queue ? { queue } : {}), page, pageSize },
+  });
 }
 
 /**

@@ -8,6 +8,8 @@
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo 补「暂停 / 恢复消费」的按钮级权限（system:queue:manage）：
  *   此前该按钮未做控制，只读角色（仅 system:queue:list）能点到并吃 3002
+ * @modified 2026-10-15 donttemo 死信列表改分页消费（@fw/queue dead-letters 端点支持 page/pageSize，
+ *   全量返回在死信堆积时会拖垮首屏）；页签计数取 total 而非本页条数
  * @module admin-web/views
 -->
 
@@ -25,6 +27,9 @@ const handlers = ref<string[]>([]);
 const crons = ref<CronSnapshot[]>([]);
 const cronEnabled = ref(false);
 const deadLetters = ref<DeadLetterRecord[]>([]);
+const deadTotal = ref(0);
+const deadPage = ref(1);
+const deadPageSize = ref(20);
 const loading = ref(false);
 const acting = ref('');
 
@@ -51,22 +56,28 @@ const overview = computed(() => [
 async function loadAll(): Promise<void> {
   loading.value = true;
   try {
-    const [statsResult, metricsResult, handlersResult, cronsResult, deadResult] = await Promise.all([
+    const [statsResult, metricsResult, handlersResult, cronsResult] = await Promise.all([
       queueApi.fetchQueueStats().catch(() => null),
       queueApi.fetchQueueMetrics().catch(() => null),
       queueApi.fetchQueueHandlers().catch(() => null),
       queueApi.fetchCrons().catch(() => null),
-      queueApi.fetchDeadLetters().catch(() => null),
     ]);
     stats.value = statsResult;
     metrics.value = metricsResult;
     handlers.value = handlersResult?.names ?? [];
     crons.value = cronsResult?.items ?? [];
     cronEnabled.value = cronsResult?.enabled ?? false;
-    deadLetters.value = deadResult?.items ?? [];
+    await loadDeadLetters();
   } finally {
     loading.value = false;
   }
+}
+
+/** 死信分页（翻页只拉死信，不动其余面板） */
+async function loadDeadLetters(): Promise<void> {
+  const result = await queueApi.fetchDeadLetters(undefined, deadPage.value, deadPageSize.value).catch(() => null);
+  deadLetters.value = result?.items ?? [];
+  deadTotal.value = result?.total ?? 0;
 }
 
 onMounted(() => {
@@ -214,7 +225,7 @@ function formatPayload(payload: unknown): string {
 
         <!-- 死信 -->
         <el-tab-pane name="dead-letters">
-          <template #label>死信（{{ deadLetters.length }}）</template>
+          <template #label>死信（{{ deadTotal }}）</template>
           <div class="fw-queue-tab-bar">
             <el-button v-permission="'system:queue:manage'" :loading="acting === 'purge'" type="danger" plain @click="purge()">清理全部死信</el-button>
           </div>
@@ -235,6 +246,18 @@ function formatPayload(payload: unknown): string {
             </el-table-column>
             <template #empty>暂无死信</template>
           </el-table>
+          <div v-if="deadTotal > 0" class="fw-queue-pagination">
+            <span class="fw-text-weak">共 {{ deadTotal }} 条</span>
+            <el-pagination
+              :current-page="deadPage"
+              :page-size="deadPageSize"
+              :total="deadTotal"
+              layout="prev, pager, next"
+              background
+              small
+              @current-change="(next: number) => { deadPage = next; void loadDeadLetters(); }"
+            />
+          </div>
         </el-tab-pane>
 
         <!-- 定时任务 -->
@@ -338,6 +361,14 @@ function formatPayload(payload: unknown): string {
 
 .fw-queue-tab-bar {
   margin-bottom: 12px;
+}
+
+.fw-queue-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .fw-queue-payload {

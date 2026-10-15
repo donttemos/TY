@@ -6,6 +6,8 @@
  *   鉴权由 @fw/auth 的全局 RBAC 守卫统一拦截，未接入鉴权的应用这些元数据不生效。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo 死信列表分页（体验债）：GET /admin/queue/dead-letters 支持 page/pageSize，
+ *   响应追加 page/pageSize 字段；改走 QueueService.pageDeadLetters（驱动侧窗口下推）
  * @module @fw/queue
  */
 
@@ -22,12 +24,16 @@ export const QUEUE_PERM_LIST = 'system:queue:list';
 /** 变更权限码（与 C-08 契约一致） */
 export const QUEUE_PERM_MANAGE = 'system:queue:manage';
 
-/** 死信列表响应 */
+/** 死信列表响应（分页；`page`/`pageSize` 为 N-01 之后追加的兼容字段） */
 export interface DeadLetterListResponse {
-  /** 总数 */
+  /** 总数（当前过滤条件下的死信条数，非本页条数） */
   total: number;
-  /** 明细 */
+  /** 明细（本页） */
   items: DeadLetterRecord[];
+  /** 当前页码（从 1 开始） */
+  page: number;
+  /** 每页条数 */
+  pageSize: number;
 }
 
 /**
@@ -76,14 +82,24 @@ export class QueueAdminController {
   }
 
   /**
-   * 死信列表
+   * 死信列表（分页）
+   *
+   * 加窗口的理由：死信随失败累积，此前全量返回在死信堆积时会让管理页首屏与响应体一起膨胀；
+   * 现在按 `page`/`pageSize`（默认 1 / 20，上限 200）只物化当前页，并回传 `total` 供分页器使用。
+   * 不传分页参数时行为与旧版一致（第一页 + 全量 total）。
+   *
    * @param queue 队列名（可选）
+   * @param page 页码（从 1 开始）
+   * @param pageSize 每页条数
    */
   @Get('dead-letters')
   @Permissions(QUEUE_PERM_LIST)
-  async deadLetters(@Query('queue') queue?: string): Promise<DeadLetterListResponse> {
-    const items = await this.queue.listDeadLetters(queue);
-    return { total: items.length, items };
+  async deadLetters(
+    @Query('queue') queue?: string,
+    @Query('page') page = '1',
+    @Query('pageSize') pageSize = '20',
+  ): Promise<DeadLetterListResponse> {
+    return this.queue.pageDeadLetters(queue, Number(page), Number(pageSize));
   }
 
   /**

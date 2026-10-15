@@ -47,6 +47,12 @@ export interface BullQueueLike {
   getJobCounts(...types: string[]): Promise<Record<string, number>>;
   /** 失败任务列表 */
   getFailed(start?: number, end?: number): Promise<BullJobLike[]>;
+  /**
+   * 失败任务总数（分页 total 用）
+   * bullmq 的 `Queue#getFailedCount` 并非所有版本都有，故声明为可选；
+   * 驱动侧缺失时回退为「按上限取一页再计数」（见 BullmqQueueDriver.countDeadLetters）。
+   */
+  getFailedCount?(): Promise<number>;
   /** 暂停消费 */
   pause(): Promise<void>;
   /** 恢复消费 */

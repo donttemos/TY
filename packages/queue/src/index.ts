@@ -79,6 +79,7 @@ export type {
   CronOptions,
   CronSnapshot,
   DeadLetterRecord,
+  DeadLetterWindow,
   Duration,
   Job,
   JobContext,

@@ -6,10 +6,12 @@
  *   本文件不得出现任何驱动特有类型（bullmq / ioredis 类型）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo 死信查询加窗口：listDeadLetters 增加可选 window（窗口下推到驱动），
+ *   新增 countDeadLetters 供分页 total 使用（体验债：死信列表无分页）
  * @module @fw/queue
  */
 
-import type { DeadLetterRecord, JobDriverName, JobRecord, QueueStats } from './types.js';
+import type { DeadLetterRecord, DeadLetterWindow, JobDriverName, JobRecord, QueueStats } from './types.js';
 
 /**
  * 任务执行回调：驱动把到期任务交给它执行。
@@ -91,8 +93,15 @@ export interface QueueDriverPort {
   /**
    * 死信列表
    * @param queue 队列名，缺省全部
+   * @param window 分页窗口（缺省全量；规模大时务必传，避免一次性物化整个死信集合）
    */
-  listDeadLetters(queue?: string): Promise<DeadLetterRecord[]>;
+  listDeadLetters(queue?: string, window?: DeadLetterWindow): Promise<DeadLetterRecord[]>;
+
+  /**
+   * 死信条数（分页 total 用；与 listDeadLetters 同一过滤口径）
+   * @param queue 队列名，缺省全部
+   */
+  countDeadLetters(queue?: string): Promise<number>;
 
   /**
    * 重放单条死信（按原 payload 重新入队）

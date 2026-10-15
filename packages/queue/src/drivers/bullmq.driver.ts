@@ -6,6 +6,8 @@
  *   优雅停机（等待在途，超时交由失速检测在重启后恢复）。切换驱动只改 MQ_DRIVER（TC-JOB-001）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo 死信窗口下推到 Redis：listDeadLetters 用 getFailed(start,end) 只取当前页，
+ *   新增 countDeadLetters（优先 getFailedCount，缺失时按保留上限回退计数）
  * @module @fw/queue
  */
 
@@ -13,7 +15,7 @@ import { Logger } from '@fw/logger';
 import type { JobRunner, QueueDriverPort } from '../driver.port.js';
 import { backoffFor } from '../duration.js';
 import { PermanentJobError } from '../errors.js';
-import type { DeadLetterRecord, JobDriverName, JobRecord, QueueStats, QueueStatsItem } from '../types.js';
+import type { DeadLetterRecord, DeadLetterWindow, JobDriverName, JobRecord, QueueStats, QueueStatsItem } from '../types.js';
 import {
   createBullConnection,
   loadBullmq,
@@ -198,13 +200,34 @@ export class BullmqQueueDriver implements QueueDriverPort {
   }
 
   /** @inheritdoc */
-  async listDeadLetters(queue?: string): Promise<DeadLetterRecord[]> {
+  async listDeadLetters(queue?: string, window?: DeadLetterWindow): Promise<DeadLetterRecord[]> {
     const out: DeadLetterRecord[] = [];
+    // 窗口直接下推到 Redis 的 LRANGE（getFailed(start, end)），不再把整个 failed 集合拉回来
+    const start = window ? Math.max(0, window.offset) : 0;
+    const end = window
+      ? Math.max(start, start + Math.max(0, window.limit) - 1)
+      : Math.max(0, this.options.deadLetterMax - 1);
+    if (window && window.limit <= 0) return out;
     for (const [, instance] of await this.targets(queue)) {
-      const jobs = await instance.getFailed(0, Math.max(0, this.options.deadLetterMax - 1));
+      const jobs = await instance.getFailed(start, end);
       for (const job of jobs) out.push(toDeadLetter(job));
     }
     return out;
+  }
+
+  /** @inheritdoc */
+  async countDeadLetters(queue?: string): Promise<number> {
+    let total = 0;
+    for (const [, instance] of await this.targets(queue)) {
+      if (typeof instance.getFailedCount === 'function') {
+        total += await instance.getFailedCount();
+        continue;
+      }
+      // 回退：该版本 bullmq 无 getFailedCount，按保留上限取一页计数（分页 total 的最接近值）
+      const jobs = await instance.getFailed(0, Math.max(0, this.options.deadLetterMax - 1));
+      total += jobs.length;
+    }
+    return total;
   }
 
   /** @inheritdoc */

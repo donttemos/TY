@@ -7,6 +7,7 @@
  *   局限：进程退出即丢任务（PRD-007 §8），仅用于可丢失的轻量任务。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo 死信窗口：listDeadLetters 支持 window 切片 + 新增 countDeadLetters
  * @module @fw/queue
  */
 
@@ -14,7 +15,7 @@ import { Logger } from '@fw/logger';
 import type { JobRunner, QueueDriverPort } from '../driver.port.js';
 import { PermanentJobError, QueueUnavailableError } from '../errors.js';
 import { backoffFor } from '../duration.js';
-import type { DeadLetterRecord, JobDriverName, JobRecord, QueueStats } from '../types.js';
+import type { DeadLetterRecord, DeadLetterWindow, JobDriverName, JobRecord, QueueStats } from '../types.js';
 
 const logger = Logger.for('queue.memory');
 
@@ -218,12 +219,21 @@ export class MemoryQueueDriver implements QueueDriverPort {
   }
 
   /** @inheritdoc */
-  async listDeadLetters(queue?: string): Promise<DeadLetterRecord[]> {
+  async listDeadLetters(queue?: string, window?: DeadLetterWindow): Promise<DeadLetterRecord[]> {
     const out: DeadLetterRecord[] = [];
     for (const state of this.targets(queue)) {
       for (const entry of state.deadLetters) out.push({ ...entry.view });
     }
-    return out.sort((a, b) => (a.failedAt < b.failedAt ? 1 : -1));
+    // 最新失败在前；再按窗口切片（进程内集合有 deadLetterMax 上限，全量排序代价可控）
+    const sorted = out.sort((a, b) => (a.failedAt < b.failedAt ? 1 : -1));
+    if (!window) return sorted;
+    const offset = Math.max(0, window.offset);
+    return sorted.slice(offset, offset + Math.max(0, window.limit));
+  }
+
+  /** @inheritdoc */
+  async countDeadLetters(queue?: string): Promise<number> {
+    return this.targets(queue).reduce((acc, state) => acc + state.deadLetters.length, 0);
   }
 
   /** @inheritdoc */

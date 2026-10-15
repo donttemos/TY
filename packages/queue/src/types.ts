@@ -4,6 +4,7 @@
  *   对外契约以 docs/contracts/queue.ts（C-08）为准，本文件不得出现契约外的公共语义改动。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo 新增 DeadLetterWindow（死信窗口查询，分页基础）
  * @module @fw/queue
  */
 
@@ -140,6 +141,20 @@ export interface DeadLetterRecord {
   failedAt: string;
   /** 首次入队时间（ISO 8601） */
   enqueuedAt: string;
+}
+
+/**
+ * 死信窗口（分页读取）
+ *
+ * 死信集合随失败累积，规模大时全量返回既占内存也拖慢管理页首屏；
+ * 驱动按 `offset`/`limit` 只物化所需区间（bullmq 直接映射到 `getFailed(start, end)`）。
+ * 不传窗口时保持旧语义（全量），既有调用方零改动。
+ */
+export interface DeadLetterWindow {
+  /** 起始偏移（从 0 开始） */
+  offset: number;
+  /** 本窗口条数 */
+  limit: number;
 }
 
 /** 单队列统计明细 */

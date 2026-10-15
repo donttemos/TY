@@ -7,6 +7,8 @@
  *   驱动的重试、退避与死信归档由驱动实现，本类只保证「同一份 Job 代码在两种驱动下行为一致」。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo 死信分页：新增 countDeadLetters / pageDeadLetters，
+ *   listDeadLetters 透传窗口（体验债：死信列表无分页）
  * @module @fw/queue
  */
 
@@ -22,6 +24,7 @@ import type { QueueGuardStore } from './guard-store.js';
 import { QueueMetrics } from './metrics.js';
 import type {
   DeadLetterRecord,
+  DeadLetterWindow,
   JobContext,
   JobHandle,
   JobHandlerFn,
@@ -293,9 +296,42 @@ export class QueueService implements JobRunner {
   /**
    * 死信列表
    * @param queue 队列名（缺省全部）
+   * @param window 分页窗口（缺省全量）
    */
-  async listDeadLetters(queue?: string): Promise<DeadLetterRecord[]> {
-    return this.driver.listDeadLetters(queue);
+  async listDeadLetters(queue?: string, window?: DeadLetterWindow): Promise<DeadLetterRecord[]> {
+    return this.driver.listDeadLetters(queue, window);
+  }
+
+  /**
+   * 死信条数（分页 total 用）
+   * @param queue 队列名（缺省全部）
+   */
+  async countDeadLetters(queue?: string): Promise<number> {
+    return this.driver.countDeadLetters(queue);
+  }
+
+  /**
+   * 死信分页（管理面入口）
+   *
+   * 页大小上限 200 与列表查询约定（api-spec §1.5）一致；越界值收敛到合法区间而不是报错——
+   * 运维页面的页码来自前端控件，因分页参数把整个管理页打成 400 得不偿失。
+   *
+   * @param queue 队列名（缺省全部）
+   * @param page 页码（从 1 开始）
+   * @param pageSize 每页条数
+   */
+  async pageDeadLetters(
+    queue: string | undefined,
+    page: number,
+    pageSize: number,
+  ): Promise<{ total: number; items: DeadLetterRecord[]; page: number; pageSize: number }> {
+    const safePage = Number.isFinite(page) ? Math.max(1, Math.floor(page)) : 1;
+    const safeSize = Number.isFinite(pageSize) ? Math.min(200, Math.max(1, Math.floor(pageSize))) : 20;
+    const [total, items] = await Promise.all([
+      this.driver.countDeadLetters(queue),
+      this.driver.listDeadLetters(queue, { offset: (safePage - 1) * safeSize, limit: safeSize }),
+    ]);
+    return { total, items, page: safePage, pageSize: safeSize };
   }
 
   /**
