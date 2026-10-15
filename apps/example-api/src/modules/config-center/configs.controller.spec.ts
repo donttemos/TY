@@ -22,6 +22,8 @@ function makeCenter(writeImpl?: (key: string, value: unknown) => Promise<ConfigW
       { key: 'cache.ttl', value: 600, source: 'runtime' as const, hot: true as const, envKey: 'CACHE_TTL', updatedAt: '2026-10-15T00:00:00.000Z' },
     ]),
     meta: vi.fn(() => ({ driver: 'file', snapshotVersion: 2, pollSeconds: 5, lastAppliedAt: '2026-10-15T00:00:00.000Z', lastError: null })),
+    // M10 E-02：GET 前对齐持久层版本基线（桩返回与 meta 同值）
+    syncRemoteVersion: vi.fn(async () => 2),
     write: vi.fn(async (key: string, value: unknown, _ctx: unknown) => {
       if (writeImpl) return writeImpl(key, value);
       center.writes.push({ key, value });
@@ -34,11 +36,11 @@ function makeCenter(writeImpl?: (key: string, value: unknown) => Promise<ConfigW
 const user = { id: 'u1', username: 'admin' };
 
 describe('ConfigsController（/api/v1/configs）', () => {
-  it('GET：返回白名单键值列表与运行元信息', () => {
+  it('GET：返回白名单键值列表与运行元信息', async () => {
     const center = makeCenter();
     const controller = new ConfigsController(center, { enabled: true });
 
-    const response = controller.list();
+    const response = await controller.list();
 
     expect(response.configs).toHaveLength(2);
     expect(response.meta).toMatchObject({ driver: 'file', snapshotVersion: 2 });

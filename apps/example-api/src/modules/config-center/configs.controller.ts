@@ -42,11 +42,18 @@ export class ConfigsController {
     @Inject(CONFIG_CENTER_STATE) private readonly state: { enabled: boolean },
   ) {}
 
-  /** 白名单键当前生效值列表 + 运行元信息 */
+  /**
+   * 白名单键当前生效值列表 + 运行元信息
+   *
+   * M10 E-02：返回前先对齐持久层版本基线（syncRemoteVersion）——多副本下 A 实例写入的版本，
+   * B 实例无需等本地写操作即可在 meta.snapshotVersion 读到一致值（AC2）；
+   * 未注入持久历史时等价于直接读本地版本号（原行为）。
+   */
   @Permissions(PERM.CONFIG_READ)
   @Get()
-  list(): ConfigListResponse {
-    return { configs: this.center.list(), meta: this.center.meta() };
+  async list(): Promise<ConfigListResponse> {
+    const snapshotVersion = await this.center.syncRemoteVersion();
+    return { configs: this.center.list(), meta: { ...this.center.meta(), snapshotVersion } };
   }
 
   /** 修改白名单键（写权限独立授予；审计由配置中心管道统一落盘，此处不重复 @Audit） */

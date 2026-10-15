@@ -18,6 +18,7 @@ export type {
   ConfigCenterMeta,
   ConfigDriverPort,
   ConfigEntryView,
+  ConfigHistoryPort,
   ConfigRollbackChange,
   ConfigRollbackResult,
   ConfigSnapshotEntry,

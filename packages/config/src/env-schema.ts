@@ -15,6 +15,8 @@
  *   新增 ENV_KEY_PATHS（全部 Env 键 → 点路径注册表）与 ENV_HOT_KEYS（热更新白名单，FR-03）——
  *   两者都以类型与单测强制与 envSchema.shape 对齐：新增配置键未登记映射时单测即失败（防键集漂移）
  * @modified 2026-10-15 donttemo M10/E-01 新增 JOB_CENTER_DRIVER（任务中心驱动，boot 键不入热更白名单）
+ * @modified 2026-10-15 donttemo M10/E-02 CONFIG_CENTER_DRIVER 枚举转正 nacos；新增 6 个
+ *   CONFIG_CENTER_NACOS_* 键（服务地址/dataId/分组/命名空间/鉴权用户名密码）——72 键
  * @module config
  * @since v0.1.0
  */
@@ -40,8 +42,8 @@ export const TRANSPORT_DRIVER_VALUES = ['in-process', 'redis'] as const;
 export const TRANSPORT_ROLE_VALUES = ['caller', 'handler', 'both'] as const;
 /** 租户识别来源可选值（M8 起生效，PRD-008 FR-01 三级回退） */
 export const TENANT_SOURCE_VALUES = ['subdomain', 'header', 'jwt'] as const;
-/** 配置中心驱动可选值（M9/PRD-009 FR-01 起生效；`nacos` 仅预留 adapter 注册位，暂不入枚举——非法取值启动即失败） */
-export const CONFIG_CENTER_DRIVER_VALUES = ['file'] as const;
+/** 配置中心驱动可选值（M9/PRD-009 FR-01 起生效；M10 E-02 `nacos` 转正入枚举——非法取值启动即失败） */
+export const CONFIG_CENTER_DRIVER_VALUES = ['file', 'nacos'] as const;
 /** 任务中心驱动可选值（M10/E-01 起生效）：memory 进程内（默认）/ db 落库+派发实例执行 / bullmq 落库+队列分发 */
 export const JOB_CENTER_DRIVER_VALUES = ['memory', 'db', 'bullmq'] as const;
 
@@ -210,6 +212,18 @@ export const envSchema = z.object({
   CONFIG_CENTER_POLL_SECONDS: z.coerce.number().int().min(1).max(300).default(5).describe('配置中心轮询间隔（秒，CONFIG_CENTER_POLL_SECONDS）'),
   /** 任务中心驱动（M10/E-01）：memory 进程内（默认，N-02 原行为）/ db 落库+派发实例执行 / bullmq 落库+队列分发；boot 键禁热更 */
   JOB_CENTER_DRIVER: z.enum(JOB_CENTER_DRIVER_VALUES).default('memory').describe('任务中心驱动（JOB_CENTER_DRIVER）'),
+  /** Nacos 服务地址（M10/E-02，CONFIG_CENTER_DRIVER=nacos 时必填，缺失启动即失败） */
+  CONFIG_CENTER_NACOS_SERVER_ADDR: optionalString().describe('Nacos 服务地址（CONFIG_CENTER_NACOS_SERVER_ADDR）'),
+  /** Nacos 配置 ID（M10/E-02，对应一份运行时覆盖 JSON） */
+  CONFIG_CENTER_NACOS_DATA_ID: z.string().min(1).default('fw-runtime').describe('Nacos dataId（CONFIG_CENTER_NACOS_DATA_ID）'),
+  /** Nacos 分组（M10/E-02） */
+  CONFIG_CENTER_NACOS_GROUP: z.string().min(1).default('DEFAULT_GROUP').describe('Nacos 分组（CONFIG_CENTER_NACOS_GROUP）'),
+  /** Nacos 命名空间（M10/E-02，缺省 public） */
+  CONFIG_CENTER_NACOS_NAMESPACE: optionalString().describe('Nacos 命名空间（CONFIG_CENTER_NACOS_NAMESPACE）'),
+  /** Nacos 鉴权用户名（M10/E-02，开启鉴权时必填） */
+  CONFIG_CENTER_NACOS_USERNAME: optionalString().describe('Nacos 用户名（CONFIG_CENTER_NACOS_USERNAME）'),
+  /** Nacos 鉴权密码（M10/E-02，开启鉴权时必填；敏感键不入日志） */
+  CONFIG_CENTER_NACOS_PASSWORD: optionalString().describe('Nacos 密码（CONFIG_CENTER_NACOS_PASSWORD）'),
 });
 
 /** 校验后的环境变量类型 */
@@ -305,6 +319,12 @@ export const ENV_KEY_PATHS = {
   CONFIG_CENTER_DRIVER: 'configCenter.driver',
   CONFIG_CENTER_FILE: 'configCenter.file',
   CONFIG_CENTER_POLL_SECONDS: 'configCenter.pollSeconds',
+  CONFIG_CENTER_NACOS_SERVER_ADDR: 'configCenter.nacos.serverAddr',
+  CONFIG_CENTER_NACOS_DATA_ID: 'configCenter.nacos.dataId',
+  CONFIG_CENTER_NACOS_GROUP: 'configCenter.nacos.group',
+  CONFIG_CENTER_NACOS_NAMESPACE: 'configCenter.nacos.namespace',
+  CONFIG_CENTER_NACOS_USERNAME: 'configCenter.nacos.username',
+  CONFIG_CENTER_NACOS_PASSWORD: 'configCenter.nacos.password',
   JOB_CENTER_DRIVER: 'jobCenter.driver',
 } as const satisfies Record<keyof Env, string>;
 

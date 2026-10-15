@@ -298,9 +298,22 @@ async function phaseDisabled() {
   await stopServer(server);
 }
 
+/** 清空快照历史持久层（M10 E-02：持久历史下启动版本基线对齐远端——冒烟要求干净环境的「启动版本=1」断言） */
+async function clearSnapshotHistory() {
+  try {
+    const { PrismaClient } = await import('@prisma/client');
+    const client = new PrismaClient();
+    await client.configSnapshot.deleteMany();
+    await client.$disconnect();
+  } catch {
+    // 清理失败不阻断（该表 M10 E-02 才引入；无表 = 无历史 = 断言语义自然成立）
+  }
+}
+
 async function main() {
   const runtimeFile = path.join(os.tmpdir(), `fw-config-smoke-${Date.now()}.json`);
   try {
+    await clearSnapshotHistory();
     await phaseEnabled(runtimeFile);
     await phaseDisabled();
   } finally {

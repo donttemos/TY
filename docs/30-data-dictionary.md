@@ -435,6 +435,18 @@ erDiagram
 
 > 生成器依据此约定产出：后端 Entity/DTO/Service/Controller、前端列表与表单、四个权限点（`order:create/read/update/delete`）与菜单 seed。
 
+### 3.16 `config_snapshots` 配置快照历史（M10 E-02）
+
+> 配置中心多实例语义持久层：`CONFIG_CENTER_ENABLED=true` 时装配——快照历史与版本号基线下沉此表，
+> A 实例写入的版本对 B 实例可见（回滚跨实例一致，PRD-010 AC2），meta.snapshotVersion 读取经持久层对齐。
+> 保留最近 20 版（与框架环形表上限同口径），超出淘汰最旧；`memory` 语义（不注入持久历史）为缺省行为。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
+|---|---|---|---|---|---|
+| `version` | int | 是 | — | 快照版本号（主键；与 meta.snapshotVersion 同口径，append 为 upsert 语义） | PK |
+| `overlay` | text（JSON 字符串） | 是 | — | 该版本生效时刻的运行时覆盖集（点路径 → 覆盖值；不含 env 基线） | — |
+| `applied_at` | datetime(3) | 是 | — | 该版本生效时间 | — |
+
 ## 4. 迁移与数据治理
 
 - 一次变更一个 migration，命名 `<序号>_<动作>_<表>`；禁止修改已提交迁移文件。

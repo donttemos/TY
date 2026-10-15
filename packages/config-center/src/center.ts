@@ -7,6 +7,9 @@
  * @created 2026-10-15
  * @modified 2026-10-15 donttemo M9 Backlog：一键回滚——进程内快照历史环形表（20 条）+ rollback()
  *   （先全量预审计 → 持久化目标覆盖 → 逐键应用并通知；回滚本身也是一次版本推进并计入历史）
+ * @modified 2026-10-15 donttemo M10 E-02：多实例语义——可选注入 ConfigHistoryPort，快照历史下沉
+ *   持久层：版本号以持久层最新值为基线推进（多实例不撞号），回滚候选集跨实例可见（AC2），
+ *   syncRemoteVersion() 供 GET /configs 读取时对齐（A 写版本 B 读一致）。不注入 = 进程内环形表（原行为）
  * @module config-center
  */
 import { envSchema, ENV_HOT_KEYS, ENV_KEY_PATHS, type Env } from '@fw/config';
@@ -17,6 +20,7 @@ import type {
   ConfigCenterMeta,
   ConfigDriverPort,
   ConfigEntryView,
+  ConfigHistoryPort,
   ConfigRollbackChange,
   ConfigRollbackResult,
   ConfigSnapshotEntry,
@@ -41,12 +45,17 @@ const HOT_PATHS: readonly string[] = Object.keys(ENV_HOT_KEYS);
 
 /** 构造参数 */
 export interface ConfigCenterOptions {
-  /** 事实源驱动（首版 file；nacos 由落地项目实现后注册） */
+  /** 事实源驱动（file = 本地文件；nacos = Nacos v1 Open API 轮询，M10 E-02 转正入枚举） */
   driver: ConfigDriverPort;
   /** 启动时已校验的 env 快照（覆盖值的回退基线） */
   env: Env;
   /** 审计端口（缺省无审计——仅建议测试场景；生产装配必须提供） */
   audit?: ConfigAuditPort;
+  /**
+   * 快照历史持久端口（M10 E-02 多实例语义，可选）：注入后历史与版本基线下沉持久层，
+   * 多副本回滚/版本号一致；缺省 = 进程内环形表（M9 原行为，单实例语义）
+   */
+  history?: ConfigHistoryPort;
   /** 时钟注入（测试用；缺省系统时间） */
   now?: () => Date;
 }
@@ -72,6 +81,9 @@ export class ConfigCenterService {
   private readonly env: Env;
 
   private readonly audit: ConfigAuditPort | undefined;
+
+  /** 快照历史持久端口（M10 E-02，可选；缺省进程内环形表） */
+  private readonly historyPort: ConfigHistoryPort | undefined;
 
   private readonly now: () => Date;
 
@@ -101,6 +113,7 @@ export class ConfigCenterService {
     this.driver = options.driver;
     this.env = options.env;
     this.audit = options.audit;
+    this.historyPort = options.history;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -120,7 +133,7 @@ export class ConfigCenterService {
       this.lastError = '配置事实源缺失或损坏，按 env 快照启动（fail-open）';
       logger.warn('配置中心：事实源不可读，按 env 快照启动（fail-open）', { driver: this.driver.kind });
       this.version = 1;
-      this.recordHistory();
+      await this.recordHistory();
       return;
     }
     // 全量校验：键与值任一非法即启动失败
@@ -139,7 +152,18 @@ export class ConfigCenterService {
       this.updatedAt.set(key, this.now().toISOString());
     }
     this.version = 1;
-    this.recordHistory();
+    // M10 E-02：持久历史下启动版本基线对齐远端（其他实例已推进的版本不从 1 重启计数）
+    if (this.historyPort) {
+      try {
+        const remote = await this.historyPort.latest();
+        this.version = Math.max(this.version, remote?.version ?? 1);
+      } catch (error) {
+        logger.warn('配置中心：启动读取持久历史失败（按本地版本号启动）', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    await this.recordHistory();
     // 启动轮询：外部事实源变更 → ingestExternal（file 适配 = mtime 轮询回调；单实例语义，文档已明示）
     this.driver.watch((snapshot) => {
       void this.ingestExternal(snapshot).catch((error: unknown) => {
@@ -250,12 +274,12 @@ export class ConfigCenterService {
       }
     }
 
-    // 3) 应用覆盖 → 4) 通知订阅者
+    // 3) 应用覆盖 → 4) 通知订阅者（版本号以持久层最新值为基线推进——多实例不撞号）
     this.overlay.set(key, value);
     this.updatedAt.set(key, change.at);
-    this.version += 1;
+    await this.advanceVersion(ctx.source);
     this.lastAppliedAt = change.at;
-    this.recordHistory();
+    await this.recordHistory();
     this.notify(key, value);
     logger.info('配置变更已生效', { key, source: ctx.source, operator: ctx.operator, snapshotVersion: this.version });
     return { key, oldValue, newValue: value, snapshotVersion: this.version };
@@ -324,9 +348,9 @@ export class ConfigCenterService {
         }
         this.overlay.delete(key);
         this.updatedAt.set(key, this.now().toISOString());
-        this.version += 1;
+        await this.advanceVersion(ctx.source);
         this.lastAppliedAt = this.updatedAt.get(key) as string;
-        this.recordHistory();
+        await this.recordHistory();
         this.notify(key, envValue);
         logger.info('配置覆盖已被事实源移除，恢复 env 默认值', { key, snapshotVersion: this.version });
       }
@@ -350,20 +374,32 @@ export class ConfigCenterService {
    * @param ctx 调用方上下文（api 源；回滚仅开放给管理端点）
    */
   async rollback(targetVersion: number | undefined, ctx: ConfigWriteContext): Promise<ConfigRollbackResult> {
-    const fromVersion = this.version;
+    const fromVersion = await this.syncRemoteVersion();
+    // 回滚候选集：注入持久历史时跨实例可见（A 实例写入的版本 B 实例可回滚——AC2），
+    // 缺省 = 进程内环形表（M9 原行为）
+    let candidates: ConfigSnapshotEntry[];
+    if (this.historyPort) {
+      try {
+        candidates = await this.historyPort.list(MAX_HISTORY);
+      } catch (error) {
+        throw new BizError(ErrorCode.INTERNAL, `读取配置历史失败：${error instanceof Error ? error.message : String(error)}`);
+      }
+    } else {
+      candidates = [...this.history].sort((a, b) => b.version - a.version);
+    }
     let entry: ConfigSnapshotEntry;
     if (targetVersion === undefined) {
-      const previous = [...this.history].reverse().find((e) => e.version < fromVersion);
+      const previous = candidates.find((e) => e.version < fromVersion);
       if (!previous) {
         throw new BizError(ErrorCode.STATE_NOT_ALLOWED, '没有可回滚的历史版本（启动后无成功变更）');
       }
       entry = previous;
     } else {
-      const found = this.history.find((e) => e.version === targetVersion);
+      const found = candidates.find((e) => e.version === targetVersion);
       if (!found) {
         throw new BizError(
           ErrorCode.CONFIG_NOT_FOUND,
-          `配置历史版本 ${targetVersion} 不存在（进程内仅保留最近 ${MAX_HISTORY} 个版本）`,
+          `配置历史版本 ${targetVersion} 不存在（仅保留最近 ${MAX_HISTORY} 个版本）`,
         );
       }
       entry = found;
@@ -427,9 +463,9 @@ export class ConfigCenterService {
       this.updatedAt.set(change.key, at);
       this.notify(change.key, change.newValue);
     }
-    this.version += 1;
+    await this.advanceVersion(ctx.source);
     this.lastAppliedAt = at;
-    this.recordHistory();
+    await this.recordHistory();
     logger.info('配置已回滚', {
       fromVersion,
       toVersion: entry.version,
@@ -445,9 +481,27 @@ export class ConfigCenterService {
     };
   }
 
-  /** 快照历史条目数（诊断用） */
+  /** 快照历史条目数（诊断用；注入持久历史时为本地环形表条数） */
   get historySize(): number {
     return this.history.length;
+  }
+
+  /**
+   * 对齐远端版本基线（M10 E-02，GET /configs 读取路径用）：
+   * 注入持久历史时取持久层最新版本与本地取大——A 实例写入的版本，B 实例无需等待本地写操作
+   * 即可在 meta.snapshotVersion 上读到一致值（AC2）；缺省直接返回本地版本号（原行为）。
+   */
+  async syncRemoteVersion(): Promise<number> {
+    if (!this.historyPort) return this.version;
+    try {
+      const remote = await this.historyPort.latest();
+      this.version = Math.max(this.version, remote?.version ?? 0);
+    } catch (error) {
+      logger.warn('配置中心：读取持久历史最新版本失败（按本地版本号返回）', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return this.version;
   }
 
   /** 白名单键列表（GET /configs 数据源；boot 键不进列表——env 独占，重启变更） */
@@ -549,14 +603,58 @@ export class ConfigCenterService {
     await this.driver.write(snapshot);
   }
 
-  /** 记录当前版本的覆盖集快照到历史环形表（每次版本推进后调用；超上限淘汰最旧） */
-  private recordHistory(): void {
-    this.history.push({
+  /**
+   * 记录当前版本的覆盖集快照（每次版本推进后调用）：
+   * 本地环形表恒维护（M9 原行为；诊断与缺省回滚数据源）；注入持久历史时同步 append
+   * （失败仅 WARN——历史缺失一条影响回滚候选，不影响已生效值与事实源权威性）。
+   */
+  private async recordHistory(): Promise<void> {
+    const entry: ConfigSnapshotEntry = {
       version: this.version,
       at: this.lastAppliedAt ?? this.now().toISOString(),
       overlay: Object.fromEntries(this.overlay),
-    });
+    };
+    this.history.push(entry);
     while (this.history.length > MAX_HISTORY) this.history.shift();
+    if (this.historyPort) {
+      try {
+        await this.historyPort.append(entry);
+      } catch (error) {
+        logger.warn('配置中心：快照历史持久化失败（本版本将缺席跨实例回滚候选）', {
+          version: this.version,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  /**
+   * 版本推进（M10 E-02）：
+   * - 未注入持久历史：本地 +1（M9 原行为）；
+   * - 注入持久历史 + api/rollback 源：以持久层最新版本为基线取大 +1（多实例不撞号）；
+   * - 注入持久历史 + file 源（外部事实源轮询）：若持久层已有比本地更新的版本（其他实例
+   *   为同一变更登记过）→ **对齐不推号**（B 实例追上 A 的 v2 而非另占 v3）；否则推新号
+   *   （无任何实例登记过的外部变更，如直改 Nacos 控制台）。
+   */
+  private async advanceVersion(source: ConfigWriteContext['source']): Promise<void> {
+    if (!this.historyPort) {
+      this.version += 1;
+      return;
+    }
+    try {
+      const remote = await this.historyPort.latest();
+      const remoteVersion = remote?.version ?? 0;
+      if (source === 'file' && remoteVersion > this.version) {
+        this.version = remoteVersion;
+        return;
+      }
+      this.version = Math.max(this.version, remoteVersion) + 1;
+    } catch (error) {
+      logger.warn('配置中心：推进版本号前读取持久历史失败（按本地版本号推进）', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.version += 1;
+    }
   }
 
   /** 通知订阅者：单订阅者异常不影响其他订阅者与生效结果（值已生效，通知失败不回滚） */

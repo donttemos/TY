@@ -310,3 +310,12 @@ model JobRecord {
   @@index([status], map: "idx_jobs_status")
   @@map("jobs")
 }
+
+/// 配置快照历史（M10 E-02：配置中心多实例语义持久层，数据字典 §3.16；保留最近 20 版，超出淘汰最旧）
+model ConfigSnapshot {
+  version   Int      @id
+  overlay   String
+  appliedAt DateTime @map("applied_at")
+
+  @@map("config_snapshots")
+}
