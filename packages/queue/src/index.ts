@@ -46,7 +46,7 @@ export { MemoryQueueDriver } from './drivers/memory.driver.js';
 export type { MemoryDriverOptions } from './drivers/memory.driver.js';
 export { BullmqQueueDriver } from './drivers/bullmq.driver.js';
 export type { BullmqDriverOptions } from './drivers/bullmq.driver.js';
-export { createBullConnection, loadBullmq } from './drivers/bullmq-client.js';
+export { createBullConnection, loadBullmq, parseClusterNodes } from './drivers/bullmq-client.js';
 export type { BullJobLike, BullQueueLike, BullmqModuleLike, BullWorkerLike, RedisConnectionLike } from './drivers/bullmq-client.js';
 export type { JobRunner, QueueDriverPort } from './driver.port.js';
 

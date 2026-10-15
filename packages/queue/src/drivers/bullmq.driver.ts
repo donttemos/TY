@@ -367,6 +367,14 @@ export class BullmqQueueDriver implements QueueDriverPort {
   /** 建立连接（幂等） */
   private async ensureConnection(): Promise<RedisConnectionLike> {
     this.connection ??= this.options.connection ?? (await createBullConnection(this.options.url));
+    // M10 E-06：cluster 形态（多节点连接串）下 BullMQ 的键族必须同槽（hash-tag）——
+    // 官方约定 prefix 带花括号（如 `{fw:prod}:`），否则多键命令将报 CROSSSLOT。这里给出可操作的启动告警。
+    if (this.options.url?.includes(',') && !this.options.prefix.includes('{')) {
+      logger.warn(
+        'MQ_URL 为 Redis Cluster（多节点）而 MQ_PREFIX 未含 hash-tag 花括号：BullMQ 键族可能跨槽报 CROSSSLOT，请将 MQ_PREFIX 设为 `{...}:` 形式',
+        { prefix: this.options.prefix },
+      );
+    }
     return this.connection;
   }
 

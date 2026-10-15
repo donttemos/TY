@@ -115,9 +115,32 @@ export interface RedisConnectionLike {
   on(event: string, handler: (...args: unknown[]) => void): unknown;
 }
 
+/** ioredis Cluster 客户端最小结构（RedisConnectionLike 的动态方法由实例天然满足） */
+export type RedisClusterLike = RedisConnectionLike & { isCluster?: boolean };
+
 /** ioredis 模块结构 */
 interface IoredisModule {
   default: new (urlOrOptions: unknown, options?: Record<string, unknown>) => RedisConnectionLike;
+  /** ioredis.Cluster 构造器（M10 E-06：Redis Cluster 形态） */
+  Cluster?: new (nodes: Array<{ host: string; port: number }>, options?: Record<string, unknown>) => RedisClusterLike;
+}
+
+/**
+ * 解析多节点连接串（M10 E-06）：逗号分隔的 `redis://host:port` / `host:port` 列表 → 节点数组。
+ * @returns 非逗号串返回 null（调用方走单实例路径）
+ */
+export function parseClusterNodes(url: string): Array<{ host: string; port: number }> | null {
+  if (!url.includes(',')) return null;
+  return url
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '')
+    .map((part) => {
+      const stripped = part.replace(/^[a-z]+:\/\//i, '').replace(/^[^@]*@/, '');
+      const host = stripped.includes(':') ? stripped.slice(0, stripped.lastIndexOf(':')) : stripped;
+      const port = Number(stripped.slice(stripped.lastIndexOf(':') + 1)) || 6379;
+      return { host, port };
+    });
 }
 
 /** 懒加载缓存：同一进程只解析一次 */
@@ -160,12 +183,27 @@ export async function createBullConnection(url: string | undefined): Promise<Red
   } catch (cause) {
     throw new QueueUnavailableError(`未安装 ioredis：MQ_DRIVER=bullmq 需要 ioredis（pnpm add ioredis）。memory 驱动无需安装。`, cause);
   }
-  const client = new mod.default(url, {
-    // bullmq 强制要求：阻塞连接不得设置重试上限
-    maxRetriesPerRequest: null,
-    connectTimeout: 3000,
-    enableReadyCheck: true,
-  });
+  // M10 E-06：多节点连接串（逗号分隔）→ Redis Cluster 客户端（bullmq 官方要求阻塞连接
+  // maxRetriesPerRequest=null 在 cluster 下同样成立）。单节点走原路径。
+  const nodes = parseClusterNodes(url);
+  let client: RedisConnectionLike;
+  if (nodes && mod.Cluster) {
+    client = new mod.Cluster(nodes, {
+      redisOptions: {
+        maxRetriesPerRequest: null,
+        connectTimeout: 3000,
+        enableReadyCheck: true,
+      },
+      clusterRetryStrategy: (times: number) => (times < 5 ? Math.min(times * 200, 1000) : null),
+    });
+  } else {
+    client = new mod.default(url, {
+      // bullmq 强制要求：阻塞连接不得设置重试上限
+      maxRetriesPerRequest: null,
+      connectTimeout: 3000,
+      enableReadyCheck: true,
+    });
+  }
   client.on('error', () => {
     // 连接异常由 QueueUnavailableError / 指标反映；此处仅消费事件，避免未捕获异常导致进程退出
   });

@@ -35,6 +35,23 @@ export interface RedisLike {
 /** ioredis 模块结构 */
 interface IoredisModule {
   default: new (urlOrOptions: unknown, options?: Record<string, unknown>) => RedisLike;
+  /** ioredis.Cluster 构造器（M10 E-06：Redis Cluster 形态） */
+  Cluster?: new (nodes: Array<{ host: string; port: number }>, options?: Record<string, unknown>) => RedisLike;
+}
+
+/** 解析多节点连接串（逗号分隔）→ 节点数组；非逗号串返回 null */
+function parseClusterNodes(url: string): Array<{ host: string; port: number }> | null {
+  if (!url.includes(',')) return null;
+  return url
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '')
+    .map((part) => {
+      const stripped = part.replace(/^[a-z]+:\/\//i, '').replace(/^[^@]*@/, '');
+      const host = stripped.includes(':') ? stripped.slice(0, stripped.lastIndexOf(':')) : stripped;
+      const port = Number(stripped.slice(stripped.lastIndexOf(':') + 1)) || 6379;
+      return { host, port };
+    });
 }
 
 /** 缺连接串的可操作报错文案（createRedisClient 与驱动 start 校验共用） */
@@ -77,11 +94,26 @@ export async function createRedisClient(url: string | undefined): Promise<RedisL
     throw new TransportUnavailableError(MISSING_REDIS_URL_MESSAGE);
   }
   const mod = await loadIoredis();
-  const client = new mod.default(url, {
-    maxRetriesPerRequest: 2,
-    connectTimeout: 3000,
-    enableReadyCheck: true,
-  });
+  // M10 E-06：多节点连接串（逗号分隔）→ Redis Cluster 客户端。transport 的键操作全部单键
+  // （LPUSH/BLPOP/BRPOP/DEL/EXPIRE 各自独立），cluster 下无 CROSSSLOT 风险，无需 hash-tag。
+  const nodes = parseClusterNodes(url);
+  let client: RedisLike;
+  if (nodes && mod.Cluster) {
+    client = new mod.Cluster(nodes, {
+      redisOptions: {
+        maxRetriesPerRequest: 2,
+        connectTimeout: 3000,
+        enableReadyCheck: true,
+      },
+      clusterRetryStrategy: (times: number) => (times < 5 ? Math.min(times * 200, 1000) : null),
+    });
+  } else {
+    client = new mod.default(url, {
+      maxRetriesPerRequest: 2,
+      connectTimeout: 3000,
+      enableReadyCheck: true,
+    });
+  }
   client.on('error', () => {
     // 连接异常由调用超时 / 就绪探针反映；此处仅消费事件，避免未捕获异常导致进程退出
   });

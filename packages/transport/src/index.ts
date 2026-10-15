@@ -21,7 +21,7 @@ export { InProcessTransportDriver } from './drivers/in-process.driver.js';
 export type { InProcessDriverOptions } from './drivers/in-process.driver.js';
 export { RedisTransportDriver } from './drivers/redis.driver.js';
 export type { RedisTransportDriverOptions } from './drivers/redis.driver.js';
-export { createRedisClient, loadIoredis } from './drivers/redis-client.js';
+export { createRedisClient, parseClusterNodes, loadIoredis } from './drivers/redis-client.js';
 export type { RedisLike } from './drivers/redis-client.js';
 export type { TransportDriverPort } from './driver.port.js';
 
