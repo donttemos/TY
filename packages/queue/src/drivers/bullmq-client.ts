@@ -85,6 +85,8 @@ export interface BullWorkerLike {
   pause(doNotWaitActive?: boolean): Promise<void>;
   /** 恢复消费 */
   resume(): Promise<void>;
+  /** 运行时并发上限（bullmq Worker 原生可变属性；M9 配置中心热更 mq.concurrency 的生效路径） */
+  concurrency?: number;
 }
 
 /** bullmq 模块结构（动态 import 后的最小依赖面） */

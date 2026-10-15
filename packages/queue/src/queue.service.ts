@@ -9,6 +9,7 @@
  * @created 2026-10-13
  * @modified 2026-10-15 donttemo 死信分页：新增 countDeadLetters / pageDeadLetters，
  *   listDeadLetters 透传窗口（体验债：死信列表无分页）
+ * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：新增 updateRuntimeOptions——mq.concurrency/rateLimit 经配置中心订阅热更（下推驱动）
  * @module @fw/queue
  */
 
@@ -96,6 +97,19 @@ export class QueueService implements JobRunner {
     this.metrics = deps.metrics ?? new QueueMetrics();
     this.now = deps.now ?? (() => Date.now());
     this.alert = deps.alert;
+  }
+
+  /**
+   * 运行时更新并发与限速（M9/PRD-009 FR-09：由配置中心 onChange 订阅调用，禁止业务侧自行轮询）
+   *
+   * 生效路径：服务侧选项对象就地更新 + 下推驱动（memory 即时生效；bullmq concurrency 即时、
+   * rateLimit 随消费器重建生效并记 WARN）。合法性由配置中心管道保证，本方法不二次校验。
+   * @param patch 待更新字段（并发 / 限速）
+   */
+  updateRuntimeOptions(patch: { concurrency?: number; rateLimit?: number }): void {
+    Object.assign(this.opt, patch);
+    this.driver.applyRuntimeOptions?.(patch);
+    logger.info('队列运行时选项已热更', { ...patch });
   }
 
   /** 当前驱动名 */

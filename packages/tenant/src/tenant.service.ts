@@ -5,6 +5,7 @@
  *   租户信息按 TTL 内存缓存（TENANT_CACHE_TTL），停用/换库等管理操作最多延迟一个 TTL 生效。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：新增 updateRuntimeOptions——tenant.cacheTtl 经配置中心订阅热更（对新缓存条目生效）
  * @module @fw/tenant
  */
 import { BizError, ErrorCode } from '@fw/core';
@@ -80,6 +81,17 @@ export class TenantService {
   /** 清空缓存（管理操作后主动失效） */
   invalidate(): void {
     this.cache.clear();
+  }
+
+  /**
+   * 运行时更新租户信息缓存 TTL（M9/PRD-009 FR-09：由配置中心 onChange 订阅调用，禁止业务侧自行轮询）。
+   * TTL 在每次写入缓存条目时读取，热更对新条目即时生效（已有条目按原到期时间过期）。
+   * @param patch 待更新字段（缓存 TTL，毫秒）
+   */
+  updateRuntimeOptions(patch: { cacheTtlMs?: number }): void {
+    if (patch.cacheTtlMs !== undefined) {
+      this.options.cacheTtlMs = patch.cacheTtlMs;
+    }
   }
 
   private assertUsable(tenant: TenantInfo): void {

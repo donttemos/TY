@@ -8,6 +8,8 @@
  * @created 2026-10-13
  * @modified 2026-10-15 donttemo 死信查询加窗口：listDeadLetters 增加可选 window（窗口下推到驱动），
  *   新增 countDeadLetters 供分页 total 使用（体验债：死信列表无分页）
+ * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：新增可选 applyRuntimeOptions——mq.concurrency /
+ *   mq.rateLimit 热更的驱动生效路径（memory 即时生效；bullmq concurrency 即时、rateLimit 待消费器重建）
  * @module @fw/queue
  */
 
@@ -119,6 +121,14 @@ export interface QueueDriverPort {
 
   /** 可用性探测 */
   ping(): Promise<boolean>;
+
+  /**
+   * 应用运行时选项变更（可选能力，M9/PRD-009 FR-09）：由 QueueService 经配置中心订阅调用。
+   * memory 驱动并发与限速即时生效；bullmq 驱动 concurrency 即时生效（Worker 原生可变），
+   * rateLimit 随消费器创建固化、变更后记 WARN 待重建生效。未实现该方法的驱动忽略热更。
+   * @param patch 待更新字段（并发 / 限速）
+   */
+  applyRuntimeOptions?(patch: { concurrency?: number; rateLimit?: number }): void;
 
   /**
    * 优雅停机：停止消费 → 等待在途任务（超时）→ 未完成任务重新入队

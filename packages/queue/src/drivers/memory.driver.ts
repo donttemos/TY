@@ -8,6 +8,7 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-15 donttemo 死信窗口：listDeadLetters 支持 window 切片 + 新增 countDeadLetters
+ * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：新增 applyRuntimeOptions——并发/限速就地更新即时生效（pump 与令牌判定逐次读取）
  * @module @fw/queue
  */
 
@@ -118,6 +119,13 @@ export class MemoryQueueDriver implements QueueDriverPort {
     this.clearTimer = options.clearTimer ?? defaultClearTimer;
     this.tokens = options.rateLimit;
     this.tokensAt = this.now();
+  }
+
+  /** @inheritdoc */
+  applyRuntimeOptions(patch: { concurrency?: number; rateLimit?: number }): void {
+    // 并发在每次 pump 调度时读取、限速在每次令牌判定时读取：改 options 即时生效
+    Object.assign(this.options, patch);
+    logger.info('memory 队列驱动运行时选项已热更', { ...patch });
   }
 
   /** @inheritdoc */

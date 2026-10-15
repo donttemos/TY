@@ -6,6 +6,7 @@
  *   释放时校验令牌，避免「误删他人锁」（长任务超越 TTL 后由新持有者持锁的场景）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：默认 TTL 可变（updateDefaultTtl）——cache.lockTtl 配置中心热更的生效路径
  * @module @fw/cache
  */
 
@@ -68,8 +69,16 @@ export class LockManager {
    */
   constructor(
     private readonly store: CacheStorePort,
-    private readonly defaultTtlMs: number,
+    private defaultTtlMs: number,
   ) {}
+
+  /**
+   * 更新默认 TTL（毫秒）（M9/PRD-009：配置中心热更 cache.lockTtl 的生效路径；对新获取的锁生效）
+   * @param defaultTtlMs 新默认 TTL（毫秒）
+   */
+  updateDefaultTtl(defaultTtlMs: number): void {
+    this.defaultTtlMs = defaultTtlMs;
+  }
 
   /**
    * 获取锁

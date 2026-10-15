@@ -8,6 +8,7 @@
  * @created 2026-10-13
  * @modified 2026-10-15 donttemo 死信窗口下推到 Redis：listDeadLetters 用 getFailed(start,end) 只取当前页，
  *   新增 countDeadLetters（优先 getFailedCount，缺失时按保留上限回退计数）
+ * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：新增 applyRuntimeOptions——concurrency 经 Worker 原生可变属性即时生效；rateLimit 固化待重建并 WARN
  * @module @fw/queue
  */
 
@@ -83,6 +84,22 @@ export class BullmqQueueDriver implements QueueDriverPort {
    * @param options 连接串、前缀、并发、限速与死信上限
    */
   constructor(private readonly options: BullmqDriverOptions) {}
+
+  /** @inheritdoc */
+  applyRuntimeOptions(patch: { concurrency?: number; rateLimit?: number }): void {
+    Object.assign(this.options, patch);
+    if (patch.concurrency !== undefined) {
+      // bullmq Worker 的 concurrency 是原生可变属性：即时收敛在途消费循环
+      for (const [name, worker] of this.workers) {
+        worker.concurrency = patch.concurrency;
+        logger.debug('消费器并发已热更', { queue: name, concurrency: patch.concurrency });
+      }
+    }
+    if (patch.rateLimit !== undefined) {
+      // limiter 随 Worker 创建固化、运行时不可变：记 WARN 提示待消费器重建（重启 / 队列重建）后生效
+      logger.warn('bullmq 限速器随消费器创建固化，运行时限速变更待消费器重建后生效', { rateLimit: patch.rateLimit });
+    }
+  }
 
   /** @inheritdoc */
   async start(runner: JobRunner): Promise<void> {

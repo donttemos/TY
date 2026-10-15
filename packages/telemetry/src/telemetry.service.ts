@@ -9,6 +9,7 @@
  *   极少数早于本模块的 span 会因 SDK 未就绪而丢失（非记录 span），属可接受取舍。
  * @author donttemo
  * @created 2026-10-14
+ * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：新增 updateRuntimeOptions——采样比例经共享引用热更即时生效（处理器 onEnd 逐次读取）
  * @module @fw/telemetry
  */
 import { Inject, Injectable, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
@@ -33,10 +34,15 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
   private provider?: NodeTracerProviderLike;
   private started = false;
 
+  /** 尾采样处理器持有的可变采样选项（同一引用——热更 sampleRatio 即时生效，PRD-009 FR-09） */
+  private readonly samplingOptions: { sampleRatio: number; sampleErrors: boolean };
+
   /**
    * @param options 运行时配置（TelemetryModule.forRoot 解析后注入）
    */
-  constructor(@Inject(TELEMETRY_OPTIONS) private readonly options: TelemetryRuntimeOptions) {}
+  constructor(@Inject(TELEMETRY_OPTIONS) private readonly options: TelemetryRuntimeOptions) {
+    this.samplingOptions = { sampleRatio: options.sampleRatio, sampleErrors: options.sampleErrors };
+  }
 
   /** 是否已启用（SDK 装配成功） */
   get enabled(): boolean {
@@ -46,6 +52,20 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
   /** 运行时配置（诊断用） */
   get runtimeOptions(): TelemetryRuntimeOptions {
     return this.options;
+  }
+
+  /**
+   * 运行时更新采样比例（M9/PRD-009 FR-09：由配置中心 onChange 订阅调用，禁止业务侧自行轮询）。
+   * 尾采样处理器每次 onEnd 都读取 samplingOptions 引用字段，热更即改即生效；
+   * 未启用（OTEL_ENABLED=false）时仅同步记录，SDK 未装配无生效面。
+   * @param patch 待更新字段（采样比例）
+   */
+  updateRuntimeOptions(patch: { sampleRatio?: number }): void {
+    if (patch.sampleRatio !== undefined) {
+      this.samplingOptions.sampleRatio = patch.sampleRatio;
+      this.options.sampleRatio = patch.sampleRatio;
+      logger.info('链路追踪采样比例已热更', { sampleRatio: patch.sampleRatio, enabled: this.started });
+    }
   }
 
   /**
@@ -73,11 +93,9 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
       url: this.options.exporterUrl,
     });
 
-    // 尾采样处理器：错误全采 + traceId 确定性比例（同链路跨服务决策一致）
-    const processor = new RatioErrorSamplingProcessor(exporter, {
-      sampleRatio: this.options.sampleRatio,
-      sampleErrors: this.options.sampleErrors,
-    });
+    // 尾采样处理器：错误全采 + traceId 确定性比例（同链路跨服务决策一致）。
+    // 传入 samplingOptions 本体（非拷贝）：onEnd 每次读引用字段，配置中心热更即改即生效
+    const processor = new RatioErrorSamplingProcessor(exporter, this.samplingOptions);
 
     // 资源属性：service.name 是采集端按服务聚合的最小必需字段
     const resource = sdk.resources?.resourceFromAttributes

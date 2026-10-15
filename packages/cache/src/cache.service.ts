@@ -6,6 +6,7 @@
  *   （CACHE_FAIL_OPEN）与指标采集。业务代码只依赖本类，切换驱动零改动（AC-002）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：新增 updateRuntimeOptions——cache.ttl/nullTtl/ttlJitter/slowMs/lockTtl 五键经配置中心订阅热更
  * @module @fw/cache
  */
 
@@ -67,6 +68,23 @@ export class CacheService {
   /** 全局前缀（已解析） */
   get prefix(): string {
     return this.opt.prefix;
+  }
+
+  /**
+   * 运行时更新可热更选项（M9/PRD-009 FR-09：由配置中心 onChange 订阅调用，禁止业务侧自行轮询）
+   *
+   * 仅接受白名单键对应的字段（ttl/nullTtl/ttlJitter/slowMs/lockTtl）；lockTtl 同步刷新锁管理器默认 TTL
+   * （对后续新获取的锁生效，在途锁不受影响）。值的合法性由配置中心管道保证，本方法不做二次校验。
+   * @param patch 待更新字段
+   */
+  updateRuntimeOptions(
+    patch: Partial<Pick<CacheRuntimeOptions, 'defaultTtlSeconds' | 'nullTtlSeconds' | 'ttlJitter' | 'slowMs' | 'lockTtlSeconds'>>,
+  ): void {
+    Object.assign(this.opt, patch);
+    if (patch.lockTtlSeconds !== undefined) {
+      this.lockManager.updateDefaultTtl(patch.lockTtlSeconds * 1000);
+    }
+    logger.info('缓存运行时选项已热更', { ...patch });
   }
 
   /**
