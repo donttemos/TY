@@ -16,7 +16,7 @@
 
 import { Controller, Get, Inject, Param, Query } from '@nestjs/common';
 import { BizError, ErrorCode } from '@fw/core';
-import { parseSortQuery, type PageResult } from '@fw/db';
+import { parseSortQuery, type PageResult, type Sort } from '@fw/db';
 import {
   AuthService,
   CurrentUser,
@@ -31,7 +31,9 @@ import {
 } from '@fw/auth';
 import { ADMIN_STORE } from '../admin/admin-store.js';
 import type { AdminStore } from '../admin/admin-store.js';
+import { JobRunnerRegistry } from '../jobs/job-runner.registry.js';
 import { JobCenterService, type JobView } from '../jobs/job-center.service.js';
+import type { JobArtifact, JobReporter } from '../jobs/job-center.port.js';
 
 /**
  * 审计日志可排序字段白名单（api-spec §1.5，BUG-15）
@@ -57,7 +59,12 @@ export class AuditController {
     @Inject(DATA_SCOPE_ORG) private readonly org: DataScopeOrgPort,
     @Inject(ADMIN_STORE) private readonly admin: AdminStore,
     private readonly jobs: JobCenterService,
-  ) {}
+    private readonly jobRegistry: JobRunnerRegistry,
+  ) {
+    // M10 E-01：登记审计导出的执行体工厂——db/bullmq 驱动下跨实例重跑经此处按 params 重建
+    // runner（闭包不落盘）；memory 驱动下派发仍走闭包，此登记不参与执行路径
+    this.jobRegistry.register('audit.export', (params) => (report) => this.executeExport(rebuildExportQuery(params), report));
+  }
 
   /** 审计日志分页查询 */
   @Permissions(PERM.AUDIT_READ)
@@ -131,48 +138,59 @@ export class AuditController {
     if (scope.selfOnly) scopeUserIds = [user.id];
     else if (scope.departmentIds) scopeUserIds = await this.org.listUserIdsByDepartmentIds(scope.departmentIds);
 
-    const query = {
+    // M10 E-01：完整查询条件固化进 params（JSON 可序列化）——跨实例重跑按它重建同一查询。
+    // dataScope 已在此刻收敛为具体 ID（self → userId；org/org_below → userIds），重跑沿用派发时范围。
+    const params: Record<string, unknown> = {
       userId: scope.selfOnly ? user.id : userId,
       userIds: scope.selfOnly ? undefined : scopeUserIds,
-      module,
-      action: action as AuditAction | undefined,
-      targetType,
-      targetId,
-      from: from ? new Date(from) : undefined,
-      to: to ? new Date(to) : undefined,
-      sort: parsedSort,
+      module: module ?? null,
+      action: action ?? null,
+      targetType: targetType ?? null,
+      targetId: targetId ?? null,
+      from: from ?? null,
+      to: to ?? null,
+      sort: parsedSort ?? null,
+      maxRows: EXPORT_MAX_ROWS,
     };
 
     return this.jobs.create({
       type: 'audit.export',
       title: '审计日志导出',
       ownerId: operator,
-      params: { module: module ?? null, action: action ?? null, from: from ?? null, to: to ?? null, maxRows: EXPORT_MAX_ROWS },
-      runner: async (report) => {
-        report(5, '统计待导出条数');
-        const first = await this.auth.auditLogs({ ...query, page: 1, pageSize: EXPORT_PAGE_SIZE });
-        const total = Math.min(first.total, EXPORT_MAX_ROWS);
-        const rows: AuditLogRecord[] = [...first.items];
-
-        let page = 2;
-        while (rows.length < total) {
-          const next = await this.auth.auditLogs({ ...query, page, pageSize: EXPORT_PAGE_SIZE });
-          if (next.items.length === 0) break;
-          rows.push(...next.items);
-          report(5 + Math.round((Math.min(rows.length, total) / Math.max(total, 1)) * 85), `已读取 ${Math.min(rows.length, total)}/${total} 条`);
-          page += 1;
-        }
-
-        report(95, '生成 CSV');
-        const clipped = rows.slice(0, EXPORT_MAX_ROWS);
-        const content = buildAuditCsv(clipped);
-        return {
-          fileName: `audit-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`,
-          contentType: 'text/csv',
-          content,
-        };
-      },
+      params,
+      runner: (report) => this.executeExport(rebuildExportQuery(params), report),
     });
+  }
+
+  /**
+   * 执行审计导出（派发闭包与重跑工厂共用的执行体）
+   *
+   * 单次导出上限 `EXPORT_MAX_ROWS`：审计表随时间线性增长，无上限的导出既拖垮请求，
+   * 也会把产物顶到内存上限（任务中心对超过 ~20MB 的产物直接失败并给出可读原因）。
+   */
+  private async executeExport(query: ExportQuery, report: JobReporter): Promise<JobArtifact> {
+    report(5, '统计待导出条数');
+    const first = await this.auth.auditLogs({ ...query, page: 1, pageSize: EXPORT_PAGE_SIZE });
+    const total = Math.min(first.total, EXPORT_MAX_ROWS);
+    const rows: AuditLogRecord[] = [...first.items];
+
+    let page = 2;
+    while (rows.length < total) {
+      const next = await this.auth.auditLogs({ ...query, page, pageSize: EXPORT_PAGE_SIZE });
+      if (next.items.length === 0) break;
+      rows.push(...next.items);
+      report(5 + Math.round((Math.min(rows.length, total) / Math.max(total, 1)) * 85), `已读取 ${Math.min(rows.length, total)}/${total} 条`);
+      page += 1;
+    }
+
+    report(95, '生成 CSV');
+    const clipped = rows.slice(0, EXPORT_MAX_ROWS);
+    const content = buildAuditCsv(clipped);
+    return {
+      fileName: `audit-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`,
+      contentType: 'text/csv',
+      content,
+    };
   }
 
   /**
@@ -197,6 +215,44 @@ const EXPORT_MAX_ROWS = 5000;
 
 /** 导出分页批大小（与 api-spec §1.5 的 pageSize 上限一致） */
 const EXPORT_PAGE_SIZE = 200;
+
+/** 审计导出查询（执行体入参，与 AuthService.auditLogs 的查询面一致；JSON 序列化后可跨实例重建） */
+interface ExportQuery {
+  userId?: string;
+  userIds?: string[];
+  module?: string;
+  action?: AuditAction;
+  targetType?: string;
+  targetId?: string;
+  from?: Date;
+  to?: Date;
+  sort?: Sort<AuditLogRecord>;
+}
+
+/** null/undefined → undefined（params 反序列化后空值统一为 null） */
+function strOrNull(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+/**
+ * 从持久化 params 重建导出查询（M10 E-01：跨实例重跑的执行依据）
+ *
+ * params 在派发时已把 dataScope 收敛为具体 ID（self → userId；org/org_below → userIds 数组），
+ * 重建即还原派发时的可见范围；from/to 由 ISO 字符串还原为 Date。
+ */
+function rebuildExportQuery(params: Record<string, unknown>): ExportQuery {
+  return {
+    userId: strOrNull(params.userId),
+    userIds: Array.isArray(params.userIds) ? (params.userIds.filter((v) => typeof v === 'string') as string[]) : undefined,
+    module: strOrNull(params.module),
+    action: strOrNull(params.action) as AuditAction | undefined,
+    targetType: strOrNull(params.targetType),
+    targetId: strOrNull(params.targetId),
+    from: strOrNull(params.from) ? new Date(params.from as string) : undefined,
+    to: strOrNull(params.to) ? new Date(params.to as string) : undefined,
+    sort: (params.sort ?? undefined) as Sort<AuditLogRecord> | undefined,
+  };
+}
 
 /** CSV 单元格转义：包引号 + 内部引号翻倍；换行统一为空格避免破坏行结构 */
 function csvCell(value: unknown): string {

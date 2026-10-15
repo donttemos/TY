@@ -16,6 +16,8 @@
  *   （/api/v1/tenants 五端点）
  * @modified 2026-10-15 donttemo M9/PRD-009 接入 ConfigCenterModule（/api/v1/configs 两端点；默认
  *   CONFIG_CENTER_ENABLED=false 零开销，开启后 file 适配 + 热更白名单 11 键订阅生效）
+ * @modified 2026-10-15 donttemo M10 E-01：JobsModule 改 forRoot() 装配（按 JOB_CENTER_DRIVER
+ *   选 memory/db/bullmq 驱动，默认 memory 行为不变）
  * @module example-api
  */
 import { Module } from '@nestjs/common';
@@ -71,8 +73,9 @@ export const transportReadinessProbe = createTransportReadinessProbe();
     DemoItemModule,
     DemoQueueModule,
     DemoTransportModule,
-    // N-02：异步任务中心（@Global，审计导出与租户迁移共用；任务面端点 /api/v1/jobs）
-    JobsModule,
+    // N-02/E-01：异步任务中心（@Global，审计导出与租户迁移共用；任务面端点 /api/v1/jobs；
+    // JOB_CENTER_DRIVER 默认 memory = N-02 原行为，db/bullmq 驱动多副本语义见 jobs.module）
+    JobsModule.forRoot(),
     // N-01：租户管理端点（/api/v1/tenants 五端点；跨租户维护面，标 @IgnoreTenant）
     TenantAdminModule,
     // M9：配置中心（/api/v1/configs 查/改两端点；CONFIG_CENTER_ENABLED=false 时零开销仅 env 视图）

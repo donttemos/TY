@@ -271,3 +271,28 @@ model DictItem {
   @@index([deletedAt], map: "idx_dict_item_deleted")
   @@map("dict_items")
 }
+
+/// 异步任务登记表（M10 E-01：任务中心 db/bullmq 驱动持久层，数据字典 §3.15）
+/// 产物为文本内联（OQ-1 决议：≤20MB 内联起步，E-09 落地后可切对象存储）；MySQL 形态下
+/// artifact_content 建议手工调整为 LONGTEXT（sqlite/PG 的 text 无需处理）
+model JobRecord {
+  id                  String   @id
+  type                String
+  title               String
+  status              String   @default("pending")
+  progress            Int      @default(0)
+  message             String?
+  error               String?
+  traceId             String?  @map("trace_id")
+  fileName            String?  @map("file_name")
+  artifactContent     String?  @map("artifact_content")
+  artifactContentType String?  @map("artifact_content_type")
+  ownerId             String   @map("owner_id")
+  params              String?
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  @@index([ownerId, createdAt], map: "idx_jobs_owner_created")
+  @@index([status], map: "idx_jobs_status")
+  @@map("jobs")
+}

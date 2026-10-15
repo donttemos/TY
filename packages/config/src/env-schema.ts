@@ -14,6 +14,7 @@
  * @modified 2026-10-15 donttemo M9/PRD-009 新增 4 个 CONFIG_CENTER_* 键（总开关/驱动/文件/轮询间隔）；
  *   新增 ENV_KEY_PATHS（全部 Env 键 → 点路径注册表）与 ENV_HOT_KEYS（热更新白名单，FR-03）——
  *   两者都以类型与单测强制与 envSchema.shape 对齐：新增配置键未登记映射时单测即失败（防键集漂移）
+ * @modified 2026-10-15 donttemo M10/E-01 新增 JOB_CENTER_DRIVER（任务中心驱动，boot 键不入热更白名单）
  * @module config
  * @since v0.1.0
  */
@@ -41,6 +42,8 @@ export const TRANSPORT_ROLE_VALUES = ['caller', 'handler', 'both'] as const;
 export const TENANT_SOURCE_VALUES = ['subdomain', 'header', 'jwt'] as const;
 /** 配置中心驱动可选值（M9/PRD-009 FR-01 起生效；`nacos` 仅预留 adapter 注册位，暂不入枚举——非法取值启动即失败） */
 export const CONFIG_CENTER_DRIVER_VALUES = ['file'] as const;
+/** 任务中心驱动可选值（M10/E-01 起生效）：memory 进程内（默认）/ db 落库+派发实例执行 / bullmq 落库+队列分发 */
+export const JOB_CENTER_DRIVER_VALUES = ['memory', 'db', 'bullmq'] as const;
 
 /** 空字符串视为未设置（.env 里 `DB_URL=` 留空等价于注释掉） */
 const emptyToUndefined = (value: unknown): unknown =>
@@ -205,6 +208,8 @@ export const envSchema = z.object({
   CONFIG_CENTER_FILE: z.string().min(1).default('./config/runtime.json').describe('运行时配置文件路径（CONFIG_CENTER_FILE）'),
   /** mtime 轮询间隔（秒，M9/PRD-009 FR-02）：热更生效延迟上界 = 轮询间隔 + 1s */
   CONFIG_CENTER_POLL_SECONDS: z.coerce.number().int().min(1).max(300).default(5).describe('配置中心轮询间隔（秒，CONFIG_CENTER_POLL_SECONDS）'),
+  /** 任务中心驱动（M10/E-01）：memory 进程内（默认，N-02 原行为）/ db 落库+派发实例执行 / bullmq 落库+队列分发；boot 键禁热更 */
+  JOB_CENTER_DRIVER: z.enum(JOB_CENTER_DRIVER_VALUES).default('memory').describe('任务中心驱动（JOB_CENTER_DRIVER）'),
 });
 
 /** 校验后的环境变量类型 */
@@ -300,6 +305,7 @@ export const ENV_KEY_PATHS = {
   CONFIG_CENTER_DRIVER: 'configCenter.driver',
   CONFIG_CENTER_FILE: 'configCenter.file',
   CONFIG_CENTER_POLL_SECONDS: 'configCenter.pollSeconds',
+  JOB_CENTER_DRIVER: 'jobCenter.driver',
 } as const satisfies Record<keyof Env, string>;
 
 /**

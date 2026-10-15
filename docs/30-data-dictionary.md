@@ -144,7 +144,7 @@ erDiagram
     }
 ```
 
-### 2.2 系统与租户域（审计 M3、租户 M8、任务 M7）
+### 2.2 系统与租户域（审计 M3、租户 M8、任务登记 M10）
 
 ```mermaid
 erDiagram
@@ -153,6 +153,7 @@ erDiagram
     dict_categories ||--o{ dict_items : "包含字典项"
     users ||--o{ audit_logs : "产生操作记录"
     tenants ||--o{ audit_logs : "归属租户"
+    users ||--o{ jobs : "派发任务（owner_id）"
 
     tenants {
         bigint id PK
@@ -193,17 +194,21 @@ erDiagram
         varchar trace_id "链路 ID"
         datetime created_at
     }
-    job_records {
-        bigint id PK
-        bigint tenant_id FK
-        varchar name "任务名"
-        json payload "入参"
-        varchar status "pending running success failed"
-        int attempts "已尝试次数"
-        varchar idempotency_key UK "幂等键"
-        text last_error
-        datetime run_at
-        datetime finished_at
+    jobs {
+        varchar id PK "job-<uuid>"
+        varchar type "任务类型 audit.export tenant.migrate"
+        varchar title "展示标题"
+        varchar status "pending running succeeded failed"
+        int progress "进度 0-100"
+        varchar message "最近进度说明"
+        text error "失败原因"
+        varchar trace_id "链路 ID"
+        varchar file_name "产物文件名"
+        text artifact_content "产物内联 ≤20MB"
+        varchar owner_id FK "归属人（鉴权依据）"
+        text params "业务入参 JSON（重建执行体）"
+        datetime created_at
+        datetime updated_at
     }
 ```
 
@@ -390,23 +395,31 @@ erDiagram
 
 > 保留期默认 180 天可配；量大时按月分区或归档冷存；查询页按 `user_id + created_at` 组合查询。
 
-### 3.14 `job_records` 任务记录（M7）
+### 3.14 `jobs` 任务登记表（M7 规划为 `job_records`；M10 E-01 落地为 `jobs`）
 
-> 规划模型，M7 实现未迁移此表：memory 驱动在进程内持有任务，bullmq 驱动由 Redis 持有任务。需要业务进度持久化时由业务模块自建记录。
+> M7 的规划模型未迁移；M10 E-01（任务中心驱动化）按 N-02 任务中心的实际语义落地为 `jobs` 表——
+> `JOB_CENTER_DRIVER=db / bullmq` 时的任务登记持久层（memory 驱动不建此表，进程内持有）。
+> 多副本语义：任意实例可查进度 / 下载产物 / 重跑（AC1），重跑经 `JobRunnerRegistry` 按类型重建执行体。
 
 | 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
 |---|---|---|---|---|---|
-| `id` | bigint | 是 | — | 主键 | PK |
-| `tenant_id` | bigint | 是 | 0 | 租户 ID | — |
-| `name` | varchar(64) | 是 | — | 任务名 | `idx_job_name` |
-| `payload` | json | 否 | NULL | 入参 | — |
-| `status` | varchar(16) | 是 | `pending` | `pending` / `running` / `success` / `failed` | `idx_job_status` |
-| `attempts` | int | 是 | 0 | 已尝试次数 | — |
-| `idempotency_key` | varchar(128) | 否 | NULL | 幂等键 | UK（非空时唯一） |
-| `last_error` | text | 否 | NULL | 最近一次失败原因 | — |
-| `run_at` | datetime(3) | 否 | NULL | 计划执行时间（延时任务） | `idx_job_run` |
-| `finished_at` | datetime(3) | 否 | NULL | 完成时间 | — |
-| 通用字段 | — | — | — | 同上 | — |
+| `id` | varchar(36) | 是 | — | 主键（`job-<uuid>`，派发侧生成） | PK |
+| `type` | varchar(64) | 是 | — | 任务类型（如 `audit.export` / `tenant.migrate`） | — |
+| `title` | varchar(128) | 是 | — | 展示标题（前端任务条文案） | — |
+| `status` | varchar(16) | 是 | `pending` | `pending` / `running` / `succeeded` / `failed` | `idx_jobs_status` |
+| `progress` | int | 是 | 0 | 进度百分比 0–100（只增不减） | — |
+| `message` | varchar(255) | 否 | NULL | 最近一条进度说明 | — |
+| `error` | text | 否 | NULL | 失败原因（status=failed 时非空） | — |
+| `trace_id` | varchar(64) | 否 | NULL | 链路 ID（与日志 / 审计一致） | — |
+| `file_name` | varchar(255) | 否 | NULL | 产物文件名（status=succeeded 时非空） | — |
+| `artifact_content` | text（MySQL 建议 LONGTEXT） | 否 | NULL | 产物文本内联（≤20MB，OQ-1 决议：E-09 落地后可切对象存储） | — |
+| `artifact_content_type` | varchar(64) | 否 | NULL | 产物 MIME 类型 | — |
+| `owner_id` | varchar(36) | 是 | — | 归属人（进度/下载/重跑的鉴权依据） | `idx_jobs_owner_created`（与 created_at 组合） |
+| `params` | text（JSON 字符串） | 否 | NULL | 业务入参（跨实例重跑按它重建执行体；连接串等敏感值以密文形态入参） | — |
+| `created_at` / `updated_at` | datetime(3) | 是 | now / 自动 | 审计时间（无软删：裁剪策略只删已结束的最旧任务） | — |
+
+> 裁剪语义与 memory 驱动一致：登记上限 200 条，超出丢弃最旧的**已结束**任务（running/pending 永不裁剪）。
+> 并发重跑竞态由 `WHERE status='failed'` 条件更新消解（两个实例同时点重跑只成功一个）。
 
 ### 3.15 示例业务表 `orders`（演示生成器约定）
 

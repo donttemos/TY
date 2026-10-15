@@ -15,6 +15,7 @@ import { BizError } from '@fw/core';
 import { AuditService } from '@fw/auth';
 import { TenantService } from '@fw/tenant';
 import { JobCenterService } from '../jobs/job-center.service.js';
+import { JobRunnerRegistry } from '../jobs/job-runner.registry.js';
 import { TenantAdminController } from './tenant-admin.controller.js';
 import { LEGACY_TENANT_ID } from './tenant-admin.store.js';
 import type { TenantAdminStore, TenantView } from './tenant-admin.store.js';
@@ -92,8 +93,10 @@ function createController(initial?: TenantView[]) {
   const tenants = { invalidate: vi.fn() } as unknown as TenantService;
   const audit = { record: vi.fn() } as unknown as AuditService;
   const jobs = new JobCenterService();
+  // M10 E-01：执行体注册表为真实实现（构造期登记 tenant.migrate 工厂）
+  const jobRegistry = new JobRunnerRegistry();
   // 手动构造：构造器参数装饰器不参与直接实例化，按位置传假件即可
-  const controller = new TenantAdminController(store, tenants, jobs, audit);
+  const controller = new TenantAdminController(store, tenants, jobs, audit, jobRegistry);
   const request = { headers: { 'x-forwarded-for': '10.0.0.9, 10.0.0.1' }, ip: '127.0.0.1' } as unknown as Request;
   return { controller, store, rows, tenants, audit, jobs, request };
 }

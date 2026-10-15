@@ -25,8 +25,11 @@ import { AuditService, CurrentUser, IgnoreTenant, PERM, Permissions } from '@fw/
 import { TenantService } from '@fw/tenant';
 import type { TenantIsolation } from '@fw/tenant';
 import { JobCenterService } from '../jobs/job-center.service.js';
+import { JobRunnerRegistry } from '../jobs/job-runner.registry.js';
+import type { JobReporter } from '../jobs/job-center.port.js';
 import { TENANT_ADMIN_STORE, LEGACY_TENANT_ID } from './tenant-admin.store.js';
 import type { TenantAdminStore, TenantView } from './tenant-admin.store.js';
+import { encryptDbUrl, decryptDbUrl } from './db-url-crypto.js';
 import { clientIp } from '../auth/auth.controller.js';
 import type { Request } from 'express';
 
@@ -58,6 +61,19 @@ interface TenantMigrateBody {
 /** 迁移任务的分步权重（进度上报用，和 100 对齐） */
 const MIGRATE_STEPS = [10, 30, 55, 80, 100] as const;
 
+/** 迁移执行上下文（执行体入参；dbUrl 在 params 中以密文形态持久化，与租户表同语义） */
+interface MigrateContext {
+  id: string;
+  code: string;
+  fromIsolation: string;
+  target: TenantIsolation;
+  /** 明文连接串（dedicated 时非空；由 params.dbUrlEnc 解密还原） */
+  dbUrl: string | null;
+  affected: number;
+  operator: string;
+  ip: string;
+}
+
 /**
  * 租户管理控制器：/api/v1/tenants
  */
@@ -69,7 +85,12 @@ export class TenantAdminController {
     private readonly tenants: TenantService,
     private readonly jobs: JobCenterService,
     private readonly audit: AuditService,
-  ) {}
+    private readonly jobRegistry: JobRunnerRegistry,
+  ) {
+    // M10 E-01：登记迁移任务的执行体工厂——db/bullmq 驱动下跨实例重跑按 params 重建上下文
+    // （连接串以密文进 params，与 tenants 表存储语义一致；memory 驱动下派发仍走闭包）
+    this.jobRegistry.register('tenant.migrate', (params) => (report) => this.executeMigrate(rebuildMigrateContext(params), report));
+  }
 
   /** 租户分页列表 */
   @Permissions(PERM.TENANT_READ)
@@ -238,59 +259,87 @@ export class TenantAdminController {
     // 不该变成一个必然失败的后台任务让前端轮询才发现。
     const affected = await this.store.countTenantUsers(id);
 
+    // M10 E-01：执行上下文固化进 params（JSON 可序列化）——跨实例重跑按它重建。
+    // 连接串以密文形态持久化（encryptDbUrl，与 tenants 表 db_url_enc 同语义），明文不落库。
+    const params: Record<string, unknown> = {
+      tenantId: id,
+      code: before.code,
+      from: before.isolation,
+      to: target,
+      affectedUsers: affected,
+      dataCopyRequired: target === 'dedicated',
+      dbUrlEnc: dbUrl ? encryptDbUrl(dbUrl) : null,
+      operator,
+      ip,
+    };
+
     return this.jobs.create({
       type: 'tenant.migrate',
       title: `租户 ${before.code} 迁移至 ${target === 'dedicated' ? '独立库' : '共享库'}`,
       ownerId: operator,
-      params: {
-        tenantId: id,
-        code: before.code,
-        from: before.isolation,
-        to: target,
-        affectedUsers: affected,
-        dataCopyRequired: target === 'dedicated',
-      },
-      runner: async (report) => {
-        report(MIGRATE_STEPS[0], '校验目标隔离级别与连接串');
-        if (target === 'dedicated') {
-          const candidate = dbUrl ?? '';
-          if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(candidate) && !candidate.startsWith('file:')) {
-            throw new Error('独立库连接串格式非法（需形如 postgresql://… 或 file:…）');
-          }
-        }
-        await yieldToEventLoop();
-
-        report(MIGRATE_STEPS[1], '确认租户当前状态与账号规模');
-        const current = await this.store.findTenantViewById(id);
-        if (!current) throw new Error('租户已被移除，迁移终止');
-        if (current.isolation !== before.isolation) {
-          throw new Error(`租户隔离级别已被并发修改（当前 ${current.isolation}），请刷新后重试`);
-        }
-        await yieldToEventLoop();
-
-        report(MIGRATE_STEPS[2], target === 'dedicated' ? '加密并校验独立库连接串' : '清理独立库连接串');
-        await yieldToEventLoop();
-
-        report(MIGRATE_STEPS[3], '写入隔离级别与连接串（控制面切换）');
-        const updated = await this.store.setTenantIsolation(id, target, dbUrl);
-        this.audit.record({
-          userId: operator,
-          module: 'tenant',
-          action: 'update',
-          targetType: 'tenant',
-          targetId: id,
-          before: { isolation: before.isolation },
-          after: { isolation: updated.isolation, dedicatedDbConfigured: updated.dedicatedDbConfigured, affectedUsers: affected },
-          ip,
-        });
-        await yieldToEventLoop();
-
-        report(MIGRATE_STEPS[4], '失效租户解析缓存');
-        this.tenants.invalidate();
-        return null;
-      },
+      params,
+      runner: (report) => this.executeMigrate(rebuildMigrateContext(params), report),
     });
   }
+
+  /** 执行迁移（派发闭包与重跑工厂共用的执行体；逻辑与 N-02 交付版逐字一致） */
+  private async executeMigrate(ctx: MigrateContext, report: JobReporter): Promise<null> {
+    const { id, target, dbUrl, affected, operator, ip } = ctx;
+    report(MIGRATE_STEPS[0], '校验目标隔离级别与连接串');
+    if (target === 'dedicated') {
+      const candidate = dbUrl ?? '';
+      if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(candidate) && !candidate.startsWith('file:')) {
+        throw new Error('独立库连接串格式非法（需形如 postgresql://… 或 file:…）');
+      }
+    }
+    await yieldToEventLoop();
+
+    report(MIGRATE_STEPS[1], '确认租户当前状态与账号规模');
+    const current = await this.store.findTenantViewById(id);
+    if (!current) throw new Error('租户已被移除，迁移终止');
+    if (current.isolation !== ctx.fromIsolation) {
+      throw new Error(`租户隔离级别已被并发修改（当前 ${current.isolation}），请刷新后重试`);
+    }
+    await yieldToEventLoop();
+
+    report(MIGRATE_STEPS[2], target === 'dedicated' ? '加密并校验独立库连接串' : '清理独立库连接串');
+    await yieldToEventLoop();
+
+    report(MIGRATE_STEPS[3], '写入隔离级别与连接串（控制面切换）');
+    const updated = await this.store.setTenantIsolation(id, target, dbUrl);
+    this.audit.record({
+      userId: operator,
+      module: 'tenant',
+      action: 'update',
+      targetType: 'tenant',
+      targetId: id,
+      before: { isolation: ctx.fromIsolation },
+      after: { isolation: updated.isolation, dedicatedDbConfigured: updated.dedicatedDbConfigured, affectedUsers: affected },
+      ip,
+    });
+    await yieldToEventLoop();
+
+    report(MIGRATE_STEPS[4], '失效租户解析缓存');
+    this.tenants.invalidate();
+    return null;
+  }
+}
+
+/** 从持久化 params 重建迁移上下文（M10 E-01：连接串密文解密还原，失败即执行失败） */
+function rebuildMigrateContext(params: Record<string, unknown>): MigrateContext {
+  const target = params.to === 'dedicated' ? 'dedicated' : params.to === 'shared' ? 'shared' : undefined;
+  if (!target) throw new Error('迁移任务参数损坏（目标隔离级别缺失），请重新发起迁移');
+  const dbUrlEnc = typeof params.dbUrlEnc === 'string' ? params.dbUrlEnc : null;
+  return {
+    id: String(params.tenantId ?? ''),
+    code: String(params.code ?? ''),
+    fromIsolation: String(params.from ?? 'shared'),
+    target,
+    dbUrl: dbUrlEnc ? decryptDbUrl(dbUrlEnc) : null,
+    affected: typeof params.affectedUsers === 'number' ? params.affectedUsers : 0,
+    operator: String(params.operator ?? ''),
+    ip: String(params.ip ?? ''),
+  };
 }
 
 /** 让出事件循环：保证前端能观察到中间的进度阶段（而不是一次性跳到 100） */

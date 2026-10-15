@@ -99,6 +99,7 @@
 | | `CONFIG_CENTER_DRIVER` | 否 | file | 事实源适配器（首版仅 `file`：本地文件 + mtime 轮询）；`nacos` 为预留注册位，非法取值启动即失败 |
 | | `CONFIG_CENTER_FILE` | 否 | `./config/runtime.json` | 运行时配置文件路径（点路径 → 覆盖值的 JSON 对象）；**file 适配为单实例语义**——多实例共享本地文件有覆盖竞态，多实例场景应实现 Nacos adapter |
 | | `CONFIG_CENTER_POLL_SECONDS` | 否 | 5 | mtime 轮询间隔（秒，1~300）；热更生效延迟上界 = 轮询间隔 + 1s。文件损坏时保持最后一份有效快照（fail-keep）并记 ERROR，修复后自动追上 |
+| 任务中心（M10/E-01） | `JOB_CENTER_DRIVER` | 否 | memory | 异步任务中心驱动：`memory` 进程内（N-02 原行为，多副本下任务面跨实例 404）/ `db` `jobs` 表登记 + 派发实例执行 / `bullmq` `jobs` 表登记 + 队列分发（消费 handler `job-center.execute`，执行实例随 `MQ_DRIVER`）。**多副本部署必须 db 或 bullmq**；boot 键不入热更白名单；db/bullmq 要求任务类型登记 `JobRunnerRegistry` 执行体工厂 |
 | 前端（admin-web） | `VITE_API_BASE_URL` | 是 | — | 管理后台 API 基址（如 `https://api.example.com/api/v1`）；**构建期注入**，改值需重新构建 |
 | | `VITE_APP_TITLE` | 否 | 通用应用框架 | 站点标题 |
 | | `VITE_LOGIN_CAPTCHA` | 否 | false | 登录页验证码开关（true 时需接入验证码服务） |

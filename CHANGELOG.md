@@ -14,6 +14,10 @@
 
 ## [Unreleased]
 
+### Added（M10 E-01 任务中心驱动化，2026-10-15）
+
+- **E-01 任务中心驱动化（PRD-010 P0 / AC1）**：N-02 任务中心从进程内存登记表升级为「端口 + 三驱动」——`JobCenterPort`（create/get/retry/artifact）+ `JOB_CENTER_DRIVER` 枚举（**memory 默认 = N-02 原行为零改动** / `db` / `bullmq`，boot 键不入热更白名单）。① **db 驱动**：新表 `jobs`（迁移 `20261015180000_add_jobs`，数据字典 §3.14 由 M7 规划模型改写为落地形态），登记/进度/终态/产物落库，执行在派发实例——**多副本下进度 / 下载 / 重跑任意实例可达**（不再要求会话粘滞）；重跑经新增 `JobRunnerRegistry`（`type → factory` 注册表）按持久化 params 重建执行体（闭包不落盘），未登记类型给可读 `1004` reason 而非静默失败；并发重跑竞态由 `WHERE status='failed'` 条件更新消解。② **bullmq 驱动**：登记与读面与 db 同源，执行经 `QueueService.dispatch('job-center.execute')` 分发（消费 handler 读库重建 runner 执行写库；执行实例随 `MQ_DRIVER`），入队失败兜底标 failed 可重跑。③ 调用方改造：`audit.export` 与 `tenant.migrate` 的执行体固化进 params（完整查询条件 / 迁移上下文，**连接串以密文入 params** 与租户表同语义），派发闭包与注册表工厂共用同一执行函数——memory 驱动行为逐字不变。④ 配置键 `JOB_CENTER_DRIVER` 登记 `ENV_KEY_PATHS`（65→66 键，护栏单测同步）。⑤ 冒烟新增 `smoke-jobs-db.mjs`（**10/10**）：双进程共享 SQLite 模拟两实例，A 派发 → B 轮询 succeeded → B 下载 CSV（UTF-8 BOM）→ B 重跑失败任务（注册表重建）→ 归属人语义跨实例一致 → memory 驱动回归锚点。验证：jobs 模块单测 **21/21**（memory 原用例零改动通过 + db 驱动 7 条含多副本语义 + bullmq 驱动 4 条含入队失败兜底）、example-api 全量 **52/52**、`@fw/config` **16/16**（键集护栏认新键）、smoke-admin **107/107**（N-02 段零改动全绿）；`[98 清单](./docs/98-scale-checklist.md)` 7.1「应用无状态」任务面勾选条件成立（多副本须切 db/bullmq 驱动）。文档同步：api-spec §3.11、数据字典 §3.14 + ER、60 手册配置键表、`.env.example`。
+
 ### Added（PRD-010 立项，2026-10-15）
 
 - **PRD-010 · 下一阶段增强：多实例一致性收口与模板生态（[docs/prd/prd-010-next-stage-enhancements.md](./docs/prd/prd-010-next-stage-enhancements.md)，M10，草案）**：把 [81 号增强规划](./docs/81-enhancement-roadmap.md) 的 E-01~E-17 收编为标准 PRD 形态（背景目标 / 范围 / 用户故事 / FR 表 / NFR / 关键设计 / 8 条 AC / 依赖与风险 / 4 条 Open Questions）。四阶段：P0 多实例一致性收口（任务中心驱动化、配置中心多实例语义 + nacos 驱动转正、框架级 API 限流、`/permissions/tree` 落地）→ P1 规模化遗留（K8s 冒烟、bullmq/transport cluster、OAuth2 端到端）→ P2 模板生态（admin 全栈模板、`@fw/storage`、审计归档、压测补课）→ P3 体验增强（SSE、站内信、i18n、暗色模式、上限配置化、前端 RUM）。PRD 索引同步（原「待规划」中的文件存储 / 消息通知 / 国际化三项由本 PRD 收编）；81 号规划文档头加收编交叉引用。

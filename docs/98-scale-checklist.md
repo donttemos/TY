@@ -86,7 +86,7 @@
 
 | # | 检查点 | 框架对应 | 达标口径 |
 |---|---|---|---|
-| 7.1 | 应用无状态 | 会话走 JWT/Redis，上传走对象存储 | 多副本行为一致；本机不落状态 |
+| 7.1 | 应用无状态 | 会话走 JWT/Redis，上传走对象存储；**异步任务登记走 `jobs` 表（M10 E-01：`JOB_CENTER_DRIVER=db/bullmq`）** | 多副本行为一致；本机不落状态（任务中心进程内存态已驱动化，默认 memory 仅供单实例） |
 | 7.2 | 滚动更新零中断 | Helm `maxUnavailable=0` / `maxSurge=1` + PDB | 发布期间可用副本不低于 minAvailable |
 | 7.3 | 资源 requests/limits 已设 | Helm `resources` | 避免节点资源争抢与 OOM 驱逐 |
 | 7.4 | 副本数与 HPA 匹配 | Helm `replicaCount` / `autoscaling` | 最小 3；HPA 上限按容量评估 |
