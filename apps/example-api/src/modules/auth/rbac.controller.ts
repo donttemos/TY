@@ -5,10 +5,16 @@
  *   GET  /roles/:id/permissions      需 role:read
  *   PUT  /roles/:id/permissions      需 role:grant —— 全量授权，写入 role_permission 并即时失效相关用户权限缓存
  *   GET  /permissions                需 permission:read（按 module 分组，供后台角色授权页勾选）
+ *   GET  /permissions/tree           需 permission:read（M10 E-04：业务域 → 菜单 → 按钮/接口 三层树，
+ *                                  供后台选择器类组件消费——权限码选择器 / 授权分组换接此端点，悬空契约收口）
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-15 donttemo GET /roles 接入排序白名单（BUG-15 增量）：parseSortQuery 解析后
  *   透传存储层，未知字段 / 非法方向 / 超上限一律 400，与 users / audit-logs / tenants 同语义
+ * @modified 2026-10-15 donttemo M10 E-04：新增 GET /permissions/tree 三层树（api-spec §3.4 悬空契约落地）——
+ *   层 1 = 业务域（module），层 2 = 菜单类权限点（type=menu），层 3 = 按钮/接口类权限点（type=button|api）。
+ *   module 内无菜单类权限点时按钮/接口直升层 2（不造空层级）。接口层来自权限表 type=api（权限码变更
+ *   随部署走——与「权限码唯一权威 packages/auth PERM」一致）
  * @module example-api/auth
  */
 
@@ -36,6 +42,20 @@ import type { Request } from 'express';
 interface PermissionGroup {
   module: string;
   items: AuthPermission[];
+}
+
+/** 权限树节点（M10 E-04）：type = module（层 1）/ menu（层 2）/ button|api（层 3） */
+interface PermissionTreeNode {
+  /** 节点键（module 名或权限码，同级唯一） */
+  key: string;
+  /** 展示名（module 用原名；权限点用 name） */
+  label: string;
+  type: 'module' | AuthPermission['type'];
+  /** 权限点 ID（module 层无；授权页勾选提交 permissionIds 直接可用） */
+  id?: string;
+  /** 该节点下的权限码集合（含子孙——前端扁平化取码无需递归） */
+  codes: string[];
+  children: PermissionTreeNode[];
 }
 
 /** GET /roles 排序白名单（HTTP 参数名 snake_case → RoleDetail 字段名）。
@@ -118,6 +138,48 @@ export class RbacController {
       groups.set(key, bucket);
     }
     return [...groups.entries()].map(([module, items]) => ({ module, items }));
+  }
+
+  /**
+   * 权限树（M10 E-04，api-spec §3.4 悬空契约收口）
+   *
+   * 形态：业务域（module）→ 权限点（menu 类在前，button/api 类随后）→ 子资源（预留，当前为空）。
+   * **实现注记**：权限点与菜单之间无「属于哪个菜单」外键（menus 经 permissionCode 弱关联），
+   * 树不伪造「按钮挂在菜单下」的归属层级——按钮/接口与菜单类权限点在业务域内平级、以 type 区分，
+   * 契约「菜单 / 按钮 / 接口三层」的字面归属语义待权限点引入归属外键后再收（登记为 E-04 遗留注记）。
+   * 每个节点携带 `codes`（含子孙的权限码集合）——前端选择器扁平化取码无需递归。
+   */
+  @Permissions(PERM.PERMISSION_READ)
+  @Get('permissions/tree')
+  async permissionTree(): Promise<PermissionTreeNode[]> {
+    const all = await this.store.listPermissions();
+    const byModule = new Map<string, AuthPermission[]>();
+    for (const permission of all) {
+      const key = permission.module ?? 'other';
+      const bucket = byModule.get(key) ?? [];
+      bucket.push(permission);
+      byModule.set(key, bucket);
+    }
+    const typeRank: Record<string, number> = { menu: 0, button: 1, api: 2 };
+    return [...byModule.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([module, items]) => ({
+        key: module,
+        label: module,
+        type: 'module' as const,
+        codes: items.map((item) => item.code),
+        children: items
+          .slice()
+          .sort((a, b) => (typeRank[a.type] ?? 3) - (typeRank[b.type] ?? 3) || a.code.localeCompare(b.code))
+          .map((item) => ({
+            key: item.code,
+            label: item.name,
+            type: item.type,
+            id: item.id,
+            codes: [item.code],
+            children: [],
+          })),
+      }));
   }
 
   /** 新建角色（编码唯一，冲突 409；新角色默认无权限，需再走授权接口） */

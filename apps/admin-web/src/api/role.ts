@@ -7,7 +7,7 @@
  */
 
 import { request } from '@/utils/request';
-import type { PermissionGroup, RoleListItem, RolePermissionsResult, RoleUpsertInput } from './types';
+import type { PermissionGroup, PermissionItem, PermissionTreeNode, RoleListItem, RolePermissionsResult, RoleUpsertInput } from './types';
 
 /** 角色列表（全量，不分页） */
 export function fetchRoles(): Promise<RoleListItem[]> {
@@ -47,4 +47,27 @@ export function copyRole(id: string): Promise<RoleListItem> {
 /** 权限点列表（按 module 分组，授权页勾选） */
 export function fetchPermissionGroups(): Promise<PermissionGroup[]> {
   return request.get<PermissionGroup[]>('/permissions');
+}
+
+/** 权限树（M10 E-04：业务域 → 权限点 → 子资源预留；选择器类组件换接此端点） */
+export function fetchPermissionTree(): Promise<PermissionTreeNode[]> {
+  return request.get<PermissionTreeNode[]>('/permissions/tree');
+}
+
+/**
+ * 权限树 → 分组结构（拍平兼容：树的第 1 层即 module，子节点携带 id/code/name/type，
+ * 授权页勾选提交 permissionIds 与选择器取码均无需递归）
+ */
+export function flattenPermissionTree(tree: PermissionTreeNode[]): PermissionGroup[] {
+  return tree.map((node) => ({
+    module: node.key,
+    items: node.children.map((child) => ({
+      id: child.id ?? child.key,
+      // 树节点 key 即权限码（后端契约 `${resource}:${action}` 模板），module 层 key 无冒号故此处收窄
+      code: child.key as PermissionItem['code'],
+      name: child.label,
+      type: child.type as PermissionItem['type'],
+      module: node.key,
+    })),
+  }));
 }

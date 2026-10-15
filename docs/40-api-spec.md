@@ -7,6 +7,9 @@
 > 变更记录：2026-10-15 donttemo M10 E-01：§3.11 补注任务登记表驱动化（`JOB_CENTER_DRIVER`：memory 进程内默认 / db·bullmq 落库多副本可达）；
 > §3.7 导出与 §3.9 迁移的执行体在 db/bullmq 驱动下经注册表按 params 重建（跨实例重跑）。
 >
+> 变更记录：2026-10-15 donttemo M10 E-02/E-04：§3.12 补注配置中心多实例语义（快照历史下沉 `config_snapshots`，版本基线跨实例对齐，nacos 驱动转正）；
+> §3.4 `GET /permissions/tree` 由 Backlog 转为已实现（三层树，前端授权弹窗与权限码选择器换接）。
+>
 > 变更记录：2026-10-14 donttemo 管理后台可达性修复：§3.2 新增 `GET` / `PUT /auth/profile`（`auth:me`，本人资料自助；
 > 原实现让个人中心借 `PUT /users/:id` 保存，普通角色必 `3002`）；§3.6 更正 `GET /dict/:code` 的权限点标注为 `dict:read`（原标「登录后」，与实现不符）。
 >
@@ -178,7 +181,7 @@
 | PUT | `/roles/:id/permissions` | `role:grant` | 全量授权，写入 `role_permission` |
 | POST | `/roles/:id/copy` | `role:create` | 复制角色（含权限） |
 | GET | `/permissions` | `permission:read` | 权限点列表（按 module 分组） |
-| GET | `/permissions/tree` | `permission:read` | 权限树（菜单 / 按钮 / 接口三层）—— **未实现（Backlog）**，前端未消费，`scripts/check-api-parity.mjs` 仅提示不阻断 |
+| GET | `/permissions/tree` | `permission:read` | 权限树（业务域 → 权限点（menu 类在前，button/api 类随后）→ 子资源预留；节点携带 `id` 与含子孙的 `codes`）—— M10 E-04 落地；前端授权弹窗与权限码选择器换接此端点（拍平兼容）。实现注记：权限点与菜单无归属外键，树不伪造「按钮挂在菜单下」层级 |
 
 ### 3.5 菜单（PRD-005）
 

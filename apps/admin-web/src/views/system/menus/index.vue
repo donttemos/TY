@@ -141,8 +141,9 @@ const permissionCodeOptions = ref<string[]>([]);
 async function ensurePermissionCodes(): Promise<void> {
   if (permissionCodeOptions.value.length > 0) return;
   try {
-    const groups: PermissionGroup[] = await roleApi.fetchPermissionGroups();
-    permissionCodeOptions.value = groups.flatMap((group) => group.items.map((item) => item.code));
+    // M10 E-04：数据源换接权限树（/permissions/tree）——module 节点 codes 已含全部子孙权限码
+    const tree = await roleApi.fetchPermissionTree();
+    permissionCodeOptions.value = tree.flatMap((node) => node.codes);
   } catch {
     // 加载失败不阻塞表单，但要让用户知道权限码选不了（而非静默的空下拉）
     ElMessage.warning('权限点列表加载失败，暂只能维护其他字段');

@@ -1088,6 +1088,36 @@ export async function handleMockRequest(
     return { handled: true };
   }
 
+  // ---- 权限树（M10 E-04：与后端同构——业务域 → 权限点（menu 类在前）→ 子资源预留） ----
+  if (path === '/permissions/tree' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'permission:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const typeRank: Record<string, number> = { menu: 0, button: 1, api: 2 };
+    const groups = new Map<string, MockPermission[]>();
+    for (const permission of database.permissions) {
+      const bucket = groups.get(permission.module) ?? [];
+      bucket.push(permission);
+      groups.set(permission.module, bucket);
+    }
+    const tree = [...groups.entries()]
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([module, items]) => ({
+        key: module,
+        label: module,
+        type: 'module' as const,
+        codes: items.map((item) => item.code),
+        children: items
+          .slice()
+          .sort((a, b) => (typeRank[a.type] ?? 3) - (typeRank[b.type] ?? 3) || a.code.localeCompare(b.code))
+          .map((item) => ({ key: item.code, label: item.name, type: item.type, id: item.id, codes: [item.code], children: [] as unknown[] })),
+      }));
+    send(res, CODE.OK, 'ok', tree, traceId);
+    return { handled: true };
+  }
+
   // ---- 菜单域 ----
   if (path === '/menus/tree' && method === 'GET') {
     const perm = requirePermission(database, ctx, 'menu:read');

@@ -14,6 +14,10 @@
 
 ## [Unreleased]
 
+### Added（M10 E-04 权限树契约落地，2026-10-15）
+
+- **E-04 `GET /permissions/tree` 落地（PRD-010 P0 / AC4，api-spec §3.4 悬空契约收口）**：受 `permission:read` 保护的三层树——业务域（module）→ 权限点（menu 类在前、button/api 类随后，节点携带 `id` 与含子孙的 `codes`）→ 子资源预留。**实现注记（契约字面与实现的差异，如实登记）**：权限点与菜单之间无「属于哪个菜单」外键（menus 经 permissionCode 弱关联），树不伪造「按钮挂在菜单下」的归属层级——「菜单/按钮/接口三层」的归属语义待权限点引入归属外键后再收；当前树的第 2/3 层 = 权限点（type 区分）。前端两处选择器换接该端点（`flattenPermissionTree` 拍平兼容，UI 零改动）：roles 页授权弹窗分组数据源、menus 页权限码选择器（原 `GET /permissions` 契约保留）。mock 同构（同 module 分组 / 同 type 排序 / 同节点结构）。验证：`smoke-admin` 新增 E-04 段 **111/111**（admin 三层树 200 / 树与分组视图权限码集合完全一致的反向对撞 / 三型齐备 / alice 越权 403/3002）、`smoke-mock` **119/119**、admin-web 单测 **89/89**、`vue-tsc` 0 错误、`check-api-parity` OK（`/permissions/tree` 调用面 ↔ 后端路由对上）。
+
 ### Added（M10 E-02 配置中心多实例语义 + nacos 转正，2026-10-15）
 
 - **E-02 配置中心多实例语义（PRD-010 P0 / AC2）**：`@fw/config-center` 新增可选 `ConfigHistoryPort`（append upsert / latest / findByVersion / list）——快照历史与版本号基线下沉持久层：**A 实例写入的版本 B 实例即时可见**（GET /configs 返回前经 `syncRemoteVersion()` 对齐持久层最新版本），**回滚候选跨实例一致**（rollback 候选集改读持久历史，缺省目标 = 持久层上一版）；版本号以持久层最新值为基线取大 +1（多实例不撞号），**外部事实源变更（file/nacos 轮询）对齐不推号**（B 实例追上远端已登记版本而非另占新号，反向保证单实例直改事实源仍推号入历史）；不注入端口 = 进程内环形表（M9 原行为，既有单测零改动）。example-api 落地：新表 `config_snapshots`（迁移 `20261015185000`，数据字典 §3.16，保留最近 20 版）+ `PrismaConfigHistoryStore`（Prisma upsert + 淘汰窗口）并默认装配。**nacos 驱动转正**：`CONFIG_CENTER_DRIVER` 枚举 `file` → `file | nacos`，新增 6 键 `CONFIG_CENTER_NACOS_SERVER_ADDR/DATA_ID/GROUP/NAMESPACE/USERNAME/PASSWORD`（`ENV_KEY_PATHS` 66→72 键，护栏同步；serverAddr 缺失启动即失败；nacos 走 v1 Open API 内容 MD5 轮询——多实例天然安全），example-api 按驱动装配 `NacosConfigDriver`。验证：`@fw/config-center` **53/53**（新增多实例语义 4 条：跨实例读版本一致 / 跨实例回滚一致且计入历史 / 版本基线不撞号 / **反向验证**：不注入历史保持 M9 原语义；既有 34 条零改动）、`@fw/config` **16/16**（72 键护栏）、example-api **52/52**、`smoke-config` **35/35**（新增持久历史前置清场）、新冒烟 `smoke-config-multi.mjs` **10/10**（双进程 = 双副本共享 SQLite 历史 + 共享事实源文件：A 写 → B 版本即时一致 → B 轮询追上 → B 回滚 → A 一致跟进 → nacos 缺 SERVER_ADDR 启动即失败）。文档同步：api-spec §3.12 多实例注记、数据字典 §3.16、60 手册（nacos 6 键 + 多实例选型指引）、`.env.example`、PRD-010 状态（OQ-2 采纳持久层方案）。

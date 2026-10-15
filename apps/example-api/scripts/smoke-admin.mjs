@@ -741,6 +741,30 @@ async function main() {
     aliceDict.status === 200 && aliceDict.body.code === 0 && Array.isArray(aliceDict.body.data),
     `http=${aliceDict.status} code=${aliceDict.body.code} 项数=${(aliceDict.body.data ?? []).length}`);
 
+  // ---------- M10 E-04：权限树端点（api-spec §3.4 悬空契约收口） ----------
+  console.log('\n—— M10 E-04 权限树（/permissions/tree） ——');
+  const treeRes = await call('/api/v1/permissions/tree', { token });
+  const tree = treeRes.body?.data ?? [];
+  const flatCodes = tree.flatMap((node) => node.codes ?? []);
+  // 与 GET /permissions 分组视图对撞：树覆盖的权限码集合必须与分组视图完全一致（同一数据源两种视图）
+  const groupsRes = await call('/api/v1/permissions', { token });
+  const groupCodes = (groupsRes.body?.data ?? []).flatMap((group) => (group.items ?? []).map((item) => item.code)).sort();
+  check('admin GET /permissions/tree → 200 且为非空三层树',
+    treeRes.status === 200 && tree.length > 0 && tree.every((node) => Array.isArray(node.children)),
+    `http=${treeRes.status} 顶层=${tree.length} 层1示例=${tree[0]?.key}`);
+  check('树覆盖的权限码集合与 GET /permissions 分组视图完全一致（同源两种视图）',
+    JSON.stringify([...flatCodes].sort()) === JSON.stringify(groupCodes),
+    `树=${flatCodes.length} 分组=${groupCodes.length}`);
+  const menuFirst = tree.flatMap((node) => node.children ?? []).some((child) => child.type === 'menu');
+  const typeSet = new Set(tree.flatMap((node) => (node.children ?? []).map((child) => child.type)));
+  check('层 2 节点含 menu 类权限点（菜单/按钮/接口三型齐备）',
+    menuFirst && ['menu', 'button', 'api'].every((t) => typeSet.has(t)),
+    `types=${[...typeSet].join('/')}`);
+  const aliceTree = await call('/api/v1/permissions/tree', { token: aliceToken });
+  check('alice GET /permissions/tree → 403/3002（permission:read 未授予，越权面反向验证）',
+    aliceTree.status === 403 && aliceTree.body.code === 3002,
+    `http=${aliceTree.status} code=${aliceTree.body.code}`);
+
   console.log(`\n结果：${pass}/${total} 通过`);
   if (pass !== total) process.exitCode = 1;
 }

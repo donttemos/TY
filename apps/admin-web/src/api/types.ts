@@ -158,6 +158,20 @@ export interface PermissionGroup {
   items: PermissionItem[];
 }
 
+/** 权限树节点（M10 E-04：业务域 → 权限点 → 子资源预留；codes 含子孙权限码，扁平化取码无需递归） */
+export interface PermissionTreeNode {
+  /** 节点键（module 名或权限码，同级唯一） */
+  key: string;
+  /** 展示名（module 用原名；权限点用 name） */
+  label: string;
+  type: 'module' | PermissionType;
+  /** 权限点 ID（module 层无；授权页勾选提交 permissionIds 直接可用） */
+  id?: string;
+  /** 该节点下的权限码集合（含子孙） */
+  codes: string[];
+  children: PermissionTreeNode[];
+}
+
 /** 角色已授权权限 */
 export interface RolePermissionsResult {
   roleId: ID;

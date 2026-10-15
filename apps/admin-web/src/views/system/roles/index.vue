@@ -15,6 +15,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import CrudTable from '@/components/CrudTable/index.vue';
 import StatusTag from '@/components/StatusTag/index.vue';
 import * as roleApi from '@/api/role';
+import { flattenPermissionTree } from '@/api/role';
 import { BizError, describeBizError } from '@/utils/biz-error';
 import type { CrudColumn } from '@/components/CrudTable/types';
 import type { DataScope, PermissionGroup, PermissionItem, RoleListItem } from '@/api/types';
@@ -121,8 +122,9 @@ async function openGrant(row: RoleListItem): Promise<void> {
   selected.value = [];
   groups.value = [];
   try {
-    const [permissionGroups, granted] = await Promise.all([roleApi.fetchPermissionGroups(), roleApi.fetchRolePermissions(row.id)]);
-    groups.value = permissionGroups;
+    // M10 E-04：授权数据源换接权限树（/permissions/tree）——拍平为分组结构，勾选/提交行为不变
+    const [tree, granted] = await Promise.all([roleApi.fetchPermissionTree(), roleApi.fetchRolePermissions(row.id)]);
+    groups.value = flattenPermissionTree(tree);
     selected.value = granted.permissions.map((p) => p.id);
   } catch (err) {
     ElMessage.error(err instanceof BizError ? describeBizError(err) : '权限数据加载失败');
