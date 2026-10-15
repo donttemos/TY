@@ -95,6 +95,10 @@
 | | `OTEL_EXPORTER_URL` | 条件 | — | OTLP/HTTP 采集端点（如 `http://otel-collector:4318/v1/traces`）；`OTEL_ENABLED=true` 时**必填，缺失启动即失败**。导出形态为 OTLP/HTTP JSON |
 | | `OTEL_SAMPLE_RATIO` | 否 | 0.1 | 采样比例（0~1，默认 10%）；按 traceId 确定性取值，同链路跨服务决策一致 |
 | | `OTEL_SAMPLE_ERRORS` | 否 | true | 错误 span 全采开关（status=ERROR 或携带 exception 事件）；true 时错误链路不丢 |
+| 配置中心（M9） | `CONFIG_CENTER_ENABLED` | 否 | false | 配置中心总开关；false 时零开销（不读文件不起轮询），运行时参数全部按 env 快照，`PUT /configs` 一律 1004 |
+| | `CONFIG_CENTER_DRIVER` | 否 | file | 事实源适配器（首版仅 `file`：本地文件 + mtime 轮询）；`nacos` 为预留注册位，非法取值启动即失败 |
+| | `CONFIG_CENTER_FILE` | 否 | `./config/runtime.json` | 运行时配置文件路径（点路径 → 覆盖值的 JSON 对象）；**file 适配为单实例语义**——多实例共享本地文件有覆盖竞态，多实例场景应实现 Nacos adapter |
+| | `CONFIG_CENTER_POLL_SECONDS` | 否 | 5 | mtime 轮询间隔（秒，1~300）；热更生效延迟上界 = 轮询间隔 + 1s。文件损坏时保持最后一份有效快照（fail-keep）并记 ERROR，修复后自动追上 |
 | 前端（admin-web） | `VITE_API_BASE_URL` | 是 | — | 管理后台 API 基址（如 `https://api.example.com/api/v1`）；**构建期注入**，改值需重新构建 |
 | | `VITE_APP_TITLE` | 否 | 通用应用框架 | 站点标题 |
 | | `VITE_LOGIN_CAPTCHA` | 否 | false | 登录页验证码开关（true 时需接入验证码服务） |

@@ -32,7 +32,7 @@
 | FR-03 | 日志模块 `@fw/logger` | 结构化 JSON 日志；字段与全局约定一致为 `time / level / traceId / spanId / module / msg / ctx`（M8 接入 OTel 前 `spanId` 为空串）；支持按 module 设置级别；敏感字段（`password / token / idcard`）自动脱敏 |
 | FR-04 | 链路 ID | 中间件生成 `traceId`（或透传上游 `X-Trace-Id`），贯穿日志、响应头、错误对象 |
 | FR-05 | 统一响应格式 | 成功 `{ code: 0, data, traceId }`；失败 `{ code, message, traceId, details? }`；提供 `ResponseInterceptor` 自动包装 |
-| FR-06 | 错误码体系 | 业务错误码分段约定（`1xxx` 通用与参数、`2xxx` 业务、`3xxx` 鉴权、`4xxx` 租户与配额、`9xxx` 系统，与 [API 文档](./../40-api-spec.md) 第 2 节同源）；全局异常过滤器把异常映射为错误码，杜绝裸抛 500 |
+| FR-06 | 错误码体系 | 业务错误码分段约定（`1xxx` 通用与参数、`2xxx` 业务、`3xxx` 鉴权、`4xxx` 租户与配额、`5xxx` 配置中心（M9：`5001` 键不可热更 / `5002` 新值非法 / `5003` 键不存在）、`9xxx` 系统，与 [API 文档](./../40-api-spec.md) 第 2 节同源）；全局异常过滤器把异常映射为错误码，杜绝裸抛 500 |
 | FR-07 | 健康检查 | `GET /health`（进程存活）、`GET /ready`（依赖就绪：DB / Redis 可选探针）；返回依赖逐项状态 |
 | FR-08 | 优雅停机 | 收到 `SIGTERM` 后停止接新请求、等待在途请求完成（超时 10s 强制退出）、释放连接池 |
 | FR-09 | CLI 入口 | `fw new <name> --template=<admin|api|cms>`、`fw dev`、`fw build`、`fw check`（配置自检） |

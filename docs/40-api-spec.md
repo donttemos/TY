@@ -100,11 +100,14 @@
 | `3003` | 401 | 令牌已过期 | 静默刷新 |
 | `3004` | 403 | 账号已锁定 | 提示等待时间 |
 | `4001` | 403 | 租户无效或已过期（M8） | 提示联系管理员 |
+| `5001` | 400 | 该配置键不可热更新（boot 键或不在白名单，M9） | 该键走环境变量 + 重启 |
+| `5002` | 400 | 配置新值非法（M9） | 展示 `details` 中的拒绝原因 |
+| `5003` | 404 | 配置键不存在（M9） | 检查键名拼写 |
 | `9001` | 500 | 系统内部错误 | 上报 traceId |
 | `9002` | 503 | 依赖不可用（已进入降级） | 稍后重试 |
 | `9003` | 429 | 触发限流 | 按 `Retry-After` 退避 |
 
-> 分段：`1xxx` 通用、`2xxx` 预留、`3xxx` 鉴权、`4xxx` 租户与业务、`9xxx` 系统。新增错误码必须同步本表与 PRD-001。
+> 分段：`1xxx` 通用、`2xxx` 预留、`3xxx` 鉴权、`4xxx` 租户与业务、`5xxx` 配置中心（M9）、`9xxx` 系统。新增错误码必须同步本表与 PRD-001。
 
 ## 3. 接口清单
 
@@ -263,6 +266,19 @@
 | GET | `/jobs/:id/progress` | 登录即可 | 任务快照 `JobView`：`status`（pending/running/succeeded/failed/cancelled）、`progress`（0–100）、`message`、`timeline[]`、`error` + `traceId`、产物元信息 |
 | POST | `/jobs/:id/retry` | 登录即可 | 失败任务原地重跑；仅 `failed` 可重跑（其余 `1004`），重新派发同一 runner |
 | GET | `/jobs/:id/download` | 登录即可 | 取回产物（如审计导出 CSV）。`Content-Disposition` 走 RFC 5987 `filename*`，中文名不乱码 |
+
+### 3.12 参数配置（M9 / PRD-009）
+
+> 配置中心管理面。**GET 只列热更新白名单键**（11 键：log / cache / mq / otel / tenant 五个运行时可调域）；
+> boot 键（端口 / 驱动 / 连接串 / 密钥 / 开关）env 独占、不进列表，改动走重启——尝试写入已知 boot 键返回 `5001`。
+> 写走单一生效管道：**校验 → 审计（先审计后生效）→ 持久化事实源 → 应用覆盖 → 通知订阅者**；
+> 审计落 `module=config`（变更历史在审计日志按该模块过滤）。`CONFIG_CENTER_ENABLED=false` 时 GET 仍可用
+>（env 只读视图），PUT 一律 `1004`。
+
+| 方法 | 路径 | 权限点 | 说明 |
+|---|---|---|---|
+| GET | `/configs` | `system:config:read` | 白名单键当前生效值列表：`{key, value, source(runtime/env), hot, envKey, updatedAt}` + 运行元信息 `meta`（驱动 / 快照版本号 / 轮询间隔 / 最近生效时间 / 最近错误） |
+| PUT | `/configs/:key` | `system:config:write` | 修改白名单键，body `{value}`（JSON 语义）；响应 `{key, oldValue, newValue, snapshotVersion}`。错误：白名单外 `400/5001`、值非法 `400/5002`（`details` 带原因，**信封顶层**）、键不存在 `404/5003`；同值写入视为无变更（不产生审计） |
 
 ## 4. 限流与幂等
 

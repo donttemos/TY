@@ -35,6 +35,9 @@
 #   该作业是独立 runner（无 base 的 dist），集成用例经 vitest 从源码运行却 import @fw/* 的包入口，
 #   三库同时报 "Failed to resolve entry for package @fw/logger"。新增「构建框架包」步骤，
 #   用 --filter "@fw/db..." 一次覆盖 @fw/db 及其全部依赖（config/logger/core），避免再维护易漏的手写列表
+# @modified 2026-10-15 donttemo M9/PRD-009：① 三处显式包列表纳入 @fw/config-center（构建 / 覆盖率 /
+#   冒烟同批，避免「本机有 dist、干净环境缺包」的假绿）；② 新增 M9 配置中心端到端冒烟步骤
+#   （smoke-config.mjs：双入口生效 / 三类拒绝 / fail-keep / 审计可见 / 越权面 / 未启用形态）
 # @module ci
 
 name: CI
@@ -77,7 +80,7 @@ jobs:
           # 不会填充默认 client）。干净环境缺此步时，@prisma/client 只是 postinstall 留下的空壳，example-api 的 tsc 会报
           # Prisma.InputJsonValue / Prisma.DbNull 不存在。DB_URL 仅占位，generate 不连库。
           DB_URL="file:./dev.db" pnpm --filter example-api exec prisma generate --schema prisma/schema.prisma
-          for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/tenant @fw/transport @fw/telemetry; do
+          for pkg in @fw/config @fw/config-center @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/tenant @fw/transport @fw/telemetry; do
             pnpm --filter $pkg run build
           done
           pnpm --filter example-api run build
@@ -87,7 +90,7 @@ jobs:
       # @fw/cli 的生成器测试自带临时工程与回滚断言（PRD-006 FR-07/08），不依赖真实数据库
       - name: 单元测试（SQLite）
         run: |
-          for pkg in @fw/config @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/tenant @fw/transport @fw/telemetry; do
+          for pkg in @fw/config @fw/config-center @fw/logger @fw/core @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/tenant @fw/transport @fw/telemetry; do
             pnpm --filter $pkg run test:coverage
           done
 
@@ -163,6 +166,12 @@ jobs:
       - name: M8 链路追踪端到端冒烟（SQLite）
         working-directory: apps/example-api
         run: node scripts/smoke-telemetry.mjs
+
+      # M9 配置中心端到端冒烟：双入口生效 / 三类拒绝 / fail-keep / 审计可见 / 越权面 / 未启用形态
+      # （PRD-009 §7 AC）；脚本自带服务生命周期（端口 3450），复用 M3 步骤已迁移/播种的 SQLite 库
+      - name: M9 配置中心端到端冒烟（SQLite）
+        working-directory: apps/example-api
+        run: node scripts/smoke-config.mjs
 
       # M8 三大关键演练（验收标准 §6 L3 发布门禁）：数据库切换 / 规模演进 / 依赖故障降级
       # 本地可跑段落（单体形态 / 编排演进 / Redis 降级 / 队列积压）默认执行；

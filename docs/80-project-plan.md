@@ -146,6 +146,25 @@ gantt
 | T-M8-07 | Helm Chart 与部署模板 | Chart + values + compose + 校验脚本 | 3 | 全部 | TC-TNT-007 | ✅ |
 | T-M8-08 | 三大演练与终验 | `drill-m8.mjs` + 演练记录 + 压测基线 + 自检清单 | 2 | 全部 | L3 发布门禁通过 | ✅ |
 
+### M9 配置中心与热更新（PRD-009）
+
+> **状态：已完成实现与验证（2026-10-15，未发版）**。M8 遗留 L-02 / FR-08 收口。
+> 独立包 `@fw/config-center`（ConfigCenterPort + file 适配 + 单一生效管道）单测 **34/34**；
+> `@fw/config` 键注册表护栏（ENV_KEY_PATHS 65 键 + ENV_HOT_KEYS 白名单 11 键）**16/16**；
+> 四个框架服务热更入口：`@fw/cache` **80** / `@fw/queue` **144** / `@fw/telemetry` **53** / `@fw/tenant` **34**；
+> `example-api` 单测 **41**（含订阅装配反向验证 6 条 + 端点契约 5 条）；前端单测 **81**、`smoke-mock` **119/119**、
+> `smoke-config.mjs` **27/27**（双入口生效 / 三类拒绝 / fail-keep / 审计可见 / 越权面 / 未启用形态）。
+
+| 任务 ID | 任务 | 产出 | 人日 | 依赖 | 验收 | 状态 |
+|---|---|---|---|---|---|---|
+| T-M9-01 | ConfigCenterPort + file 适配（mtime 轮询 + 原子写） | `@fw/config-center` 包 | 3 | M1 | PRD-009 FR-01/02 | ✅ |
+| T-M9-02 | 热更新白名单（env-schema 键注册表派生）+ 复用校验 | `ENV_KEY_PATHS` / `ENV_HOT_KEYS` + 完整性单测 | 2 | T-M9-01 | PRD-009 FR-03/04 | ✅ |
+| T-M9-03 | 单一生效管道（校验→审计→持久化→应用→通知）+ 变更审计 | 管道 + ConfigAuditPort 端口反转 | 2 | T-M9-02 | PRD-009 FR-05 | ✅ |
+| T-M9-04 | 框架服务订阅生效路径（Logger/Cache/Queue/OTel/Tenant） | 四包 `updateRuntimeOptions` + 订阅装配反向验证单测 | 2 | T-M9-03 | PRD-009 FR-09 | ✅ |
+| T-M9-05 | 管理端点 `/configs` 查改 + 权限码 + seed | ConfigsController + `system:config:read/write` | 1.5 | T-M9-03 | PRD-009 FR-06 | ✅ |
+| T-M9-06 | admin 参数配置页 + 变更历史 + mock 同构 | views/system/configs + mock /configs 同错误码 | 2 | T-M9-05 | PRD-009 FR-07/08 | ✅ |
+| T-M9-07 | 冒烟 `smoke-config.mjs` + 文档三处同步 + CI 纳入 | 27/27 + 40/60/PRD-001/.env.example/80/CHANGELOG | 1 | 全部 | PRD-009 §7 AC | ✅ |
+
 ## 3. 任务板
 
 ### 3.1 列定义与流转
@@ -268,7 +287,7 @@ gantt
 - [x] T-M8-07 Helm Chart 与部署模板（`deploy/helm/fw-app/` 14 模板 + `values-prod.yaml` + `docker-compose.prod.yml` + `nginx/fw.conf`；`scripts/check-helm-chart.mjs` **63/63**）
 - [x] T-M8-08 三大演练与终验（`apps/example-api/scripts/drill-m8.mjs` **25/25**；`bench.mjs` 压测基线；`docs/96-m8-drills.md` / `97-bench-baseline.md` / `98-scale-checklist.md`）
 
-**Backlog**：~~M8 进行中~~ → M8 已完成（2026-10-14）；~~M3 遗留项④（refresh 过期记录定时清理）~~——**已完成（2026-10-13）**：example-api `auth.refresh-cleanup` 定时任务（`@Cron('0 3 * * *')` 加分布式锁，过期 30 天清理，`/api/v1/auth/refresh-cleanup` 快照端点），冒烟阶段 A 覆盖注册与手动触发。当前剩余可跟进项：M8 遗留 L-01（真实 K8s 集群部署冒烟）、L-02（FR-08 配置中心占位与热更新审计）、L-04（Redis Cluster 实跑）。
+**Backlog**：~~M8 进行中~~ → M8 已完成（2026-10-14）；~~M3 遗留项④（refresh 过期记录定时清理）~~——**已完成（2026-10-13）**：example-api `auth.refresh-cleanup` 定时任务（`@Cron('0 3 * * *')` 加分布式锁，过期 30 天清理，`/api/v1/auth/refresh-cleanup` 快照端点），冒烟阶段 A 覆盖注册与手动触发。~~M8 遗留 L-02（FR-08 配置中心占位与热更新审计）~~——**已完成（2026-10-15，M9 / PRD-009）**：`@fw/config-center` + 白名单 11 键热更 + `/configs` 管理端点 + 参数配置页 + `smoke-config.mjs` 27/27，见 PRD-009。当前剩余可跟进项：M8 遗留 L-01（真实 K8s 集群部署冒烟）、L-04（Redis Cluster 实跑）、M9 后续 Backlog（tenant-scoped config、一键回滚 API、Nacos adapter 示例实现）。
 
 > **v0.3.0 已发布（2026-10-14，「真机可用性收口」）**：在 M1–M8 全交付的基础上，把管理后台从「文档标注已交付」拉到「真机可用的同源状态」——修复前端 15 项缺陷、路由与登录态生命周期 4 项、工作台权限取数（BUG-16~22），纳入 C-06 契约收口与 1Panel/裸机真机部署路径。本机门禁全量实跑：单测 **782**、端到端冒烟 **203** + mock **65**、静态门禁 4 项（文件头 376 / 裸 SQL 248 / 接口对撞 / Helm 63）。判定与遗留见 **[v0.3.0 发布验收报告](./90-release-v0.3.0.md)**（R3-01 租户管理页、R3-02 异步导出、R3-03 整页 403、R3-04 菜单选择器、R3-07 死信分页、R3-08 沿用 L-01/L-02/L-04/L-05）。
 

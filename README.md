@@ -38,6 +38,7 @@
 framework/
   packages/
     core/ config/ logger/     # M1 骨架
+    config-center/            # M9 配置中心（端口 + file 适配 + 白名单热更管道）
     db/ cli/                  # M2 数据库抽象 + 脚手架（含 db:migrate/rollback/seed）
     auth/                     # M3 鉴权与权限
     cache/                    # M4 缓存
@@ -122,6 +123,7 @@ fw gen crud order
 | CRUD 代码生成器 | `@fw/cli gen`（schema 解析 + 类型映射 + 模板引擎 + 后端/前端/seed 生成 + dry-run/diff/回滚；模板外置 `templates/codegen/`；单测 116 / 覆盖率 94.7%） | M6 | ✅ 已发布 v0.2.0 |
 | 队列与定时任务 | `@fw/queue`（统一 Job 抽象 + memory/bullmq 双驱动 + `@JobHandler`/`@Cron` 自动扫描 + 重试退避 + 死信重放 + 幂等 + 令牌桶限速 + cron 分布式锁 + 优雅停机 + 队列管理页；单测 135 / 覆盖率 93.1%、example-api 冒烟 31/31 含真实 Redis 失速恢复演练 TC-JOB-008） | M7 | ✅ 已发布 v0.2.0 |
 | 多租户与规模化 | `@fw/tenant`（三级回退租户解析 + fail-closed + 上下文透传）+ `@fw/db` TenantDataSource（dedicated 独立库路由：懒创建 + LRU/空闲淘汰 + Repository 按上下文选路）+ `@fw/auth` 数据权限四档（`DataScopeOrgPort` + all/org_below/org/self 解析与详情越权校验 + `departments`/`user_department` 模型）+ `@fw/transport` 传输层（in-process/redis 双驱动端口 + redis RPC 协议 + `@TransportHandler` 声明式注册 + 客户端代理，切换不改调用方代码）+ `@fw/telemetry` 链路追踪（OTel：HTTP 中间件 + 尾采样错误全采 + OTLP 导出 + 日志 span 桥接 + DB/缓存/队列/传输插桩）+ **部署模板（Helm Chart + compose + Nginx）与三大演练**；冒烟 48/48 + 17/17 + 14/14，演练 25/25、Chart 校验 63/63 | M8 | ✅ 已发布 v0.2.0（条件通过） |
+| 配置中心与热更新 | `@fw/config-center`（ConfigCenterPort + 本地 file 适配 mtime 轮询 + 原子写 + 单一生效管道：校验→审计→持久化→应用→通知，fail-keep / 先审计后生效）+ 热更新白名单 11 键从 env-schema 键注册表派生（完整性单测防键集漂移）+ 四框架服务订阅热更（Logger / Cache / Queue / OTel / Tenant）+ `/api/v1/configs` 查改端点（5001/5002/5003 错误码段）+ admin 参数配置页与变更历史 + mock 同构；单测 34/34，`smoke-config.mjs` 27/27、`smoke-mock` 119/119 | M9 | ✅ 已完成（2026-10-15，未发版） |
 
 ## 文档索引
 

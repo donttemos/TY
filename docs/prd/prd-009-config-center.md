@@ -1,8 +1,9 @@
 # PRD-009 · 配置中心与热更新
 
-> 里程碑：M9（建议，未排期）｜ 状态：**草案** ｜ 优先级：P2 ｜ 依赖：M1（`@fw/config`）、M3（审计）、M5（admin 页面模式）｜ 负责人：donttemo ｜ 更新：2026-10-15
+> 里程碑：M9 ｜ 状态：**已实现（2026-10-15，未发版）** ｜ 优先级：P2 ｜ 依赖：M1（`@fw/config`）、M3（审计）、M5（admin 页面模式）｜ 负责人：donttemo ｜ 更新：2026-10-15
 >
 > 变更记录：2026-10-15 donttemo 起草——M8 遗留 L-02（FR-08 配置中心占位未实现，见 [`docs/96-m8-drills.md`](../96-m8-drills.md) §6.4）是全项目**唯一的需求级缺口**（其余遗留 L-01/L-03/L-04 均为环境相关），按终验建议独立成 PRD 收口。范围沿用 PRD-008 §9 已结案结论：首版仅定义抽象接口与本地文件适配，不绑定 Nacos / Apollo。
+> 变更记录：2026-10-15 donttemo 实现收口——独立包 `@fw/config-center`（端口 + file 适配 + 单一管道）、`@fw/config` 键注册表（`ENV_KEY_PATHS` 65 键 + `ENV_HOT_KEYS` 白名单 11 键，完整性单测防键集漂移）、四个框架服务热更入口（cache/queue/telemetry/tenant 的 `updateRuntimeOptions`）、example-api 装配（审计桥 + 订阅 + `/api/v1/configs` 两端点）、admin-web 参数配置页与变更历史、mock 同构、`smoke-config.mjs` **27/27**、`smoke-mock` 119/119。三个 Open Questions 按 §9 建议定稿（见该节决议列）。
 
 ## 1. 背景与目标
 
@@ -98,15 +99,15 @@ boot 键（env 独占）：APP_PORT / *_DRIVER / *_URL / 密钥 / 总开关 —�
 
 ## 7. 验收标准（AC）
 
-- [ ] 修改 `log.level`（经 API 与经文件两种入口）后，后续日志按新级别输出，进程未重启，生效延迟 ≤ 轮询间隔 + 1s。
-- [ ] 修改 boot 键（如 `db.driver`）→ `400/5001`，值不变；键不存在 → `404/5003`。
-- [ ] 写入非法值（如 `log.level=verbose`）→ `400/5002`，旧值保持，审计记录一条失败变更（含拒绝原因）。
-- [ ] 每次成功变更在审计日志可查（key / old / new / source / operator / traceId），且**审计失败时变更整体回滚**。
-- [ ] 运行时配置文件被写坏（语法错误）→ 进程不崩、快照保持、`ERROR` 日志；修复文件后 ≤ 一个轮询周期自动追上。
-- [ ] 无 `system:config:write` 的用户调用 `PUT /configs/:key` → `403/3002`；无 `system:config:read` 的用户看不到参数配置菜单。
-- [ ] mock 与真实后端行为一致（同白名单 / 同错误码 / 审计同构），`smoke-mock` 断言通过。
-- [ ] `smoke-config.mjs` 全绿（建议端口 3500 系列，与既有冒烟错开），覆盖：双入口生效、三类拒绝、fail-keep、审计可见、越权面。
-- [ ] 订阅生效路径有反向验证单测（撤掉订阅 / 管道通知，用例必须 FAIL 才算护栏有效）。
+- [x] 修改 `log.level`（经 API 与经文件两种入口）后，后续日志按新级别输出，进程未重启，生效延迟 ≤ 轮询间隔 + 1s。（`smoke-config.mjs` 阶段 B/E：demo-queue 入队的 DEBUG 日志在默认 info 级不可见、trace 阈值下出现）
+- [x] 修改 boot 键（如 `db.driver`）→ `400/5001`，值不变；键不存在 → `404/5003`。（阶段 C；`@fw/config-center` 单测另有键判别三态断言）
+- [x] 写入非法值（如 `log.level=verbose`）→ `400/5002`，旧值保持，审计记录一条失败变更（含拒绝原因）。（阶段 C；失败审计 `afterValue.ok=false` + `reason`）
+- [x] 每次成功变更在审计日志可查（key / old / new / source / operator / traceId），且**审计失败时变更整体回滚**。（阶段 B/C；审计回滚为 `@fw/config-center` 单测「先审计后生效」用例）
+- [x] 运行时配置文件被写坏（语法错误）→ 进程不崩、快照保持、`ERROR` 日志；修复文件后 ≤ 一个轮询周期自动追上。（阶段 F）
+- [x] 无 `system:config:write` 的用户调用 `PUT /configs/:key` → `403/3002`；无 `system:config:read` 的用户看不到参数配置菜单。（阶段 A + seed 菜单按 `system:config:read` 挂载）
+- [x] mock 与真实后端行为一致（同白名单 / 同错误码 / 审计同构），`smoke-mock` 断言通过。（119/119，含参数配置段 12 断言）
+- [x] `smoke-config.mjs` 全绿（端口 3450，与既有冒烟错开），覆盖：双入口生效、三类拒绝、fail-keep、审计可见、越权面。（27/27，另含未启用形态与覆盖移除恢复 env）
+- [x] 订阅生效路径有反向验证单测（撤掉订阅 / 管道通知，用例必须 FAIL 才算护栏有效）。（`config-subscriptions.spec.ts`：白名单 11 键逐一断言生效路径 + 退订用例；`@fw/config` `env-registry.test.ts` 防键集漂移）
 
 ## 8. 依赖与风险
 
@@ -120,6 +121,6 @@ boot 键（env 独占）：APP_PORT / *_DRIVER / *_URL / 密钥 / 总开关 —�
 
 | 问题 | 建议（待评审） | 负责人 | 结论时间 |
 |---|---|---|---|
-| 白名单首版范围是否含 `auth.maxFailed` / `auth.lockMinutes`？ | 倾向**不含**——登录策略属于安全基线，改策略应走有评审的重启路径；有运营诉求再纳入 | donttemo | 待定 |
-| 放 `@fw/config` 内子模块还是独立包 `@fw/config-center`？ | 倾向独立包（沿用 queue / transport 双驱动端口先例，避免 config 包依赖面变宽）；实现时按体量终定 | donttemo | 待定 |
-| 是否需要配置快照版本号与一键回滚 API？ | 首版不做（审计历史人工恢复）；若变更频率高再立项 | donttemo | 待定 |
+| 白名单首版范围是否含 `auth.maxFailed` / `auth.lockMinutes`？ | 倾向**不含**——登录策略属于安全基线，改策略应走有评审的重启路径；有运营诉求再纳入 | donttemo | **已定稿（2026-10-15）：不含**。白名单 11 键固定为 log/cache/mq/otel/tenant 五个运行时可调域，安全基线键单测禁入（`env-registry.test.ts` boot 键断言） |
+| 放 `@fw/config` 内子模块还是独立包 `@fw/config-center`？ | 倾向独立包（沿用 queue / transport 双驱动端口先例，避免 config 包依赖面变宽）；实现时按体量终定 | donttemo | **已定稿（2026-10-15）：独立包 `@fw/config-center`**（依赖 `@fw/config` + `@fw/core` + `@fw/logger`，只依赖 zod 与 node:fs 的传递面；审计经 `ConfigAuditPort` 端口反转由应用装配） |
+| 是否需要配置快照版本号与一键回滚 API？ | 首版不做（审计历史人工恢复）；若变更频率高再立项 | donttemo | **部分采纳（2026-10-15）**：快照版本号已实现（`snapshotVersion` 单调递增，纳入 `meta` 诊断与响应）；一键回滚 API 不做（审计历史人工恢复，登记后续 Backlog） |

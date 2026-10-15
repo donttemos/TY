@@ -45,6 +45,11 @@ x-app-env: &app-env
   OTEL_EXPORTER_URL: ${OTEL_EXPORTER_URL:-http://otel-collector:4318/v1/traces}
   OTEL_SAMPLE_RATIO: "0.1"
   OTEL_SAMPLE_ERRORS: "true"
+  # 配置中心（M9）：file 适配为单实例语义，compose 多容器部署默认关闭（多实例请实现 Nacos adapter）
+  CONFIG_CENTER_ENABLED: "false"
+  CONFIG_CENTER_DRIVER: file
+  CONFIG_CENTER_FILE: ./config/runtime.json
+  CONFIG_CENTER_POLL_SECONDS: "5"
 
 x-app-image: &app-image
   image: ${APP_IMAGE:-registry.example.com/fw-app:0.1.0}
