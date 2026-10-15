@@ -18,6 +18,10 @@
  *   落库 → retry 成功 1004）/ 审计导出（派发 → 轮询 → CSV 下载验 BOM+表头）/ simulate=fail 失败路径
  * @modified 2026-10-15 donttemo BUG-15 增量 + E-07：roles/dict 排序白名单断言（合法排序 + 未知字段
  *   400/1001）与 GET /dict/audit_module 四项断言
+ * @modified 2026-10-15 donttemo M9/PRD-009：① audit_module 断言更新为六项（seed 与 mock 同批补 queue/config）；
+ *   ② 新增参数配置段——GET /configs 白名单 11 键、PUT 合法值生效（source 翻转 + 版本号递增 + 审计落盘）、
+ *   boot 键 400/5001、未知键 404/5003、非法值 400/5002（旧值保持 + 失败审计 + 原因回显）、同值写不产生审计、
+ *   alice 无 system:config:read/write → 3002 双断言
  *   与原地重跑 / 越权（3002）与任务归属人隔离（404）
  * @module admin-web/scripts
  */
@@ -565,9 +569,66 @@ async function main() {
 
     const amDict = await api('GET', '/dict/audit_module', { token: newAccess });
     const amValues = (amDict.body?.data ?? []).map((i) => i.value).sort();
-    check('GET /dict/audit_module 返回 auth/role/tenant/user 四项（E-07）',
-      amDict.body?.code === 0 && JSON.stringify(amValues) === JSON.stringify(['auth', 'role', 'tenant', 'user']),
+    check('GET /dict/audit_module 返回 auth/config/queue/role/tenant/user 六项（E-07 + M9 补 config/queue）',
+      amDict.body?.code === 0 && JSON.stringify(amValues) === JSON.stringify(['auth', 'config', 'queue', 'role', 'tenant', 'user']),
       `values=${amValues.join(',')}`);
+
+    // ---------- M9 参数配置（PRD-009 FR-08：同白名单 / 同错误码 / 同审计可见性） ----------
+    phase('参数配置（M9 配置中心）');
+
+    const cfgList = await api('GET', '/configs', { token: newAccess });
+    const cfgData = cfgList.body?.data?.configs ?? [];
+    check('GET /configs 返回白名单 11 键（boot 键不进列表）',
+      cfgList.body?.code === 0 && cfgData.length === 11
+      && cfgData.every((c) => c.hot === true && typeof c.key === 'string' && c.envKey)
+      && !cfgData.some((c) => c.key === 'db.driver'),
+      `count=${cfgData.length}`);
+    check('GET /configs 元信息带驱动与快照版本',
+      cfgList.body?.data?.meta?.driver === 'file' && typeof cfgList.body?.data?.meta?.snapshotVersion === 'number');
+
+    const cfgPut = await api('PUT', '/configs/cache.ttl', { token: newAccess, body: { value: 900 } });
+    check('PUT /configs/cache.ttl=900 生效（旧值 300 → 900）',
+      cfgPut.body?.code === 0 && cfgPut.body?.data?.oldValue === 300 && cfgPut.body?.data?.newValue === 900,
+      `code=${cfgPut.body?.code}`);
+
+    const cfgList2 = await api('GET', '/configs', { token: newAccess });
+    const ttlEntry = (cfgList2.body?.data?.configs ?? []).find((c) => c.key === 'cache.ttl');
+    check('修改后列表 source 翻转为 runtime 且带更新时间',
+      ttlEntry?.source === 'runtime' && !!ttlEntry?.updatedAt && ttlEntry?.value === 900,
+      `source=${ttlEntry?.source} updatedAt=${ttlEntry?.updatedAt}`);
+
+    const cfgBoot = await api('PUT', '/configs/db.driver', { token: newAccess, body: { value: 'mysql' } });
+    check('boot 键 → 400/5001', cfgBoot.status === 400 && cfgBoot.body?.code === 5001, `http=${cfgBoot.status} code=${cfgBoot.body?.code}`);
+    const cfgUnknown = await api('PUT', '/configs/nope.nope', { token: newAccess, body: { value: 1 } });
+    check('未知键 → 404/5003', cfgUnknown.status === 404 && cfgUnknown.body?.code === 5003, `http=${cfgUnknown.status} code=${cfgUnknown.body?.code}`);
+    const cfgInvalid = await api('PUT', '/configs/log.level', { token: newAccess, body: { value: 'verbose' } });
+    check('非法值 → 400/5002（信封顶层 details 带原因，与 GlobalExceptionFilter 同构）',
+      cfgInvalid.status === 400 && cfgInvalid.body?.code === 5002
+      && (cfgInvalid.body?.details?.[0]?.message ?? '').length > 0,
+      `http=${cfgInvalid.status} code=${cfgInvalid.body?.code}`);
+    const cfgAfterInvalid = await api('GET', '/configs', { token: newAccess });
+    check('非法值被拒后旧值保持（log.level 仍 info）',
+      (cfgAfterInvalid.body?.data?.configs ?? []).find((c) => c.key === 'log.level')?.value === 'info');
+
+    const cfgSame = await api('PUT', '/configs/cache.ttl', { token: newAccess, body: { value: 900 } });
+    check('同值写入 = 无变更（版本号不递增）',
+      cfgSame.body?.code === 0 && cfgSame.body?.data?.snapshotVersion === cfgPut.body?.data?.snapshotVersion,
+      `v=${cfgSame.body?.data?.snapshotVersion}`);
+
+    const cfgAudit = await api('GET', '/audit-logs?module=config&page=1&pageSize=50', { token: newAccess });
+    const cfgAuditItems = cfgAudit.body?.data?.items ?? [];
+    const cfgAuditOk = cfgAuditItems.find((a) => a.targetId === 'cache.ttl' && a.afterValue?.ok === true);
+    const cfgAuditFail = cfgAuditItems.find((a) => a.targetId === 'log.level' && a.afterValue?.ok === false);
+    check('变更审计可查：成功（old/new/source/operator）与失败（含拒绝原因）各一条',
+      !!cfgAuditOk && cfgAuditOk.beforeValue?.value === 300 && cfgAuditOk.afterValue?.value === 900
+      && cfgAuditOk.afterValue?.source === 'api' && cfgAuditOk.afterValue?.operator === 'admin'
+      && !!cfgAuditFail && (cfgAuditFail.afterValue?.reason ?? '').length > 0,
+      `ok=${!!cfgAuditOk} fail=${!!cfgAuditFail}`);
+
+    const cfgAliceList = await api('GET', '/configs', { token: aliceToken });
+    check('alice 无 system:config:read → 3002', cfgAliceList.body?.code === 3002, `code=${cfgAliceList.body?.code}`);
+    const cfgAlicePut = await api('PUT', '/configs/cache.ttl', { token: aliceToken, body: { value: 1 } });
+    check('alice 无 system:config:write → 3002', cfgAlicePut.body?.code === 3002, `code=${cfgAlicePut.body?.code}`);
 
     const logout = await api('POST', '/auth/logout', { token: newAccess });
     check('登出成功', logout.body?.code === 0);
