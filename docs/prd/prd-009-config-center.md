@@ -1,6 +1,6 @@
 # PRD-009 · 配置中心与热更新
 
-> 里程碑：M9 ｜ 状态：**已实现（2026-10-15，未发版）** ｜ 优先级：P2 ｜ 依赖：M1（`@fw/config`）、M3（审计）、M5（admin 页面模式）｜ 负责人：donttemo ｜ 更新：2026-10-15
+> 里程碑：M9 ｜ 状态：**已发布 v0.4.0（2026-10-15）** ｜ 优先级：P2 ｜ 依赖：M1（`@fw/config`）、M3（审计）、M5（admin 页面模式）｜ 负责人：donttemo ｜ 更新：2026-10-15
 >
 > 变更记录：2026-10-15 donttemo 起草——M8 遗留 L-02（FR-08 配置中心占位未实现，见 [`docs/archive/m8/96-m8-drills.md`](../archive/m8/96-m8-drills.md) §6.4）是全项目**唯一的需求级缺口**（其余遗留 L-01/L-03/L-04 均为环境相关），按终验建议独立成 PRD 收口。范围沿用 PRD-008 §9 已结案结论：首版仅定义抽象接口与本地文件适配，不绑定 Nacos / Apollo。
 > 变更记录：2026-10-15 donttemo 实现收口——独立包 `@fw/config-center`（端口 + file 适配 + 单一管道）、`@fw/config` 键注册表（`ENV_KEY_PATHS` 65 键 + `ENV_HOT_KEYS` 白名单 11 键，完整性单测防键集漂移）、四个框架服务热更入口（cache/queue/telemetry/tenant 的 `updateRuntimeOptions`）、example-api 装配（审计桥 + 订阅 + `/api/v1/configs` 两端点）、admin-web 参数配置页与变更历史、mock 同构、`smoke-config.mjs` **27/27**、`smoke-mock` 119/119。三个 Open Questions 按 §9 建议定稿（见该节决议列）。

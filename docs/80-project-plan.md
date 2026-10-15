@@ -148,7 +148,7 @@ gantt
 
 ### M9 配置中心与热更新（PRD-009）
 
-> **状态：已完成实现与验证（2026-10-15，未发版）**。M8 遗留 L-02 / FR-08 收口。
+> **状态：已发布 v0.4.0（2026-10-15）**。M8 遗留 L-02 / FR-08 收口。
 > 独立包 `@fw/config-center`（ConfigCenterPort + file 适配 + 单一生效管道）单测 **34/34**；
 > `@fw/config` 键注册表护栏（ENV_KEY_PATHS 65 键 + ENV_HOT_KEYS 白名单 11 键）**16/16**；
 > 四个框架服务热更入口：`@fw/cache` **80** / `@fw/queue` **144** / `@fw/telemetry` **53** / `@fw/tenant` **34**；

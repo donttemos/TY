@@ -2,7 +2,7 @@
 
 > 一套「框架之上的框架」：用它在 1 天内搭出任意业务系统的可运行骨架，小到内部工具站、大到多租户 SaaS，规模升级时业务代码零重写。
 >
-> **当前状态：v0.3.0 已发布（2026-10-14）** —— v0.1.0 交付 M1–M4，v0.2.0 一次性纳入 **M5 管理后台前端（PRD-005）、M6 CRUD 代码生成器（PRD-006）、M7 队列与定时任务（PRD-007）、M8 多租户与规模化演进（PRD-008）**，**M1–M8 全部交付**；本次 **v0.3.0 做「真机可用性收口」**：修复管理后台 15 项前端缺陷（操作列整列消失、字典按钮不渲染、生成器页面菜单不可达、个人中心保存必失败、越权按钮可点、死链菜单等）、路由与登录态生命周期 4 项（「点进功能页侧边栏消失」、403 判定死代码、换号后仍是上一账号菜单、mock 与后端漂移）与工作台对低权限账号刷 403 并显示误导性 `0`，并纳入 **C-06 契约收口**（补齐 25 个后端未注册端点 + 前后端接口对撞门禁）、分派入参写库前校验、以及 **1Panel / 裸机真机部署路径**（PostgreSQL schema 变体、HTTPS 上线）。真机验收：数据面 24/24 + 27/27、真实 Chromium 端到端 **26/26 且全程 0 条 4xx**。发布验收记录见 [v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md)。
+> **当前状态：v0.4.0 已发布（2026-10-15）** —— v0.1.0 交付 M1–M4，v0.2.0 一次性纳入 **M5 管理后台前端（PRD-005）、M6 CRUD 代码生成器（PRD-006）、M7 队列与定时任务（PRD-007）、M8 多租户与规模化演进（PRD-008）**（M1–M8 全部交付），v0.3.0 做「真机可用性收口」（修复管理后台 15+4 项前端/路由缺陷、C-06 契约收口、1Panel/裸机真机部署路径）；本次 **v0.4.0 把 M8 终验留下的最后一个需求级缺口收掉：M9 配置中心与热更新（PRD-009）全量落地**——新增独立框架包 `@fw/config-center`（file 驱动 mtime 轮询 + 原子写 + 单一生效管道 + fail-keep）、热更新白名单从 env-schema 键注册表派生（65 键登记 + 11 键白名单）、四框架服务热更入口与订阅装配反向验证、`GET/PUT /api/v1/configs` 管理端点与 5xxx 错误码段、前端「参数配置」页；同时补齐 **N-01 租户管理**（五端点 + 页面 + 迁移任务化）、**N-02 异步导出任务中心**（JobCenter + 页脚任务条 + CSV 逐字节同构）、**列表排序全量收口**（users / audit-logs / roles / dict）、死信列表分页、E-06/E-07 体验增强、L-05 移除无效 `LOG_FORMAT` 键、文档归档与状态订正。发布验收记录见 [v0.4.0 发布验收报告](./docs/90-release-v0.4.0.md)，上一版见 [v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md)。
 >
 > **仓库与流水线**：[`donttemos/TY`](https://github.com/donttemos/TY)（private）。CI（GitHub Actions）在 v0.2.0 推送后**首次真实运行**；经修复 6 处「只在干净环境复现」的流水线/环境适配缺陷后，**四大作业全绿**（基础门禁 24 步 + sqlite/postgres/mysql 三库集成矩阵），见 [发布报告 §5.1 / §8](docs/archive/release/90-release-v0.2.0.md)。
 
@@ -82,6 +82,7 @@ framework/
     70-engineering-standards.md # 编码 / Git / PR 规范
     80-project-plan.md        # 项目计划与任务板
     85-parallel-workstreams.md # 并行开发工作线划分（契约 / 所有权 / 集成点）
+    90-release-v0.4.0.md      # v0.4.0 发布验收报告（配置中心与热更新 + 管理面补齐）
     90-release-v0.3.0.md      # v0.3.0 发布验收报告（真机可用性收口）
     95-doc-audit.md           # 文档一致性核对报告
     99-admin-web-enhancement-and-fixes.md # 管理后台前端功能补充与缺陷修复方案
@@ -126,7 +127,7 @@ fw gen crud order
 | CRUD 代码生成器 | `@fw/cli gen`（schema 解析 + 类型映射 + 模板引擎 + 后端/前端/seed 生成 + dry-run/diff/回滚；模板外置 `templates/codegen/`；单测 116 / 覆盖率 94.7%） | M6 | ✅ 已发布 v0.2.0 |
 | 队列与定时任务 | `@fw/queue`（统一 Job 抽象 + memory/bullmq 双驱动 + `@JobHandler`/`@Cron` 自动扫描 + 重试退避 + 死信重放 + 幂等 + 令牌桶限速 + cron 分布式锁 + 优雅停机 + 队列管理页；单测 135 / 覆盖率 93.1%、example-api 冒烟 31/31 含真实 Redis 失速恢复演练 TC-JOB-008） | M7 | ✅ 已发布 v0.2.0 |
 | 多租户与规模化 | `@fw/tenant`（三级回退租户解析 + fail-closed + 上下文透传）+ `@fw/db` TenantDataSource（dedicated 独立库路由：懒创建 + LRU/空闲淘汰 + Repository 按上下文选路）+ `@fw/auth` 数据权限四档（`DataScopeOrgPort` + all/org_below/org/self 解析与详情越权校验 + `departments`/`user_department` 模型）+ `@fw/transport` 传输层（in-process/redis 双驱动端口 + redis RPC 协议 + `@TransportHandler` 声明式注册 + 客户端代理，切换不改调用方代码）+ `@fw/telemetry` 链路追踪（OTel：HTTP 中间件 + 尾采样错误全采 + OTLP 导出 + 日志 span 桥接 + DB/缓存/队列/传输插桩）+ **部署模板（Helm Chart + compose + Nginx）与三大演练**；冒烟 48/48 + 17/17 + 14/14，演练 25/25、Chart 校验 63/63 | M8 | ✅ 已发布 v0.2.0（条件通过） |
-| 配置中心与热更新 | `@fw/config-center`（ConfigCenterPort + 本地 file 适配 mtime 轮询 + 原子写 + 单一生效管道：校验→审计→持久化→应用→通知，fail-keep / 先审计后生效）+ 热更新白名单 11 键从 env-schema 键注册表派生（完整性单测防键集漂移）+ 四框架服务订阅热更（Logger / Cache / Queue / OTel / Tenant）+ `/api/v1/configs` 查改端点（5001/5002/5003 错误码段）+ admin 参数配置页与变更历史 + mock 同构；单测 34/34，`smoke-config.mjs` 27/27、`smoke-mock` 119/119 | M9 | ✅ 已完成（2026-10-15，未发版） |
+| 配置中心与热更新 | `@fw/config-center`（ConfigCenterPort + 本地 file 适配 mtime 轮询 + 原子写 + 单一生效管道：校验→审计→持久化→应用→通知，fail-keep / 先审计后生效）+ 热更新白名单 11 键从 env-schema 键注册表派生（完整性单测防键集漂移）+ 四框架服务订阅热更（Logger / Cache / Queue / OTel / Tenant）+ `/api/v1/configs` 查改端点（5001/5002/5003 错误码段）+ admin 参数配置页与变更历史 + mock 同构；单测 34/34，`smoke-config.mjs` 27/27、`smoke-mock` 119/119 | M9 | ✅ 已发布 v0.4.0 |
 
 ## 文档索引
 
@@ -142,7 +143,7 @@ fw gen crud order
 | [云服务器裸机部署手册](./docs/61-bare-metal-deploy.md) | 不用容器的服务器部署：systemd 进程托管、release 软链发版与秒级回滚、nginx 静态托管与 HTTPS、数据库档位与 provider 约束、备份监控与排障速查 |
 | [1Panel 真机部署手册](./docs/62-1panel-real-deploy.md) | 已有 1Panel 面板的服务器落地：OpenResty host 网络反代、容器化数据库的宿主端口接入、PostgreSQL schema 变体与迁移重建、2C2G 内存约束（V8 堆 + cgroup MemoryMax）、站点目录与 HTTPS |
 | [1Panel 真机部署验证报告](./docs/63-1panel-real-deploy-verification.md) | 上述手册在腾讯云 2C2G4M 上的**完整实测记录**：逐项耗时与内存数据、三条约束的实测结论、端到端冒烟结果、**5 个只有真机才会暴露的缺陷**（队列权限缺失、dedicated 租户连接串、pnpm bin 时序、迁移计数、镜像配置）与结清后的遗留清单 |
-| [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.3.0 已发布：真机可用性收口） |
+| [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.4.0 已发布：配置中心与热更新 + 管理面补齐） |
 | [ADR 架构决策记录](./docs/adr/README.md) | 13 条决策：NestJS / Prisma（已定稿）/ monorepo / 缓存 / 异步任务 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 |
 | [编码 Git PR 规范](./docs/70-engineering-standards.md) | 编码规范、**中文注释规范（文件头含作者与日期）**、反模式清单、分支与提交约定、PR 与评审规则 |
 | [项目计划与任务板](./docs/80-project-plan.md) | 15 周甘特、M1–M8 WBS（40+ 任务）、任务板列与标签、当前快照 |
@@ -152,6 +153,7 @@ fw gen crud order
 | [贡献指南](./CONTRIBUTING.md) | 三步上手与硬性规则入口 |
 | [PRD 索引](./docs/prd/README.md) | 迭代清单与 PRD 模板约定 |
 | PRD-001 ~ PRD-009 | 见 `docs/prd/`，每个功能 / 迭代一份 |
+| [v0.4.0 发布验收报告](./docs/90-release-v0.4.0.md) | 「配置中心与热更新 + 管理面补齐」发布门禁逐条判定、升级影响（种子语义变更：新增参数配置/租户菜单与权限点）、验证证据清单（单测 + 冒烟 8 套 + 静态 4 项 + 真机）、遗留问题与发布结论 |
 | [v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md) | 「真机可用性收口」发布门禁逐条判定、升级影响（种子语义与标签键变更）、验证证据清单（单测 782 + 冒烟 203 + 静态 4 项 + 真机）、遗留问题与发布结论（通过） |
 | [v0.2.0 发布验收报告](docs/archive/release/90-release-v0.2.0.md) | M5–M8 发布门禁逐条判定、验证证据清单、遗留问题与发布结论（条件通过） |
 | [v0.1.0 发布验收报告](docs/archive/release/90-release-v0.1.0.md) | M1–M4 发布门禁逐条判定、验证证据清单、遗留问题与发布结论（条件通过） |
@@ -178,7 +180,7 @@ fw gen crud order
 | M6 | 代码生成器 | [006](./docs/prd/prd-006-code-generator.md) | ✅ 已发布 v0.2.0 |
 | M7 | 队列与定时任务 | [007](./docs/prd/prd-007-queue-scheduler.md) | ✅ 已发布 v0.2.0 |
 | M8 | 多租户与规模化 | [008](./docs/prd/prd-008-multitenancy-scale.md) | ✅ 已发布 v0.2.0（条件通过） |
-| M9 | 配置中心与热更新（L-02 / FR-08 收口） | [009](./docs/prd/prd-009-config-center.md) | 📝 PRD 草案（未排期） |
+| M9 | 配置中心与热更新（L-02 / FR-08 收口） | [009](./docs/prd/prd-009-config-center.md) | ✅ 已发布 v0.4.0 |
 
 ## 开发规范
 
