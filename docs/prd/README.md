@@ -14,6 +14,7 @@
 | [PRD-006](./prd-006-code-generator.md) | M6 | CRUD 代码生成器 | M2, M5 | P1 | 已发布 v0.2.0 |
 | [PRD-007](./prd-007-queue-scheduler.md) | M7 | 队列与定时任务 | M1, M4 | P2 | 已发布 v0.2.0 |
 | [PRD-008](./prd-008-multitenancy-scale.md) | M8 | 多租户与规模化演进 | M2–M4、M7 | P2 | 已发布 v0.2.0（条件通过） |
+| [PRD-009](./prd-009-config-center.md) | M9 | 配置中心与热更新（L-02 / FR-08 收口） | M1、M3、M5 | P2 | 草案 |
 
 ## 待规划 PRD（尚未排期）
 
