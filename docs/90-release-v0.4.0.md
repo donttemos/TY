@@ -121,28 +121,32 @@ v0.3.0 收口「真机可用性」后，M8 终验留下的最后一个**需求�
 | 前端/后端接口对撞 | `node scripts/check-api-parity.mjs` | ✅ OK |
 | Helm + compose | `pnpm run check:helm` | ✅ **63/63** |
 
-### 4.4 真机验收（`106.55.32.251` / `https://cs.donttemo.top`）
+### 4.4 真机验收（`106.55.32.251` / `https://cs.donttemo.top`，2026-10-15 实跑）
 
-> 发版执行记录：pg_dump 备份三重校验 → `release7.sh` 九步（解包断言 → 安装 → PG schema generate → 拓扑序构建 → 前端构建注入 API 基址 → bin 重链 → 迁移（No pending）+ **seed 重跑** → 原子切换 + 重启 → 站点同步）→ `verify-release7.sh` + `verify-c06.sh`。
+> 发版执行记录：备份 `/opt/fw/shared/backups/fw-pre-0.4.0-20261015140829.sql.gz` → `release7.sh` 九步（REL `/opt/fw/releases/20261015140926`）→ `verify-release7.sh` + `verify-c06.sh`。
 
 | 项 | 结果 | 说明 |
 |---|---|---|
-| 发版前备份 | ✅ | `pg_dump | gzip`，魔数 + `gzip -t` + `CREATE TABLE` 计数三重校验 |
-| 九步发版 | ✅ | 源码断言（config-center 包 / configs·tenants 控制器 / seed 新权限点菜单）与产物断言（dist 含断言）全过 |
-| seed 重跑 | ✅ | 10 权限点 + 2 菜单 + 3 字典建出；服务重启后 `/health`、`/ready` 正常 |
-| 数据面复核 | ✅ | `verify-release7.sh` 与 `verify-c06.sh` 通过（详见执行记录） |
-| 前端产物同步 | ✅ | 新页面视图与任务条随产物上线，无死链菜单 |
+| 发版前备份 | ✅ | `pg_dump \| gzip` 三重校验：魔数 `1f8b` / `gzip -t` ok / `CREATE TABLE` **15** 张 |
+| 九步发版 | ✅ | 解包 14 顶层条目、源码断言 4 项（config-center 包 / configs·tenants 控制器 / seed 新权限点菜单 / `ENV_HOT_KEYS` 注册表）、依赖安装、PG schema generate、拓扑序构建（config-center 排在 config/logger/core 之后）、前端构建注入 `/api/v1`（configs/tenants 视图 chunk 产出）、bin 重链 |
+| 迁移 + **seed 重跑** | ✅ | `No pending migrations to apply`（tenants/字典表 M8 已建）；seed 后权限点 **40**、菜单 **10**（含 `/system/tenants`、`/system/configs`）、租户 4、账号 12、部门 5 |
+| 服务切换 | ✅ | 原子切换 `20261014213252 → 20261015140926`；`systemctl is-active`=active；`/health` 200；`/ready` db/cache/queue/transport 全 ok |
+| 数据面复核 `verify-release7.sh` | ✅ | **29/29**：配置中心未启用形态（GET 只读 / PUT 1004 / alice 3002）、租户管理（读 + 校验拒绝 + legacy 1004 + alice 3002 + 排序白名单）、任务中心（派发 → succeeded → 下载 CSV 带 UTF-8 BOM `efbbbf` / 他人任务 404）、排序正向+拒绝、菜单快照（admin 含新页 / alice 不含）、站点产物 chunk、外网 HTTPS 200/201 |
+| C-06 回归 `verify-c06.sh` | ✅ | **27/27**（老功能面无回退；字典残留检查可见新增 `audit_module` / `tenant_isolation` / `tenant_status`） |
+| 前端产物同步 | ✅ | 站点 48 文件，含 configs/tenants 视图 chunk 与 `/api/v1` 基址，无死链菜单 |
+
+> 验收脚本自身曾有两处笔误（导出端点误用 POST——实际为 `GET /audit-logs/export`；`jobId` 误取——实际响应字段为 `data.id`），修正后 29/29；**产品无缺陷**，两处均为验收脚本对契约理解偏差，已同步修正脚本存档。
 
 ### 4.5 CI 远端复核（GitHub Actions，推送后实跑）
 
-> 发版提交推送 `origin/main` 并打标签 `v0.4.0` 后，CI 工作流 run **待回填**（事件 `push`）：基础门禁 + sqlite/postgres/mysql 三库集成矩阵。
+发版提交 `8ac2ff5a05219b4a9d2f61df3718f01201293be7` 推送 `origin/main` 并打标签 `v0.4.0` 后，CI 工作流 run **38690219583**（事件 `push`）**全部 4 个作业 success**，无失败步骤：
 
 | 作业 | 结论 |
 |---|---|
-| 构建 / 单测(SQLite) / 静态检查 | 待回填 |
-| 集成测试 / sqlite | 待回填 |
-| 集成测试 / postgres | 待回填 |
-| 集成测试 / mysql | 待回填 |
+| 构建 / 单测(SQLite) / 静态检查 | ✅ success |
+| 集成测试 / sqlite | ✅ success |
+| 集成测试 / postgres | ✅ success |
+| 集成测试 / mysql | ✅ success |
 
 ## 5. 本次验收中发现并处理的问题
 
@@ -167,8 +171,8 @@ v0.3.0 收口「真机可用性」后，M8 终验留下的最后一个**需求�
 **通过**。
 
 - 本机全部门禁（单测 869、冒烟 264 + mock 119、静态 4 项、演练 12/12、M6 dry-run）实跑通过，零产品缺陷；
-- 真机发版 + seed 重跑 + verify 通过（§4.4）；
-- CI run 全绿（§4.5，推送后回填）；
+- 真机发版 + seed 重跑 + verify **29/29** + C-06 回归 **27/27**（§4.4）；
+- **CI run `38690219583` 的 4 个作业全部 success** —— 结论与本机 §4.1–4.3 一致（含三库集成矩阵，本机沙箱无法覆盖的段由 CI 补齐）；
 - §6 遗留项均**不阻塞本版发布**（R4-01/R4-02 需外部环境，R4-03/R4-04/R4-05 属后续迭代，R4-06 有 WARN 兜底）。
 
 > **发布动作**：附注标签 `v0.4.0` 打于发版提交并推送；`origin/main` 同步更新（见 §8）。
@@ -177,9 +181,10 @@ v0.3.0 收口「真机可用性」后，M8 终验留下的最后一个**需求�
 
 | 项 | 状态 |
 |---|---|
-| `origin/main` | 已更新至发版提交（推送记录待回填 SHA） |
-| 标签 | `v0.1.0`–`v0.3.0` 远端已存在；本版新增 **`v0.4.0` 已推送** |
-| CI | run 待回填 |
+| `origin/main` | 已更新至 **`8ac2ff5`**（推送记录 `d265e84..8ac2ff5`）—— 发版提交含 CHANGELOG 转版本 / 15 包 0.4.0 / 本报告 / 状态同步 |
+| 标签 | `v0.1.0`–`v0.3.0` 远端已存在；本版新增 **`v0.4.0` 已推送**（附注标签，指向 `8ac2ff5`） |
+| CI | run **38690219583**：4 个作业全部 success（§4.5） |
+| 真机 | `/opt/fw/current → /opt/fw/releases/20261015140926`，服务 active，seed 已重跑（**所有用户须重新登录**） |
 
 ## 9. 真机升级指引
 
