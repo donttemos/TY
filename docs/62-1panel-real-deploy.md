@@ -463,7 +463,7 @@ journalctl -u fw-api -o cat --since today | jq -c 'select(.level=="error")'
 
 另外两条**已知的仓库级遗留**（与本次部署无关，但会影响判断）：
 
-- **`LOG_FORMAT` 是「文档声明但未实现」的配置键**：`deploy/docker-compose.prod.yml`、Helm values 与本仓库 env 样例中都出现它，但 `@fw/config` 的 schema 未声明、logger 也未读取——设置它不会报错，也不会改变输出格式（输出固定为结构化 JSON）。已登记在 [文档一致性核对报告](./95-doc-audit.md) L-05。
+- ~~**`LOG_FORMAT` 是「文档声明但未实现」的配置键**~~（**已收口 2026-10-15**：走移除路线，从 `docker-compose.prod.yml`、Helm values、60 手册 §3、98 清单 §6.1 与 env 样例中全部移除；输出格式由 `@fw/logger` 固定为结构化 JSON，无格式切换键。见 [文档一致性核对报告](./95-doc-audit.md) L-05 收口注记）。
 - **Redis Cluster 未实测**：`CACHE_DRIVER=redis-cluster` 的路径仅有单测覆盖，没有真实集群验证（M8 遗留）。
 
 ---

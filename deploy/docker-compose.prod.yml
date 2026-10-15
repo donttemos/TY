@@ -14,7 +14,7 @@ x-app-env: &app-env
   APP_ENV: prod
   APP_PORT: "3000"
   LOG_LEVEL: info
-  LOG_FORMAT: json
+  # 日志输出格式由 @fw/logger 固定为结构化 JSON，无格式切换键（配置诚实原则：无效键不留）
   # 数据与缓存连接（经 compose 内网服务名）
   DB_DRIVER: postgres
   DB_URL: postgresql://fw:${POSTGRES_PASSWORD}@postgres:5432/fw?schema=public

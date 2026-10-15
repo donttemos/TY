@@ -145,7 +145,6 @@ networkPolicy:
 config:
   APP_ENV: prod
   LOG_LEVEL: info
-  LOG_FORMAT: json
   DB_DRIVER: postgres
   DB_POOL_MAX: "10"
   DB_SLOW_MS: "500"

@@ -75,7 +75,7 @@
 
 | # | 检查点 | 框架对应 | 达标口径 |
 |---|---|---|---|
-| 6.1 | 结构化日志格式 | `LOG_FORMAT=json`（容器环境固定） | 字段固定：`time/level/traceId/spanId/module/msg/ctx` |
+| 6.1 | 结构化日志格式 | `@fw/logger` 固定结构化 JSON（无格式切换键） | 字段固定：`time/level/traceId/spanId/module/msg/ctx` |
 | 6.2 | 日志级别与采样 | `LOG_LEVEL` | 生产 `info`；高频路径避免 `debug` |
 | 6.3 | 敏感字段脱敏 | `@fw/logger` 内置脱敏 | 密码 / 令牌 / 身份证在日志与响应中不可见 |
 | 6.4 | 单条日志大小限制 | 框架自动截断（≤ 8KB） | 防大对象打爆日志通道 |

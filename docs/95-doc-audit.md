@@ -120,7 +120,7 @@
 | 命令正确性 | 手册命令与仓库脚本是否一致 | ✅ `pnpm --filter "example-api..." run build`、`pnpm run db:migrate`、`prisma generate --schema prisma/schema.prisma` 与 `package.json` scripts 一致；部署脚本经 `bash -n` 语法校验通过 |
 | 数据库约束表述 | provider 与迁移方言约束是否与 PRD-002/ADR-0002 一致 | ✅ 61 §6.2 与 [PRD-002](./prd/prd-002-database-abstraction.md) §7「切换演练」、ADR-0002「重建迁移」表述一致，并复用 `matrix-db-setup.mjs` 的 migrate diff 手法 |
 
-**遗留（不阻塞，登记待办）**：**L-05** `LOG_FORMAT` 为「文档与编排声明但实现未消费」的键——需在配置 schema 中补齐该键（连带 `@fw/logger` 按格式切换输出），或从 60 手册 §3 与两处编排中移除，二者取其一以消除歧义。
+**遗留（不阻塞，登记待办）**：**L-05** ~~`LOG_FORMAT` 为「文档与编排声明但实现未消费」的键~~（**已收口 2026-10-15：走移除路线**）——从 `deploy/docker-compose.prod.yml`、`deploy/helm/fw-app/values.yaml`、`deploy/systemd/fw.env.example`、`deploy/systemd/fw-api.service` 注释、60 手册 §3 配置表与 98 清单 §6.1 中全部移除该键；`@fw/config` schema 与 `@fw/logger` 不做任何改动（输出固定为结构化 JSON 是既定设计，取「配置诚实原则：无效键不留」，不新增无需求支撑的格式切换特性）。
 
 ## 10. v0.3.0 发布增量核对（2026-10-14）
 

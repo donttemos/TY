@@ -89,8 +89,7 @@
 | | `TRANSPORT_ROLE` | 否 | both | 本进程角色：`caller` 只发起调用 / `handler` 只处理请求 / `both` 两者兼顾；微服务拆分后按进程职责裁剪 |
 | | `TRANSPORT_INSTANCE_ID` | 否 | `host-<pid>` | 实例标识（诊断用：跨进程区分处理方） |
 | | `TRANSPORT_SHUTDOWN_TIMEOUT` | 否 | 10 | 传输优雅停机等待在途请求的超时（秒） |
-| 日志 | `LOG_LEVEL` | 否 | info | 级别 |
-| | `LOG_FORMAT` | 否 | json | 容器环境固定 json |
+| 日志 | `LOG_LEVEL` | 否 | info | 级别；输出格式由 `@fw/logger` 固定为结构化 JSON（字段 `time/level/traceId/spanId/module/msg/ctx`），不提供格式切换键 |
 | 追踪 | `OTEL_ENABLED` | 否 | false | 链路追踪总开关（M8 T-M8-06）；关闭时全短路零开销 |
 | | `OTEL_SERVICE_NAME` | 否 | `fw:<APP_ENV>` | 服务名（采集端按 `service.name` 聚合）；多服务部署必须显式区分 |
 | | `OTEL_EXPORTER_URL` | 条件 | — | OTLP/HTTP 采集端点（如 `http://otel-collector:4318/v1/traces`）；`OTEL_ENABLED=true` 时**必填，缺失启动即失败**。导出形态为 OTLP/HTTP JSON |

@@ -28,6 +28,10 @@
 
 - **死信列表分页（体验债收尾）**：`listDeadLetters` 原为全量返回，规模大时首屏与内存都不可控。新增 `pageDeadLetters()` 窗口切片（`page/pageSize`，上限 200），控制器响应带 `page/pageSize`，前端队列管理页改分页消费（tab 标签显示 total）。`packages/queue` 新增 4 条单测（驱动窗口切片、service 钳制、控制器响应）。
 
+### Removed（文档一致性遗留 L-05 收口，2026-10-15）
+
+- **移除「文档声明但未消费」的 `LOG_FORMAT` 配置键**：该键曾出现在 `docker-compose.prod.yml`、Helm values、60 手册 §3 配置表、98 规模化清单 §6.1 与裸机 env 样例中，但 `@fw/config` schema 未声明、`@fw/logger` 亦未读取——设置它不报错也不改变行为。日志输出格式由 `@fw/logger` **固定为结构化 JSON**（字段 `time/level/traceId/spanId/module/msg/ctx`）是既定设计，故按「配置诚实原则：无效键不留」走移除路线而非补 schema 消费。本次从全部编排与文档中移除该键，并在 `fw-api.service` 注释与 [文档一致性核对报告](./docs/95-doc-audit.md) L-05 记录收口结论。
+
 ## [0.3.0] - 2026-10-14
 
 > 发布说明与验收证据见 **[v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md)**。

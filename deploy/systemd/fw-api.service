@@ -69,8 +69,8 @@ MemoryMax=1024M
 LimitNOFILE=65535
 
 # 日志统一进 journald：journalctl -u fw-api -f 查看。
-# 注意：输出格式当前由实现固定为结构化 JSON；环境变量 LOG_FORMAT 尚未接入配置 schema
-# （已登记 docs/95-doc-audit.md L-05），设置它不会改变输出行为。
+# 注意：输出格式由 @fw/logger 固定为结构化 JSON，无 LOG_FORMAT 格式切换键
+# （原「文档声明但未实现」的该键已于 2026-10-15 从文档与编排移除，收口 docs/95-doc-audit.md L-05）。
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=fw-api
