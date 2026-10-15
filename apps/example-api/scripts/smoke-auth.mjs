@@ -185,12 +185,23 @@ async function main() {
   check('恢复启用账号', enabled.status === 200 && enabled.body.data?.status === 1, `status=${enabled.body.data?.status}`);
 
   // ---- TC-AUTH-011：审计日志落库（显式记录变更前后值） ----
-  const audit = await call('/api/v1/audit-logs?page=1&pageSize=20', { token: admin.accessToken });
-  const auditItems = audit.body.data?.items ?? [];
-  // 禁用与启用各留一条：按 after 取「禁用」那条，断言 before=1 / after=0
-  const disableLog = auditItems.find((r) => r.targetId === aliceId && r.action === 'update' && r.afterValue?.status === 0);
-  check('审计日志记录账号禁用（含前后值）', audit.status === 200 && audit.body.data.total >= 1 && !!disableLog && disableLog.beforeValue?.status === 1,
-    `total=${audit.body.data?.total} before=${JSON.stringify(disableLog?.beforeValue)} after=${JSON.stringify(disableLog?.afterValue)}`);
+  // 注意：users 控制器的审计写入是 fire-and-forget（AuditService.record 不阻塞响应），
+  // 端点返回 ≠ 落盘完成——runner 时序可能让紧随的查询赶不上落盘（CI 曾实证 total=4 且无禁用记录）。
+  // 轮询等待审计可见（最多 6 次 × 400ms），是对异步落盘语义的稳健断言而非掩盖缺陷。
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  let audit = null;
+  let disableLog = null;
+  let auditTotal = 0;
+  for (let attempt = 0; attempt < 6 && !disableLog; attempt++) {
+    if (attempt > 0) await sleep(400);
+    audit = await call('/api/v1/audit-logs?page=1&pageSize=20', { token: admin.accessToken });
+    const auditItems = audit.body.data?.items ?? [];
+    auditTotal = audit.body.data?.total ?? 0;
+    // 禁用与启用各留一条：按 after 取「禁用」那条，断言 before=1 / after=0
+    disableLog = auditItems.find((r) => r.targetId === aliceId && r.action === 'update' && r.afterValue?.status === 0) ?? null;
+  }
+  check('审计日志记录账号禁用（含前后值）', audit?.status === 200 && auditTotal >= 1 && !!disableLog && disableLog.beforeValue?.status === 1,
+    `total=${auditTotal} before=${JSON.stringify(disableLog?.beforeValue)} after=${JSON.stringify(disableLog?.afterValue)}`);
 
   // ---- TC-AUTH-005：登出后令牌失效 ----
   const logout = await call('/api/v1/auth/logout', { method: 'POST', token: admin.accessToken });
