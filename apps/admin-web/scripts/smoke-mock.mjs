@@ -16,6 +16,8 @@
  *   ② 新增租户管理与异步任务段——菜单 / 字典 / 列表过滤与排序白名单 / 开租户校验（dedicated 必填
  *   dbUrl、shared 拒收、编码唯一 1003）/ 停用（legacy 1004）/ 迁移长任务（派发 → 轮询 → 控制面切换
  *   落库 → retry 成功 1004）/ 审计导出（派发 → 轮询 → CSV 下载验 BOM+表头）/ simulate=fail 失败路径
+ * @modified 2026-10-15 donttemo BUG-15 增量 + E-07：roles/dict 排序白名单断言（合法排序 + 未知字段
+ *   400/1001）与 GET /dict/audit_module 四项断言
  *   与原地重跑 / 越权（3002）与任务归属人隔离（404）
  * @module admin-web/scripts
  */
@@ -521,6 +523,51 @@ async function main() {
     check('alice 无 audit:export → 3002', aliceExport.body?.code === 3002, `code=${aliceExport.body?.code}`);
     const aliceJob = await api('GET', `/jobs/${migrateJobId}/progress`, { token: aliceToken });
     check('alice 读他人任务 → 404/1002（归属人隔离）', aliceJob.status === 404 && aliceJob.body?.code === 1002, `code=${aliceJob.body?.code}`);
+
+    // ---------- roles / dict 排序白名单（BUG-15 增量）+ audit_module 字典（E-07） ----------
+    phase('roles / dict 排序白名单 + audit_module 字典（E-07）');
+
+    const rolesDesc = await api('GET', '/roles?sort=name:desc', { token: newAccess });
+    const rolesDescNames = (rolesDesc.body?.data ?? []).map((r) => r.name);
+    check('GET /roles?sort=name:desc 按名称倒序',
+      rolesDesc.body?.code === 0 && rolesDescNames.length >= 3
+      && rolesDescNames.every((n, i) => i === 0 || rolesDescNames[i - 1] >= n),
+      `n=${rolesDescNames.length}`);
+
+    const rolesBadSort = await api('GET', '/roles?sort=permission_count:asc', { token: newAccess });
+    check('GET /roles?sort=permission_count → 400/1001（不静默忽略）',
+      rolesBadSort.status === 400 && rolesBadSort.body?.code === 1001,
+      `http=${rolesBadSort.status} code=${rolesBadSort.body?.code}`);
+
+    const catsSorted = await api('GET', '/dict/categories?sort=code:asc', { token: newAccess });
+    const catCodes = (catsSorted.body?.data ?? []).map((c) => c.code);
+    check('GET /dict/categories?sort=code:asc 按编码升序',
+      catsSorted.body?.code === 0 && catCodes.length >= 3
+      && catCodes.every((c, i) => i === 0 || catCodes[i - 1] <= c),
+      `n=${catCodes.length}`);
+
+    const userStatusCat = (catsSorted.body?.data ?? []).find((c) => c.code === 'user_status');
+    const itemsDesc = userStatusCat
+      ? await api('GET', `/dict/items?category_id=${userStatusCat.id}&sort=label:desc`, { token: newAccess })
+      : null;
+    const itemLabels = (itemsDesc?.body?.data ?? []).map((i) => i.label);
+    check('GET /dict/items?sort=label:desc 按标签倒序（user_status）',
+      itemsDesc?.body?.code === 0 && itemLabels.length >= 2
+      && itemLabels.every((l, i) => i === 0 || itemLabels[i - 1] >= l),
+      `n=${itemLabels.length}`);
+
+    const itemsBadSort = userStatusCat
+      ? await api('GET', `/dict/items?category_id=${userStatusCat.id}&sort=color:asc`, { token: newAccess })
+      : null;
+    check('GET /dict/items?sort=color → 400/1001（不静默忽略）',
+      itemsBadSort?.status === 400 && itemsBadSort.body?.code === 1001,
+      `http=${itemsBadSort?.status} code=${itemsBadSort?.body?.code}`);
+
+    const amDict = await api('GET', '/dict/audit_module', { token: newAccess });
+    const amValues = (amDict.body?.data ?? []).map((i) => i.value).sort();
+    check('GET /dict/audit_module 返回 auth/role/tenant/user 四项（E-07）',
+      amDict.body?.code === 0 && JSON.stringify(amValues) === JSON.stringify(['auth', 'role', 'tenant', 'user']),
+      `values=${amValues.join(',')}`);
 
     const logout = await api('POST', '/auth/logout', { token: newAccess });
     check('登出成功', logout.body?.code === 0);

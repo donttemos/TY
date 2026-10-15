@@ -16,6 +16,8 @@
  *   legacy 1004）、迁移长任务派发 → /jobs 轮询到终态 → 控制面切换落库、retry 成功任务 1004、
  *   任务不存在 404、/audit-logs/export 派发 → 下载 CSV 产物；越权面补 tenant / export 与
  *   「alice 读他人任务 404」的归属人隔离断言
+ * @modified 2026-10-15 donttemo BUG-15 增量 + E-07：roles/dict 排序白名单断言（合法排序 + 未知字段
+ *   400/1001）与 GET /dict/audit_module 四项断言
  * @module example-api
  */
 
@@ -659,6 +661,49 @@ async function main() {
     && csvText.includes('id,createdAt,userId,module,action,targetType,targetId,ip,traceId,before,after')
     && csvText.split('\r\n').length >= 2,
     `http=${download.status} bytes=${csvBytes.length}`);
+
+  // --- roles / dict 排序白名单（BUG-15 增量）+ audit_module 字典（E-07） ---
+  const rolesDesc = await call('/api/v1/roles?sort=name:desc', { token });
+  const rolesDescNames = (rolesDesc.body.data ?? []).map((r) => r.name);
+  check('GET /roles?sort=name:desc 按名称倒序',
+    isOk(rolesDesc.status) && rolesDescNames.length >= 3
+    && rolesDescNames.every((n, i) => i === 0 || rolesDescNames[i - 1] >= n),
+    `http=${rolesDesc.status} n=${rolesDescNames.length}`);
+
+  const rolesBadSort = await call('/api/v1/roles?sort=permission_count:asc', { token });
+  check('GET /roles?sort=permission_count 未知字段 → 400/1001（不静默忽略）',
+    rolesBadSort.status === 400 && rolesBadSort.body.code === 1001,
+    `http=${rolesBadSort.status} code=${rolesBadSort.body.code}`);
+
+  const catsSorted = await call('/api/v1/dict/categories?sort=code:asc', { token });
+  const catCodes = (catsSorted.body.data ?? []).map((c) => c.code);
+  check('GET /dict/categories?sort=code:asc 按编码升序',
+    isOk(catsSorted.status) && catCodes.length >= 3
+    && catCodes.every((c, i) => i === 0 || catCodes[i - 1] <= c),
+    `http=${catsSorted.status} n=${catCodes.length}`);
+
+  const userStatusCat = (catsSorted.body.data ?? []).find((c) => c.code === 'user_status');
+  const itemsDesc = userStatusCat
+    ? await call(`/api/v1/dict/items?category_id=${userStatusCat.id}&sort=label:desc`, { token })
+    : null;
+  const itemLabels = (itemsDesc?.body.data ?? []).map((i) => i.label);
+  check('GET /dict/items?sort=label:desc 按标签倒序（user_status 分类）',
+    itemsDesc !== null && isOk(itemsDesc.status) && itemLabels.length >= 2
+    && itemLabels.every((l, i) => i === 0 || itemLabels[i - 1] >= l),
+    `http=${itemsDesc?.status} n=${itemLabels.length}`);
+
+  const itemsBadSort = userStatusCat
+    ? await call(`/api/v1/dict/items?category_id=${userStatusCat.id}&sort=color:asc`, { token })
+    : null;
+  check('GET /dict/items?sort=color 未知字段 → 400/1001（不静默忽略）',
+    itemsBadSort !== null && itemsBadSort.status === 400 && itemsBadSort.body.code === 1001,
+    `http=${itemsBadSort?.status} code=${itemsBadSort?.body.code}`);
+
+  const amDict = await call('/api/v1/dict/audit_module', { token });
+  const amValues = (amDict.body.data ?? []).map((i) => i.value).sort();
+  check('GET /dict/audit_module 返回 auth/role/tenant/user 四项（E-07）',
+    isOk(amDict.status) && JSON.stringify(amValues) === JSON.stringify(['auth', 'role', 'tenant', 'user']),
+    `http=${amDict.status} values=${amValues.join(',')}`);
 
   // ======================= 越权面（alice 仅 user:read） =======================
   console.log('\n---- 越权面（最小权限角色） ----');
