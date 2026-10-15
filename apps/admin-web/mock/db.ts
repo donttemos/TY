@@ -10,6 +10,8 @@
  *   队列统计 / 死信 / 定时任务快照的内存状态，与 @fw/queue 的 QueueStats / DeadLetterRecord / CronSnapshot 同形）
  * @modified 2026-10-14 donttemo 标注「订单中心」为 mock-only 演示菜单（生产 seed 已移除该分支，后端无
  *   /api/v1/orders 端点），避免后续误判为 mock 与生产菜单应该一致
+ * @modified 2026-10-15 donttemo N-01/N-02：新增租户数据源（tenants，镜像 seed 的 legacy/acme/off/dedicated
+ *   四行同构）、异步任务表（jobs，内存任务中心，进度按时间线推进）与对应权限点 / 菜单 / 字典
  * @module admin-web/mock
  */
 
@@ -163,6 +165,51 @@ export interface MockQueueCron {
   lastRunAt: string | null;
 }
 
+/** 租户（N-01，镜像 example-api seed 的 tenants 基线；dbUrl 明文仅 mock 内留存，视图只回布尔位） */
+export interface MockTenant {
+  id: string;
+  code: string;
+  name: string;
+  isolation: 'shared' | 'dedicated';
+  plan: string | null;
+  status: 0 | 1;
+  expireAt: string | null;
+  /** 独立库连接串明文（mock 专用；真实后端只存密文） */
+  dbUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * 异步任务（N-02，镜像 example-api JobCenterService 的登记项）
+ *
+ * progress 按「虚拟时间线」推进：elapsed / durationMs 决定百分比，使轮询退避、终态提示
+ * 都能在 mock 下真实演练。artifact 为 CSV 文本（导出任务的产物）。
+ */
+export interface MockJob {
+  id: string;
+  type: string;
+  title: string;
+  ownerId: string;
+  status: 'pending' | 'running' | 'succeeded' | 'failed';
+  /** 进度百分比 0–100（按虚拟时间线推进） */
+  progress: number;
+  /** 虚拟执行时长（毫秒） */
+  durationMs: number;
+  startedAt: number;
+  message: string | null;
+  error: string | null;
+  traceId: string;
+  fileName: string | null;
+  artifact: string | null;
+  createdAt: string;
+  updatedAt: string;
+  /** 模拟失败（mock-only 调试开关：让导出 / 迁移任务按失败路径走完，演练重试） */
+  simulateFail?: boolean;
+  /** 完成时应用的控制面变更（迁移任务：镜像后端 runner 的 setTenantIsolation） */
+  mutate?: { tenantId: string; isolation: 'shared' | 'dedicated'; dbUrl: string | null };
+}
+
 /** 队列指标计数器 */
 export interface MockQueueCounters {
   dispatched: number;
@@ -212,6 +259,8 @@ export interface MockDb {
   orders: MockOrder[];
   queue: MockQueueState;
   sessions: MockSession[];
+  tenants: MockTenant[];
+  jobs: MockJob[];
   /** refresh token 明文 → 会话 id（mock 专用；真实后端只存哈希） */
   refreshTokens: Record<string, string>;
   /** 已使用过的 refresh token 明文（检测复用泄漏） */
@@ -244,11 +293,19 @@ const PERMISSIONS: MockPermission[] = [
   { id: 'p-dict-update', code: 'dict:update', name: '字典修改', type: 'api', module: 'dict' },
   { id: 'p-dict-delete', code: 'dict:delete', name: '字典删除', type: 'api', module: 'dict' },
   { id: 'p-audit-read', code: 'audit:read', name: '审计日志查询', type: 'api', module: 'audit' },
+  { id: 'p-audit-export', code: 'audit:export', name: '审计日志异步导出', type: 'api', module: 'audit' },
   { id: 'p-order-read', code: 'order:read', name: '订单查询', type: 'menu', module: 'order' },
   { id: 'p-order-refund', code: 'order:refund', name: '订单退款', type: 'button', module: 'order' },
   // M7（PRD-007 FR-09）：队列管理页权限点，与 C-08 契约 QUEUE_PERMISSIONS 同源
   { id: 'p-queue-list', code: 'system:queue:list', name: '队列状态查看', type: 'api', module: 'queue' },
   { id: 'p-queue-manage', code: 'system:queue:manage', name: '队列运维操作', type: 'api', module: 'queue' },
+  // N-01（api-spec §3.9）：租户管理五端点权限 + 跨租户维护豁免（@IgnoreTenant 的守卫要求）
+  { id: 'p-tenant-read', code: 'tenant:read', name: '租户查询', type: 'api', module: 'tenant' },
+  { id: 'p-tenant-create', code: 'tenant:create', name: '开租户', type: 'api', module: 'tenant' },
+  { id: 'p-tenant-update', code: 'tenant:update', name: '租户修改', type: 'api', module: 'tenant' },
+  { id: 'p-tenant-delete', code: 'tenant:delete', name: '租户停用', type: 'api', module: 'tenant' },
+  { id: 'p-tenant-manage', code: 'tenant:manage', name: '租户隔离级别迁移', type: 'api', module: 'tenant' },
+  { id: 'p-tenant-ignore', code: 'system:tenant:ignore', name: '跨租户维护', type: 'api', module: 'tenant' },
 ];
 
 /** 普通用户角色默认权限（刻意不含 role:read / audit:read / user:assign-role，用于验证越权拦截） */
@@ -264,6 +321,7 @@ const MENUS: MockMenu[] = [
   { id: 'm-system-dict', parentId: 'm-system', name: '字典管理', path: '/system/dict', component: 'system/dict', icon: 'collection', permissionCode: 'dict:read', visible: true, sort: 4 },
   { id: 'm-system-audit', parentId: 'm-system', name: '审计日志', path: '/system/audit-logs', component: 'system/audit-logs', icon: 'file-text', permissionCode: 'audit:read', visible: true, sort: 5 },
   { id: 'm-system-queue', parentId: 'm-system', name: '队列管理', path: '/system/queue', component: 'system/queue', icon: 'clock', permissionCode: 'system:queue:list', visible: true, sort: 6 },
+  { id: 'm-system-tenants', parentId: 'm-system', name: '租户管理', path: '/system/tenants', component: 'system/tenants', icon: 'office-building', permissionCode: 'tenant:read', visible: true, sort: 7 },
   // 刻意保留的 mock-only 演示菜单：仅存在于 dev（mock 有 /orders 端点与 demo/orders 视图可跑通），
   // 生产 seed 已整支移除该分支（后端无 /api/v1/orders，挂菜单必然死链）—— 属**有意**的 dev/prod 差异。
   { id: 'm-order', parentId: '0', name: '订单中心', path: '/order', component: 'layout/blank', icon: 'shopping', permissionCode: 'order:read', visible: true, sort: 3 },
@@ -286,6 +344,8 @@ const DICT_CATEGORIES: MockDictCategory[] = [
   { id: 'dc-audit-action', code: 'audit_action', name: '审计动作', remark: null },
   { id: 'dc-data-scope', code: 'data_scope', name: '数据范围', remark: '与 roles.data_scope 同源' },
   { id: 'dc-order-channel', code: 'order_channel', name: '订单渠道', remark: null },
+  { id: 'dc-tenant-isolation', code: 'tenant_isolation', name: '租户隔离级别', remark: 'N-01 租户管理页：shared=共享库+tenant_id / dedicated=独立库' },
+  { id: 'dc-tenant-status', code: 'tenant_status', name: '租户状态', remark: 'N-01 租户管理页：停用租户在租户解析上 fail-closed（4001）' },
 ];
 
 const DICT_ITEMS: MockDictItem[] = [
@@ -307,6 +367,10 @@ const DICT_ITEMS: MockDictItem[] = [
   { id: 'di-oc-web', categoryId: 'dc-order-channel', label: '网页端', value: 'web', color: 'primary', sort: 1 },
   { id: 'di-oc-app', categoryId: 'dc-order-channel', label: '移动端', value: 'app', color: 'success', sort: 2 },
   { id: 'di-oc-mini', categoryId: 'dc-order-channel', label: '小程序', value: 'mini', color: 'warning', sort: 3 },
+  { id: 'di-ti-shared', categoryId: 'dc-tenant-isolation', label: '共享库', value: 'shared', color: 'primary', sort: 1 },
+  { id: 'di-ti-dedicated', categoryId: 'dc-tenant-isolation', label: '独立库', value: 'dedicated', color: 'warning', sort: 2 },
+  { id: 'di-ts-1', categoryId: 'dc-tenant-status', label: '启用', value: '1', color: 'success', sort: 1 },
+  { id: 'di-ts-0', categoryId: 'dc-tenant-status', label: '停用', value: '0', color: 'danger', sort: 2 },
 ];
 
 /** 演示订单（30 条，覆盖分页与筛选） */
@@ -351,6 +415,22 @@ function seedAuditLogs(): MockAuditLog[] {
     });
   }
   return logs;
+}
+
+/**
+ * 租户基线（N-01，与 example-api seed 的 seedTenants() 同构）：
+ * legacy（id '0'）：存量单租户数据归属租户，停用 / 迁移一律被服务端拒绝；
+ * acme（id '1'）：第二个租户；off（id '2'）：停用租户（fail-closed 演示）；
+ * dedicated（id '3'）：独立库租户（sqlite 部署下连接串指向 prisma/tenant-dedicated.db）。
+ */
+function seedTenants(): MockTenant[] {
+  const base = Date.UTC(2026, 9, 13, 0, 0, 0);
+  return [
+    { id: '0', code: 'legacy', name: '存量单租户', isolation: 'shared', plan: 'legacy', status: 1, expireAt: null, dbUrl: null, createdAt: new Date(base).toISOString(), updatedAt: new Date(base).toISOString() },
+    { id: '1', code: 'acme', name: 'ACME 公司', isolation: 'shared', plan: 'pro', status: 1, expireAt: '2027-01-01T00:00:00.000Z', dbUrl: null, createdAt: new Date(base + 3_600_000).toISOString(), updatedAt: new Date(base + 3_600_000).toISOString() },
+    { id: '2', code: 'off', name: '已停用租户', isolation: 'shared', plan: 'basic', status: 0, expireAt: null, dbUrl: null, createdAt: new Date(base + 7_200_000).toISOString(), updatedAt: new Date(base + 7_200_000).toISOString() },
+    { id: '3', code: 'dedicated', name: '独立库租户', isolation: 'dedicated', plan: 'enterprise', status: 1, expireAt: null, dbUrl: 'file:./tenant-dedicated.db', createdAt: new Date(base + 10_800_000).toISOString(), updatedAt: new Date(base + 10_800_000).toISOString() },
+  ];
 }
 
 /**
@@ -425,6 +505,8 @@ export function createDb(): MockDb {
     auditLogs: seedAuditLogs(),
     orders: seedOrders(),
     queue: seedQueue(),
+    tenants: seedTenants(),
+    jobs: [],
     sessions: [],
     refreshTokens: {},
     usedRefreshTokens: new Set<string>(),

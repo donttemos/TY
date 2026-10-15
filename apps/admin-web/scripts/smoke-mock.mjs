@@ -3,7 +3,8 @@
  * @description 不等后端的独立验证（PRD-005 验收 / TC-WEB）：启动 vite dev server（自动挂载 C-06 mock），
  *   以真实 HTTP 走完 认证（登录/me/错误码/禁用账号）→ 菜单 → 字典 → 用户 CRUD → 越权（3002）→
  *   无感刷新（轮换 + 旧 token 失效）→ 角色/菜单树/审计/订单 → 队列管理（M7：状态/指标/cron 触发/死信
- *   重放/暂停恢复/清空/越权）→ 登出 全链路，并校验 C-06 契约关键字段；
+ *   重放/暂停恢复/清空/越权）→ 租户管理与异步任务（N-01/N-02：五端点 + 任务面轮询/重跑/下载 +
+ *   越权与归属人隔离）→ 登出 全链路，并校验 C-06 契约关键字段；
  *   末尾若存在 dist 产物则执行 bundle 体积门禁（gzip 总量）。任一断言失败即非零退出。
  *   运行：pnpm smoke（cwd 需为 apps/admin-web）。
  * @author donttemo
@@ -11,6 +12,11 @@
  * @modified 2026-10-13 donttemo 修 bundle 门禁统计缺陷：vendor-element-plus 由「取最后一个匹配文件」改为累加，
  *   否则 rolldown（vite 8）产物顺序变化后只量到 CSS 文件，门禁形同失效
  * @modified 2026-10-13 donttemo M7：新增队列管理冒烟段（/queue/* 全端点 + system:queue:* 越权拦截）
+ * @modified 2026-10-15 donttemo N-01/N-02：① 死信列表分页断言（page/pageSize 回传 + total 全集口径）；
+ *   ② 新增租户管理与异步任务段——菜单 / 字典 / 列表过滤与排序白名单 / 开租户校验（dedicated 必填
+ *   dbUrl、shared 拒收、编码唯一 1003）/ 停用（legacy 1004）/ 迁移长任务（派发 → 轮询 → 控制面切换
+ *   落库 → retry 成功 1004）/ 审计导出（派发 → 轮询 → CSV 下载验 BOM+表头）/ simulate=fail 失败路径
+ *   与原地重跑 / 越权（3002）与任务归属人隔离（404）
  * @module admin-web/scripts
  */
 
@@ -359,6 +365,11 @@ async function main() {
     const dead = deadList.body?.data;
     check('死信列表（total 与明细字段）', deadList.body?.code === 0 && typeof dead?.total === 'number' && Array.isArray(dead?.items) && dead.items.every((d) => typeof d.attemptsMade === 'number' && typeof d.reason === 'string'), `total=${dead?.total}`);
 
+    // 死信分页（N-01 之后的分页改造）：page/pageSize 回传，total 为全集条数
+    const deadPaged = await api('GET', '/admin/queue/dead-letters?page=1&pageSize=2', { token: newAccess });
+    const paged = deadPaged.body?.data;
+    check('死信列表分页（page/pageSize 回传，total 为全集）', deadPaged.body?.code === 0 && paged?.page === 1 && paged?.pageSize === 2 && paged?.items?.length === 2 && paged?.total === dead?.total, `page=${paged?.page} pageSize=${paged?.pageSize} total=${paged?.total}`);
+
     const requeued = await api('POST', '/admin/queue/dead-letters/job-dl-0001/requeue', { token: newAccess });
     check('死信重放成功', requeued.body?.code === 0 && requeued.body?.data?.requeued === true);
     const requeuedMissing = await api('POST', '/admin/queue/dead-letters/job-dl-9999/requeue', { token: newAccess });
@@ -383,6 +394,133 @@ async function main() {
     check('alice 无 system:queue:list → 3002', aliceQueueStats.body?.code === 3002, `code=${aliceQueueStats.body?.code}`);
     const alicePause = await api('POST', '/admin/queue/pause', { token: aliceToken });
     check('alice 无 system:queue:manage → 3002', alicePause.body?.code === 3002, `code=${alicePause.body?.code}`);
+
+    phase('租户管理与异步任务（N-01 / N-02）');
+
+    // 租户菜单：与 seed 同批建出（/system/tenants，需 tenant:read）
+    const menusN = await api('GET', '/auth/menus', { token: newAccess });
+    const tenantMenu = (menusN.body?.data ?? []).find((m) => m.path === '/system')?.children?.find((m) => m.path === '/system/tenants');
+    check('系统管理含「租户管理」子菜单', Boolean(tenantMenu) && tenantMenu?.component === 'system/tenants' && tenantMenu?.permissionCode === 'tenant:read', tenantMenu ? `component=${tenantMenu.component}` : '未找到');
+
+    // 租户字典（页面标签与下拉数据源）
+    for (const code of ['tenant_isolation', 'tenant_status']) {
+      const dict = await api('GET', `/dict/${code}`, { token: newAccess });
+      check(`字典 ${code} 可用（租户页 StatusTag / 下拉）`, dict.body?.code === 0 && Array.isArray(dict.body?.data) && dict.body.data.length >= 2, `项数=${dict.body?.data?.length ?? 0}`);
+    }
+
+    const tenantList = await api('GET', '/tenants', { token: newAccess });
+    const tenants = tenantList.body?.data?.items ?? [];
+    check('GET /tenants 分页列表（四行基线 + 视图绝不外泄连接串）',
+      tenantList.body?.code === 0 && tenants.length >= 4
+      && ['legacy', 'acme', 'off', 'dedicated'].every((code) => tenants.some((t) => t.code === code))
+      && tenants.every((t) => typeof t.dedicatedDbConfigured === 'boolean')
+      && !JSON.stringify(tenants).includes('dbUrl'),
+      `行数=${tenants.length}`);
+
+    const tenantFiltered = await api('GET', '/tenants?isolation=dedicated', { token: newAccess });
+    check('GET /tenants isolation=dedicated 过滤生效',
+      tenantFiltered.body?.code === 0 && (tenantFiltered.body?.data?.items ?? []).every((t) => t.isolation === 'dedicated') && (tenantFiltered.body?.data?.items ?? []).length >= 1,
+      `行数=${tenantFiltered.body?.data?.items?.length ?? 0}`);
+
+    const tenantBadEnum = await api('GET', '/tenants?isolation=nope', { token: newAccess });
+    check('GET /tenants 非法 isolation → 400/1001', tenantBadEnum.status === 400 && tenantBadEnum.body?.code === 1001, `code=${tenantBadEnum.body?.code}`);
+    const tenantBadSort = await api('GET', '/tenants?sort=secret:asc', { token: newAccess });
+    check('GET /tenants sort 未知字段 → 400/1001', tenantBadSort.status === 400 && tenantBadSort.body?.code === 1001, `code=${tenantBadSort.body?.code}`);
+
+    // 开租户（编码带时间戳保证脚本可重入）
+    const probeCode = `mock-probe-${Date.now().toString(36)}`;
+    const createdTenant = await api('POST', '/tenants', { token: newAccess, body: { code: probeCode, name: '冒烟探针租户', isolation: 'shared', plan: 'probe' } });
+    const probeId = createdTenant.body?.data?.id;
+    check('POST /tenants 开租户（shared 不带连接串）', createdTenant.body?.code === 0 && !!probeId, `id=${probeId}`);
+
+    const dedNoUrl = await api('POST', '/tenants', { token: newAccess, body: { code: 'mock-probe-ded', name: '探针独立库', isolation: 'dedicated' } });
+    check('POST /tenants dedicated 不带 dbUrl → 400/1001', dedNoUrl.status === 400 && dedNoUrl.body?.code === 1001, `code=${dedNoUrl.body?.code}`);
+    const sharedWithUrl = await api('POST', '/tenants', { token: newAccess, body: { code: 'mock-probe-shared-url', name: '共享库带连接串', isolation: 'shared', dbUrl: 'postgresql://x' } });
+    check('POST /tenants shared 带 dbUrl → 400/1001（连接串会在迁移时清除）', sharedWithUrl.status === 400 && sharedWithUrl.body?.code === 1001, `code=${sharedWithUrl.body?.code}`);
+    const dupTenant = await api('POST', '/tenants', { token: newAccess, body: { code: 'acme', name: '重复编码', isolation: 'shared' } });
+    check('POST /tenants 编码重复 → 409/1003', dupTenant.status === 409 && dupTenant.body?.code === 1003, `code=${dupTenant.body?.code}`);
+
+    const updatedTenant = await api('PUT', `/tenants/${probeId}`, { token: newAccess, body: { name: '冒烟探针租户（改名）', plan: 'probe-plus' } });
+    check('PUT /tenants/:id 更新名称与套餐', updatedTenant.body?.code === 0 && updatedTenant.body?.data?.name === '冒烟探针租户（改名）' && updatedTenant.body?.data?.plan === 'probe-plus');
+
+    const legacyDisable = await api('DELETE', '/tenants/0', { token: newAccess });
+    check('DELETE /tenants/0（legacy）→ 400/1004', legacyDisable.status === 400 && legacyDisable.body?.code === 1004, `code=${legacyDisable.body?.code}`);
+
+    const disabledTenant = await api('DELETE', `/tenants/${probeId}`, { token: newAccess });
+    check('DELETE /tenants/:id 停用（status=0，行保留）', disabledTenant.body?.code === 0 && disabledTenant.body?.data?.status === 0);
+
+    // 迁移长任务 → 任务面轮询 → 控制面切换
+    const migrateJob = await api('POST', `/tenants/${probeId}/migrate`, { token: newAccess, body: { isolation: 'dedicated', dbUrl: 'postgresql://probe:pw@127.0.0.1:5432/probe' } });
+    const migrateJobId = migrateJob.body?.data?.id;
+    check('POST /tenants/:id/migrate 派发任务返回 JobView（pending + jobId）', migrateJob.body?.code === 0 && !!migrateJobId && migrateJob.body?.data?.status === 'pending' && migrateJob.body?.data?.type === 'tenant.migrate', `jobId=${migrateJobId}`);
+
+    const migrateSame = await api('POST', '/tenants/1/migrate', { token: newAccess, body: { isolation: 'shared' } });
+    check('POST /tenants/:id/migrate 同级别 → 400/1004', migrateSame.status === 400 && migrateSame.body?.code === 1004, `code=${migrateSame.body?.code}`);
+    const migrateNoUrl = await api('POST', `/tenants/${probeId}/migrate`, { token: newAccess, body: { isolation: 'dedicated' } });
+    check('POST /tenants/:id/migrate dedicated 不带 dbUrl → 400/1001', migrateNoUrl.status === 400 && migrateNoUrl.body?.code === 1001, `code=${migrateNoUrl.body?.code}`);
+
+    let migrateJobView = null;
+    for (let i = 0; i < 60 && (!migrateJobView || (migrateJobView.status !== 'succeeded' && migrateJobView.status !== 'failed')); i += 1) {
+      const progress = await api('GET', `/jobs/${migrateJobId}/progress`, { token: newAccess });
+      migrateJobView = progress.body?.data ?? null;
+      if (migrateJobView && (migrateJobView.status === 'succeeded' || migrateJobView.status === 'failed')) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    check('GET /jobs/:id/progress 轮询到 succeeded（进度 100）', migrateJobView?.status === 'succeeded' && migrateJobView?.progress === 100, `status=${migrateJobView?.status} progress=${migrateJobView?.progress}`);
+
+    const migratedProbe = await api('GET', `/tenants?keyword=${probeCode}`, { token: newAccess });
+    check('迁移后 isolation=dedicated 生效（mock 同步应用控制面变更）', (migratedProbe.body?.data?.items ?? []).some((t) => t.id === probeId && t.isolation === 'dedicated' && t.dedicatedDbConfigured === true));
+
+    const retryMigrate = await api('POST', `/jobs/${migrateJobId}/retry`, { token: newAccess });
+    check('POST /jobs/:id/retry 成功任务 → 400/1004', retryMigrate.status === 400 && retryMigrate.body?.code === 1004, `code=${retryMigrate.body?.code}`);
+    const jobMissing = await api('GET', '/jobs/job-nope/progress', { token: newAccess });
+    check('GET /jobs/:id/progress 不存在 → 404/1002', jobMissing.status === 404 && jobMissing.body?.code === 1002, `code=${jobMissing.body?.code}`);
+
+    // 审计异步导出（派发 → 轮询 → 下载 CSV）
+    const exportDispatch = await api('GET', '/audit-logs/export', { token: newAccess });
+    const exportDispatchId = exportDispatch.body?.data?.id;
+    check('GET /audit-logs/export 派发导出任务', exportDispatch.body?.code === 0 && !!exportDispatchId && exportDispatch.body?.data?.type === 'audit.export', `jobId=${exportDispatchId}`);
+
+    let exportProgress = null;
+    for (let i = 0; i < 60 && (!exportProgress || (exportProgress.status !== 'succeeded' && exportProgress.status !== 'failed')); i += 1) {
+      const progress = await api('GET', `/jobs/${exportDispatchId}/progress`, { token: newAccess });
+      exportProgress = progress.body?.data ?? null;
+      if (exportProgress && (exportProgress.status === 'succeeded' || exportProgress.status === 'failed')) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    check('导出任务轮询到 succeeded', exportProgress?.status === 'succeeded' && exportProgress?.progress === 100 && !!exportProgress?.fileName, `status=${exportProgress?.status} fileName=${exportProgress?.fileName}`);
+
+    const csvDownload = await fetch(`${BASE}/jobs/${exportDispatchId}/download`, { headers: { Authorization: `Bearer ${newAccess}` } });
+    const csvDownloadBytes = Buffer.from(await csvDownload.arrayBuffer());
+    const csvDownloadText = csvDownloadBytes.toString('utf8');
+    check('GET /jobs/:id/download 取回 CSV（BOM + 表头 + 行数据，非统一信封）',
+      csvDownload.status === 200 && csvDownloadBytes[0] === 0xef && csvDownloadBytes[1] === 0xbb && csvDownloadBytes[2] === 0xbf
+      && csvDownloadText.includes('id,createdAt,userId,module,action,targetType,targetId,ip,traceId,before,after')
+      && csvDownloadText.split('\r\n').length >= 2,
+      `bytes=${csvDownloadBytes.length}`);
+
+    // 失败路径（mock 调试开关 simulate=fail）→ 重跑恢复
+    const failDispatch = await api('GET', '/audit-logs/export?simulate=fail', { token: newAccess });
+    const failDispatchId = failDispatch.body?.data?.id;
+    let failProgress = null;
+    for (let i = 0; i < 60 && (!failProgress || (failProgress.status !== 'succeeded' && failProgress.status !== 'failed')); i += 1) {
+      const progress = await api('GET', `/jobs/${failDispatchId}/progress`, { token: newAccess });
+      failProgress = progress.body?.data ?? null;
+      if (failProgress && (failProgress.status === 'succeeded' || failProgress.status === 'failed')) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    check('simulate=fail 任务轮询到 failed（错误可读）', failProgress?.status === 'failed' && typeof failProgress?.error === 'string' && failProgress.error.length > 0, `error=${failProgress?.error?.slice(0, 40)}`);
+
+    const retriedFailed = await api('POST', `/jobs/${failDispatchId}/retry`, { token: newAccess });
+    check('POST /jobs/:id/retry 失败任务原地重跑（pending）', retriedFailed.body?.code === 0 && retriedFailed.body?.data?.status === 'pending');
+
+    // 越权：alice 无 tenant:* / audit:export；任务按归属人隔离
+    const aliceTenants = await api('GET', '/tenants', { token: aliceToken });
+    check('alice 无 tenant:read → 3002', aliceTenants.body?.code === 3002, `code=${aliceTenants.body?.code}`);
+    const aliceExport = await api('GET', '/audit-logs/export', { token: aliceToken });
+    check('alice 无 audit:export → 3002', aliceExport.body?.code === 3002, `code=${aliceExport.body?.code}`);
+    const aliceJob = await api('GET', `/jobs/${migrateJobId}/progress`, { token: aliceToken });
+    check('alice 读他人任务 → 404/1002（归属人隔离）', aliceJob.status === 404 && aliceJob.body?.code === 1002, `code=${aliceJob.body?.code}`);
 
     const logout = await api('POST', '/auth/logout', { token: newAccess });
     check('登出成功', logout.body?.code === 0);

@@ -16,6 +16,11 @@
  * @modified 2026-10-14 donttemo BUG-15：GET /users 支持 `sort`（白名单解析 + 未知字段/非法方向 400 +
  *   默认 createdAt desc + id asc tie-breaker），与 example-api 的 parseSortQuery 同语义 —— mock 若放宽
  *   校验即产生「dev 全绿、真机 400」的假绿
+ * @modified 2026-10-15 donttemo N-01/N-02：① 死信列表分页（page/pageSize，上限 200，响应追加
+ *   page/pageSize，与 @fw/queue 分页改造同形）；② 租户管理五端点（/tenants CRUD + migrate，
+ *   权限 tenant:* + system:tenant:ignore 双重要求，legacy 停用/迁移 1004，dedicated 必填 dbUrl）；
+ *   ③ 异步任务面（/jobs/:id/progress|retry|download，虚拟时间线推进进度，归属人隔离，404 不泄露存在性）
+ *   与 GET /audit-logs/export 派发（audit:export，产物 CSV 快照）
  * @module admin-web/mock
  */
 
@@ -25,12 +30,14 @@ import type {
   MockDb,
   MockDictCategory,
   MockDictItem,
+  MockJob,
   MockMenu,
   MockMenuTree,
   MockOrder,
   MockPermission,
   MockRole,
   MockSession,
+  MockTenant,
   MockTokenPayload,
   MockUser,
 } from './db';
@@ -406,6 +413,20 @@ const MOCK_AUDIT_SORT_FIELDS: Record<string, string> = {
   action: 'action',
   target_type: 'targetType',
   created_at: 'createdAt',
+};
+
+/**
+ * 租户列表排序白名单（N-01，与 example-api 的 TENANT_SORT_FIELDS 逐项一致）
+ */
+const MOCK_TENANT_SORT_FIELDS: Record<string, string> = {
+  id: 'id',
+  code: 'code',
+  name: 'name',
+  isolation: 'isolation',
+  status: 'status',
+  created_at: 'createdAt',
+  updated_at: 'updatedAt',
+  expire_at: 'expireAt',
 };
 
 /**
@@ -1245,6 +1266,69 @@ export async function handleMockRequest(
     send(res, CODE.OK, 'ok', paginate(items, page, pageSize), traceId);
     return { handled: true };
   }
+  // 审计异步导出（N-02）——路由必须声明在 auditMatch 之前，否则 'export' 会被当成 id 命中详情分支
+  if (path === '/audit-logs/export' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'audit:export');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    // 与列表同源的筛选条件（分页参数忽略，导出全量命中集）
+    let rows = [...database.auditLogs];
+    const userId = query.get('user_id');
+    if (userId) rows = rows.filter((a) => a.userId === userId);
+    const module = query.get('module');
+    if (module) rows = rows.filter((a) => a.module === module);
+    const action = query.get('action');
+    if (action) rows = rows.filter((a) => a.action === action);
+    const from = query.get('from');
+    if (from) rows = rows.filter((a) => a.createdAt >= from);
+    const to = query.get('to');
+    if (to) rows = rows.filter((a) => a.createdAt <= to);
+    const parsedSort = parseMockSort(query.get('sort'), MOCK_AUDIT_SORT_FIELDS);
+    if ('error' in parsedSort) {
+      send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
+      return { handled: true };
+    }
+    rows = applyMockSort(rows, parsedSort.items, 'createdAt', 'desc');
+
+    // 产物快照在派发时固化（与后端「导出时的筛选结果」一致，不随后续新日志漂移）。
+    // CSV 形状与 example-api 的 buildAuditCsv **逐字节同构**：同表头、同 BOM、同 CRLF、
+    // 同引号转义——mock 与真实后端零差异，切真实 API 后下载产物行为不变。
+    const header = ['id', 'createdAt', 'userId', 'module', 'action', 'targetType', 'targetId', 'ip', 'traceId', 'before', 'after'];
+    const csvCell = (value: unknown): string => {
+      if (value === null || value === undefined) return '""';
+      const text = typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
+      return `"${text.replace(/"/g, '""').replace(/[\r\n]+/g, ' ')}"`;
+    };
+    const lines = rows.map((a) =>
+      [
+        csvCell(a.id),
+        csvCell(a.createdAt),
+        csvCell(a.userId),
+        csvCell(a.module),
+        csvCell(a.action),
+        csvCell(a.targetType),
+        csvCell(a.targetId),
+        csvCell(a.ip),
+        csvCell(a.traceId),
+        csvCell(a.beforeValue),
+        csvCell(a.afterValue),
+      ].join(','),
+    );
+    const job = dispatchJob(database, {
+      type: 'audit.export',
+      title: '审计日志导出',
+      ownerId: ctx.user.id,
+      durationMs: 3000,
+      fileName: `audit-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`,
+      artifact: `\uFEFF${[header.join(','), ...lines].join('\r\n')}\r\n`,
+      simulateFail: query.get('simulate') === 'fail',
+      traceId,
+    });
+    send(res, CODE.OK, 'ok', jobView(job), traceId);
+    return { handled: true };
+  }
   const auditMatch = /^\/audit-logs\/([\w-]+)$/.exec(path);
   if (auditMatch && method === 'GET') {
     const perm = requirePermission(database, ctx, 'audit:read');
@@ -1433,8 +1517,12 @@ export async function handleMockRequest(
       return { handled: true };
     }
     const queueName = query.get('queue');
+    // 分页（与 @fw/queue 改造同形）：不传时等价于第一页 + 全量 total，行为向后兼容
+    const page = Math.max(1, Number(query.get('page') ?? '1'));
+    const pageSize = Math.min(200, Math.max(1, Number(query.get('pageSize') ?? '20')));
     const items = queueName ? database.queue.deadLetters.filter((item) => item.queue === queueName) : database.queue.deadLetters;
-    send(res, CODE.OK, 'ok', { total: items.length, items }, traceId);
+    const windowed = paginate(items, page, pageSize);
+    send(res, CODE.OK, 'ok', { total: windowed.total, items: windowed.items, page: windowed.page, pageSize: windowed.pageSize }, traceId);
     return { handled: true };
   }
 
@@ -1520,6 +1608,244 @@ export async function handleMockRequest(
     return { handled: true };
   }
 
+  // ---- N-01 租户域（五端点；管理面是 @IgnoreTenant 的，权限双重要求：tenant:* + system:tenant:ignore） ----
+  // 豁免校验只作用于 /tenants* 路径，避免把未命中请求从 404 变成 403
+  if (path === '/tenants' || path.startsWith('/tenants/')) {
+    const hasTenantIgnore = requirePermission(database, ctx, 'system:tenant:ignore');
+    if (!hasTenantIgnore.ok) {
+      send(res, hasTenantIgnore.code, hasTenantIgnore.message, null, traceId);
+      return { handled: true };
+    }
+  }
+
+  if (path === '/tenants' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'tenant:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const page = Math.max(1, Number(query.get('page') ?? '1'));
+    const pageSize = Math.min(200, Math.max(1, Number(query.get('pageSize') ?? '20')));
+    const keyword = query.get('keyword')?.trim();
+    const isolation = query.get('isolation');
+    const status = query.get('status');
+    // 与后端同语义：非法枚举值一律 400，不静默忽略
+    if (isolation !== null && isolation !== '' && isolation !== 'shared' && isolation !== 'dedicated') {
+      send(res, CODE.BAD_REQUEST, 'isolation 仅支持 shared / dedicated', null, traceId);
+      return { handled: true };
+    }
+    if (status !== null && status !== '' && status !== '0' && status !== '1') {
+      send(res, CODE.BAD_REQUEST, 'status 仅支持 0（停用）/ 1（启用）', null, traceId);
+      return { handled: true };
+    }
+    let items = [...database.tenants];
+    if (keyword) items = items.filter((t) => t.code.includes(keyword) || t.name.includes(keyword));
+    if (isolation) items = items.filter((t) => t.isolation === isolation);
+    if (status) items = items.filter((t) => String(t.status) === status);
+    const parsedSort = parseMockSort(query.get('sort'), MOCK_TENANT_SORT_FIELDS);
+    if ('error' in parsedSort) {
+      send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
+      return { handled: true };
+    }
+    items = applyMockSort(items, parsedSort.items, 'createdAt', 'desc');
+    const windowed = paginate(items, page, pageSize);
+    send(res, CODE.OK, 'ok', { total: windowed.total, page: windowed.page, pageSize: windowed.pageSize, items: windowed.items.map(tenantView) }, traceId);
+    return { handled: true };
+  }
+
+  if (path === '/tenants' && method === 'POST') {
+    const perm = requirePermission(database, ctx, 'tenant:create');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const code = typeof body.code === 'string' ? body.code.trim() : '';
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    const isolation = body.isolation;
+    const plan = typeof body.plan === 'string' ? body.plan.trim() || null : null;
+    const dbUrl = typeof body.dbUrl === 'string' ? body.dbUrl.trim() || null : null;
+    const expireAt = typeof body.expireAt === 'string' && body.expireAt ? body.expireAt : null;
+    if (!code || !name || !isolation) {
+      send(res, CODE.BAD_REQUEST, 'code / name / isolation 必填', null, traceId);
+      return { handled: true };
+    }
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,63})$/.test(code)) {
+      send(res, CODE.BAD_REQUEST, '租户编码仅允许小写字母 / 数字 / 连字符，长度 1–64，且以字母或数字开头', null, traceId);
+      return { handled: true };
+    }
+    if (isolation !== 'shared' && isolation !== 'dedicated') {
+      send(res, CODE.BAD_REQUEST, 'isolation 仅支持 shared / dedicated', null, traceId);
+      return { handled: true };
+    }
+    if (isolation === 'dedicated' && !dbUrl) {
+      send(res, CODE.BAD_REQUEST, 'dedicated 隔离级别必须提供独立库连接串 dbUrl', null, traceId);
+      return { handled: true };
+    }
+    if (isolation === 'shared' && dbUrl) {
+      send(res, CODE.BAD_REQUEST, 'shared 隔离级别不接受 dbUrl（连接串会在迁移时清除）', null, traceId);
+      return { handled: true };
+    }
+    if (database.tenants.some((t) => t.code === code)) {
+      send(res, CODE.CONFLICT, `租户编码已存在：${code}`, null, traceId);
+      return { handled: true };
+    }
+    const nextId = String(database.tenants.reduce((max, t) => (/^[0-9]+$/.test(t.id) ? Math.max(max, Number(t.id)) : max), 0) + 1);
+    const now = new Date().toISOString();
+    const tenant: MockTenant = { id: nextId, code, name, isolation, plan, status: 1, expireAt, dbUrl, createdAt: now, updatedAt: now };
+    database.tenants.push(tenant);
+    send(res, CODE.OK, 'ok', tenantView(tenant), traceId);
+    return { handled: true };
+  }
+
+  const tenantMatch = /^\/tenants\/([\w-]+)$/.exec(path);
+  if (tenantMatch && method === 'PUT') {
+    const perm = requirePermission(database, ctx, 'tenant:update');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const tenant = database.tenants.find((t) => t.id === tenantMatch[1]);
+    if (!tenant) {
+      send(res, CODE.NOT_FOUND, '租户不存在', null, traceId);
+      return { handled: true };
+    }
+    const status = body.status;
+    if (status !== undefined && status !== 0 && status !== 1) {
+      send(res, CODE.BAD_REQUEST, 'status 只能为 0（停用）或 1（启用）', null, traceId);
+      return { handled: true };
+    }
+    if (tenant.id === '0' && status === 0) {
+      send(res, CODE.STATE_NOT_ALLOWED, '存量单租户（legacy）不可停用', null, traceId);
+      return { handled: true };
+    }
+    if (typeof body.name === 'string' && body.name.trim()) tenant.name = body.name.trim();
+    if (body.plan !== undefined) tenant.plan = typeof body.plan === 'string' ? body.plan.trim() || null : null;
+    if (status !== undefined) tenant.status = status;
+    if (body.expireAt !== undefined) tenant.expireAt = typeof body.expireAt === 'string' && body.expireAt ? body.expireAt : null;
+    tenant.updatedAt = new Date().toISOString();
+    send(res, CODE.OK, 'ok', tenantView(tenant), traceId);
+    return { handled: true };
+  }
+
+  if (tenantMatch && method === 'DELETE') {
+    const perm = requirePermission(database, ctx, 'tenant:delete');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const tenant = database.tenants.find((t) => t.id === tenantMatch[1]);
+    if (!tenant) {
+      send(res, CODE.NOT_FOUND, '租户不存在', null, traceId);
+      return { handled: true };
+    }
+    if (tenant.id === '0') {
+      send(res, CODE.STATE_NOT_ALLOWED, '存量单租户（legacy）不可停用：所有历史数据归属该租户，停用即全站不可访问', null, traceId);
+      return { handled: true };
+    }
+    tenant.status = 0;
+    tenant.updatedAt = new Date().toISOString();
+    send(res, CODE.OK, 'ok', tenantView(tenant), traceId);
+    return { handled: true };
+  }
+
+  const tenantMigrateMatch = /^\/tenants\/([\w-]+)\/migrate$/.exec(path);
+  if (tenantMigrateMatch && method === 'POST') {
+    const perm = requirePermission(database, ctx, 'tenant:manage');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const target = body.isolation;
+    if (target !== 'shared' && target !== 'dedicated') {
+      send(res, CODE.BAD_REQUEST, 'isolation 仅支持 shared / dedicated', null, traceId);
+      return { handled: true };
+    }
+    const tenant = database.tenants.find((t) => t.id === tenantMigrateMatch[1]);
+    if (!tenant) {
+      send(res, CODE.NOT_FOUND, '租户不存在', null, traceId);
+      return { handled: true };
+    }
+    if (tenant.isolation === target) {
+      send(res, CODE.STATE_NOT_ALLOWED, `租户已是 ${target} 隔离级别，无需迁移`, null, traceId);
+      return { handled: true };
+    }
+    if (tenant.id === '0') {
+      send(res, CODE.STATE_NOT_ALLOWED, '存量单租户（legacy）不可迁移隔离级别：其数据分布在共享库，切换数据源会整体失联', null, traceId);
+      return { handled: true };
+    }
+    const dbUrl = typeof body.dbUrl === 'string' ? body.dbUrl.trim() || null : null;
+    if (target === 'dedicated' && !dbUrl) {
+      send(res, CODE.BAD_REQUEST, '迁移到 dedicated 必须提供独立库连接串 dbUrl', null, traceId);
+      return { handled: true };
+    }
+    const job = dispatchJob(database, {
+      type: 'tenant.migrate',
+      title: `租户 ${tenant.code} 迁移至${target === 'dedicated' ? '独立库' : '共享库'}`,
+      ownerId: ctx.user.id,
+      durationMs: 4000,
+      simulateFail: body.simulate === 'fail',
+      mutate: { tenantId: tenant.id, isolation: target, dbUrl: target === 'dedicated' ? dbUrl : null },
+      traceId,
+    });
+    send(res, CODE.OK, 'ok', jobView(job), traceId);
+    return { handled: true };
+  }
+
+  // ---- N-02 异步任务域（登录即可；归属人校验在处理器内，不泄露存在性一律 404） ----
+  const jobProgressMatch = /^\/jobs\/([\w-]+)\/progress$/.exec(path);
+  if (jobProgressMatch && method === 'GET') {
+    const job = findOwnedJob(database, ctx, jobProgressMatch[1] as string);
+    if (!job) {
+      send(res, CODE.NOT_FOUND, '任务不存在或已过期', null, traceId);
+      return { handled: true };
+    }
+    advanceJob(database, job);
+    send(res, CODE.OK, 'ok', jobView(job), traceId);
+    return { handled: true };
+  }
+
+  const jobRetryMatch = /^\/jobs\/([\w-]+)\/retry$/.exec(path);
+  if (jobRetryMatch && method === 'POST') {
+    const job = findOwnedJob(database, ctx, jobRetryMatch[1] as string);
+    if (!job) {
+      send(res, CODE.NOT_FOUND, '任务不存在或已过期', null, traceId);
+      return { handled: true };
+    }
+    if (job.status === 'running' || job.status === 'pending') {
+      send(res, CODE.STATE_NOT_ALLOWED, '任务正在执行中，无需重跑', null, traceId);
+      return { handled: true };
+    }
+    if (job.status === 'succeeded') {
+      send(res, CODE.STATE_NOT_ALLOWED, '任务已成功，无需重跑', null, traceId);
+      return { handled: true };
+    }
+    job.status = 'pending';
+    job.progress = 0;
+    job.error = null;
+    job.message = '已重新派发';
+    job.startedAt = Date.now();
+    job.updatedAt = new Date().toISOString();
+    advanceJob(database, job);
+    send(res, CODE.OK, 'ok', jobView(job), traceId);
+    return { handled: true };
+  }
+
+  const jobDownloadMatch = /^\/jobs\/([\w-]+)\/download$/.exec(path);
+  if (jobDownloadMatch && method === 'GET') {
+    const job = findOwnedJob(database, ctx, jobDownloadMatch[1] as string);
+    advanceJob(database, job);
+    if (!job || !job.artifact) {
+      send(res, CODE.NOT_FOUND, '任务产物不存在或已过期', null, traceId);
+      return { handled: true };
+    }
+    // 产物是裸文本流（非统一信封），与后端 JobsController.download 的 @Res() 直写一致
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(job.fileName ?? `job-${job.id}.dat`)}`);
+    res.end(job.artifact);
+    return { handled: true };
+  }
+
   // 未命中：404
   send(res, CODE.NOT_FOUND, `接口不存在：${method} ${path}`, null, traceId);
   return { handled: true };
@@ -1539,4 +1865,123 @@ function stripRole(role: MockRole): Omit<MockRole, 'permissionIds'> & { permissi
 /** 菜单输出（扁平存储，无需裁剪 children；保留函数为输出口径统一） */
 function stripMenu(menu: MockMenu): MockMenu {
   return { ...menu };
+}
+
+/** 租户输出（N-01）：绝不下传连接串，独立库只用布尔位表达「是否已配置」 */
+function tenantView(tenant: MockTenant): Omit<MockTenant, 'dbUrl'> & { dedicatedDbConfigured: boolean } {
+  const { dbUrl: _dbUrl, ...rest } = tenant;
+  return { ...rest, dedicatedDbConfigured: Boolean(tenant.dbUrl) };
+}
+
+/** 异步任务派发参数（内部） */
+interface DispatchJobOptions {
+  type: string;
+  title: string;
+  ownerId: string;
+  /** 虚拟执行时长（毫秒）：进度按时间线推进，供轮询退避演练 */
+  durationMs: number;
+  fileName?: string | null;
+  artifact?: string | null;
+  /** mock 调试开关：强制走失败路径，演练任务条重试 */
+  simulateFail?: boolean;
+  /** 完成时应用的控制面变更（迁移任务） */
+  mutate?: { tenantId: string; isolation: 'shared' | 'dedicated'; dbUrl: string | null };
+  traceId: string;
+}
+
+/**
+ * 派发异步任务（N-02，镜像后端 JobCenterService.create）
+ *
+ * 立即返回 pending 视图，进度由后续 progress 轮询按虚拟时间线推进；
+ * 产物在派发时快照固化（与后端「导出时的筛选结果」语义一致）。
+ */
+function dispatchJob(database: MockDb, options: DispatchJobOptions): MockJob {
+  const now = Date.now();
+  const job: MockJob = {
+    id: `job${randomId('')}`,
+    type: options.type,
+    title: options.title,
+    ownerId: options.ownerId,
+    status: 'pending',
+    progress: 0,
+    durationMs: options.durationMs,
+    startedAt: now,
+    message: '已派发，等待执行',
+    error: null,
+    traceId: options.traceId,
+    fileName: options.fileName ?? null,
+    artifact: options.artifact ?? null,
+    createdAt: new Date(now).toISOString(),
+    updatedAt: new Date(now).toISOString(),
+    ...(options.simulateFail ? { simulateFail: true } : {}),
+    ...(options.mutate ? { mutate: options.mutate } : {}),
+  };
+  database.jobs.push(job);
+  return job;
+}
+
+/** 任务对外视图（JobView 形状，与 example-api 的 JobView 逐字段一致） */
+function jobView(job: MockJob): Record<string, unknown> {
+  return {
+    id: job.id,
+    type: job.type,
+    title: job.title,
+    status: job.status,
+    progress: job.progress,
+    message: job.message,
+    error: job.error,
+    traceId: job.traceId,
+    fileName: job.fileName,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  };
+}
+
+/** 按 id + 归属人查任务（非归属人 / 不存在都返回 null，对外一律 404 不泄露存在性） */
+function findOwnedJob(database: MockDb, ctx: AuthContext, id: string): MockJob | null {
+  const job = database.jobs.find((item) => item.id === id);
+  if (!job || job.ownerId !== ctx.user.id) return null;
+  return job;
+}
+
+/** 派发瞬间的宽限窗口（毫秒）：让前端至少能观察到一次 pending，与后端的「立即执行」差异可接受 */
+const JOB_PENDING_GRACE_MS = 200;
+
+/**
+ * 推进任务虚拟时间线（N-02）：elapsed / duration 决定进度百分比；
+ * 到达终态时把 mutate 变更应用到租户（仅一次，镜像后端 runner 的控制面切换）。
+ */
+function advanceJob(database: MockDb, job: MockJob | null): void {
+  if (!job) return;
+  if (job.status !== 'pending' && job.status !== 'running') return;
+  const elapsed = Date.now() - job.startedAt;
+  if (elapsed < JOB_PENDING_GRACE_MS) {
+    job.status = 'pending';
+    job.progress = 0;
+    job.message = '已派发，等待执行';
+  } else if (elapsed >= job.durationMs) {
+    if (job.simulateFail) {
+      job.status = 'failed';
+      job.error = '模拟失败（mock 调试开关 simulate=fail）：用于演练任务条的重试路径';
+      job.message = '执行失败，可重试';
+    } else {
+      job.status = 'succeeded';
+      job.progress = 100;
+      job.message = job.artifact ? '已完成，可下载' : '已完成';
+      if (job.mutate) {
+        const tenant = database.tenants.find((t) => t.id === job.mutate?.tenantId);
+        if (tenant) {
+          tenant.isolation = job.mutate.isolation;
+          tenant.dbUrl = job.mutate.dbUrl;
+          tenant.updatedAt = new Date().toISOString();
+        }
+        job.mutate = undefined;
+      }
+    }
+  } else {
+    job.status = 'running';
+    job.progress = Math.min(99, Math.floor((elapsed / job.durationMs) * 100));
+    job.message = '执行中';
+  }
+  job.updatedAt = new Date().toISOString();
 }
