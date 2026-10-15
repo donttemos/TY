@@ -43,8 +43,10 @@ function ensureTraceId(config: InternalAxiosRequestConfig): string {
  * `/auth/login` 这类同源相对路径，被静态站接管，nginx 对静态资源拒绝 POST 并返回 **405 Not Allowed**。
  * 真机部署（cs.donttemo.top）曾因此登录不可用。故此处按同源反代约定显式兜底 `/api/v1`，
  * 使构建缺变量时仍可正常工作；需要指向异构网关时再由 env 覆盖。
+ *
+ * E-07：OAuth2 授权跳转（非 axios 场景）复用同一基址，故导出。
  */
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1';
+export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '/api/v1';
 
 /** 执行刷新：双 token 轮换；失败即 rejected（调用方走跳登录） */
 function doRefresh(): Promise<string> {

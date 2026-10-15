@@ -8,6 +8,8 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo assignUserRoles / grantRolePermissions 写库前校验 ID 集合（assertRoleIds / assertPermissionIds），杜绝空串或失效 ID 静默写库导致权限归零
+ * @modified 2026-10-15 donttemo E-07：新增 loginByOAuth2（OAuth2 授权码端到端的会话落地——外部认证由 IdP 完成，
+ *   本地仅做账号绑定校验 + 会话签发 + 审计；不自动建号，防外部身份自动提权）
  * @module @fw/auth
  */
 
@@ -150,6 +152,49 @@ export class AuthService {
       userAgent: input.userAgent ?? null,
     });
     logger.info('登录成功', { userId: user.id, username: user.username, ip: input.ip, policy: options.passwordPolicy });
+    return result;
+  }
+
+  /**
+   * 外部身份登录（E-07 OAuth2 授权码端到端）：IdP 已完成认证，此处做本地会话落地——
+   * 账号必须已存在且启用（不自动建号，防外部身份自动提权），会话签发与口令登录同源
+   * （refresh 轮换族 / 权限加载 / 审计），仅跳过登录限流与锁定（认证由 IdP 完成）。
+   * @param input 提供方名、本地账号（由应用层从 IdP 用户信息映射而来）、来源信息
+   * @returns 双 token 与请求用户
+   * @throws BizError 3001 外部账号未绑定本地用户 / 3004 账号已禁用
+   */
+  async loginByOAuth2(input: { provider: string; account: string; ip: string; userAgent?: string | null }): Promise<LoginResult> {
+    const { store, audit, options } = this.deps;
+    const user = await store.findUserByAccount(input.account);
+    if (!user) {
+      logger.warn('OAuth2 身份未绑定本地用户，拒绝登录', { provider: input.provider, account: input.account });
+      throw new BizError(ErrorCode.UNAUTHORIZED, '外部账号未绑定本地用户，请联系管理员');
+    }
+    if (user.status !== 1) {
+      logger.warn('OAuth2 登录目标账号已禁用', { userId: user.id, provider: input.provider });
+      throw new BizError(ErrorCode.ACCOUNT_LOCKED, '账号已禁用，请联系管理员');
+    }
+    await store.touchUserLogin(user.id, new Date(), input.ip);
+
+    const permissions = await this.deps.permissions.getUserContext(user.id);
+    const result = await this.issueSession({
+      id: user.id,
+      username: user.username,
+      roles: permissions.roles,
+      ip: input.ip,
+      userAgent: input.userAgent ?? null,
+    });
+    audit.record({
+      userId: user.id,
+      module: 'auth',
+      action: 'login',
+      targetType: 'user',
+      targetId: user.id,
+      ip: input.ip,
+      userAgent: input.userAgent ?? null,
+      after: { provider: input.provider },
+    });
+    logger.info('OAuth2 登录成功', { userId: user.id, username: user.username, provider: input.provider, ip: input.ip, policy: options.passwordPolicy });
     return result;
   }
 

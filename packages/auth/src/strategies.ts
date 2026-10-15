@@ -7,15 +7,18 @@
  *   未注册时明确拒绝而非静默放行——「不泄漏资源存在性」与「默认拒绝」同时成立。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo E-07：AuthRequest 增 method/path（apikey 签名参与串接）；
+ *   ApiKeyStrategy 可选 HMAC 强制验签（AUTH_API_KEY_SIGN_SECRET 配置后生效，向后兼容）
  * @module @fw/auth
  */
 
-import { timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { BizError, ErrorCode } from '@fw/core';
 import { Logger } from '@fw/logger';
 import type { ApiKeyEntry, AuthStrategyName, DataScope, ID, TokenType } from './types.js';
 import type { TokenBlacklist } from './token-blacklist.js';
 import { TokenVerifyError, type AccessClaims, type TokenService } from './token.service.js';
+import { DEFAULT_API_KEY_SIGN_SKEW_SECONDS } from './constants.js';
 
 const logger = Logger.for('auth.strategy');
 
@@ -26,6 +29,10 @@ export interface AuthRequest {
   ip?: string;
   /** 客户端标识 */
   userAgent?: string;
+  /** HTTP 方法（E-07 apikey 签名参与串接；由守卫注入） */
+  method?: string;
+  /** 请求路径（不含查询串；E-07 apikey 签名参与串接，由守卫注入） */
+  path?: string;
 }
 
 /** 策略身份解析结果 */
@@ -141,14 +148,24 @@ export class JwtStrategy implements AuthStrategy {
 
 /**
  * API Key 策略：`X-Api-Key: <key>`（开放接口，不走登录流程）
+ *
+ * E-07 签名模式：配置签名密钥后强制验签（防密钥被中间人截获后重放）——
+ *   stringToSign = `${key}\n${timestamp}\n${METHOD}\n${path}`
+ *   X-Api-Sign   = HMAC-SHA256(secret, stringToSign) 的 hex 小写
+ * `X-Api-Timestamp` 与服务器时差超过 `signSkewSeconds`（默认 300s）即拒绝；
+ * 未配置签名密钥时保持原行为（仅验 key，向后兼容）。
  */
 export class ApiKeyStrategy implements AuthStrategy {
   readonly name = 'apikey' as const;
 
   /**
    * @param entries 已解析的 API Key 表
+   * @param options 签名选项：signSecret 配置后强制验签；signSkewSeconds 时间戳允许偏差
    */
-  constructor(private readonly entries: ApiKeyEntry[]) {}
+  constructor(
+    private readonly entries: ApiKeyEntry[],
+    private readonly options: { signSecret?: string; signSkewSeconds?: number } = {},
+  ) {}
 
   async authenticate(request: AuthRequest): Promise<StrategyIdentity | null> {
     const provided = readHeader(request, 'x-api-key');
@@ -158,6 +175,7 @@ export class ApiKeyStrategy implements AuthStrategy {
       logger.warn('API Key 校验失败', { ip: request.ip });
       throw new BizError(ErrorCode.UNAUTHORIZED, 'API Key 无效');
     }
+    if (this.options.signSecret) this.assertSignature(matched.key, request);
     return {
       kind: 'service',
       id: `apikey:${matched.subject}`,
@@ -168,6 +186,39 @@ export class ApiKeyStrategy implements AuthStrategy {
       dataScope: 'all',
     };
   }
+
+  /** 签名校验（E-07）：时间戳防重放 + HMAC 常量时间比对；失败一律 3001，不区分具体原因防探测 */
+  private assertSignature(key: string, request: AuthRequest): void {
+    const timestamp = readHeader(request, 'x-api-timestamp');
+    const sign = readHeader(request, 'x-api-sign');
+    const method = (request.method ?? '').toUpperCase();
+    const path = request.path ?? '';
+    if (!timestamp || !sign || !method || !path) {
+      throw new BizError(ErrorCode.UNAUTHORIZED, '缺少签名头（X-Api-Timestamp / X-Api-Sign）或请求上下文不完整');
+    }
+    const ts = Number(timestamp);
+    if (!Number.isFinite(ts)) {
+      throw new BizError(ErrorCode.UNAUTHORIZED, 'X-Api-Timestamp 非法');
+    }
+    const skew = this.options.signSkewSeconds ?? DEFAULT_API_KEY_SIGN_SKEW_SECONDS;
+    if (Math.abs(Date.now() / 1000 - ts) > skew) {
+      logger.warn('API Key 签名时间戳超出允许偏差', { ip: request.ip, skew });
+      throw new BizError(ErrorCode.UNAUTHORIZED, '签名已过期，请校准时间后重试');
+    }
+    const expected = apiKeySignature(this.options.signSecret as string, key, timestamp, method, path);
+    if (!safeEqual(expected, sign)) {
+      logger.warn('API Key 签名校验失败', { ip: request.ip, path });
+      throw new BizError(ErrorCode.UNAUTHORIZED, 'API Key 签名无效');
+    }
+  }
+}
+
+/**
+ * 计算 API Key 请求签名（E-07 约定，docs/41）：HMAC-SHA256(secret, `${key}\n${timestamp}\n${METHOD}\n${path}`) hex 小写。
+ * 独立导出供业务方 / 冒烟脚本按同一算法生成签名，避免约定漂移。
+ */
+export function apiKeySignature(secret: string, key: string, timestamp: string, method: string, path: string): string {
+  return createHmac('sha256', secret).update(`${key}\n${timestamp}\n${method.toUpperCase()}\n${path}`).digest('hex');
 }
 
 /** 会话存储端口（内网后台可选：由业务侧提供 Redis / DB 实现） */

@@ -568,6 +568,11 @@ export async function handleMockRequest(
     handleRefresh(database, body, res, traceId);
     return { handled: true };
   }
+  // E-07：已注册 OAuth2 提供方列表（与真实后端同形；mock 无 IdP，如实返回空 → 登录页不渲染入口）
+  if (path === '/auth/oauth2/providers' && method === 'GET') {
+    send(res, CODE.OK, 'ok', { providers: [] }, traceId);
+    return { handled: true };
+  }
 
   // ---- 以下均需登录 ----
   const auth = authenticate(database, req);

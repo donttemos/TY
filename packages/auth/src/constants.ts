@@ -126,6 +126,15 @@ export const DEFAULT_AUDIT_RETENTION_DAYS = 180;
 export const JWT_ISSUER = 'fw-auth';
 export const JWT_ALG = 'HS256';
 
+/** OAuth2 state 防CSRF nonce 默认有效期（秒，E-07）：授权跳转到回调的合理上限 */
+export const DEFAULT_OAUTH2_STATE_TTL_SECONDS = 300;
+
+/** API Key 签名时间戳允许偏差（秒，E-07）：防重放窗口 */
+export const DEFAULT_API_KEY_SIGN_SKEW_SECONDS = 300;
+
+/** OAuth2 state 缓存键前缀（E-07）：一次性消费，TTL 由 stateTtlSeconds 控制 */
+export const OAUTH2_STATE_CACHE_PREFIX = 'fw:auth:oauth2:state:';
+
 /** 敏感字段名（审计与日志落盘前一律脱敏，PRD-003 FR-08） */
 export const SENSITIVE_FIELDS = [
   'password',

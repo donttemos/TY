@@ -7,6 +7,8 @@
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo 新增 updateProfile（本人资料自助，走 auth:me 端点）：
  *   原实现让个人中心调 PUT /users/:id（需 user:update），普通角色保存必 3002
+ * @modified 2026-10-15 donttemo E-07：新增 loginWithTokens（OAuth2 授权码回调的登录态落地，
+ *   与账号密码登录共用令牌存储与资料加载，仅无密码环节）
  * @module admin-web/store
  */
 
@@ -41,6 +43,18 @@ export const useUserStore = defineStore('user', () => {
     await loadProfile();
     isLoggedIn.value = true;
     return result;
+  }
+
+  /**
+   * OAuth2 回调登录（E-07）：后端授权码流程已完成认证，前端只落地令牌并拉资料。
+   * 与账号密码登录同源（同一 tokenStore / 资料加载 / 登录态），仅无密码校验环节。
+   */
+  async function loginWithTokens(accessToken: string, refreshToken: string, remember = true): Promise<MeResult> {
+    tokenStore.setAccess(accessToken);
+    tokenStore.setRefresh(refreshToken, remember);
+    const me = await loadProfile();
+    isLoggedIn.value = true;
+    return me;
   }
 
   /** 拉取当前用户资料（权限码唯一权威来源） */
@@ -133,6 +147,7 @@ export const useUserStore = defineStore('user', () => {
     isLoggedIn,
     hasPermission,
     login,
+    loginWithTokens,
     loadProfile,
     restoreSession,
     logout,

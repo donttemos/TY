@@ -11,6 +11,7 @@ export { AuthModule, buildAuthOptions } from './auth.module.js';
 export type { AuthEnvLike, AuthModuleOptions } from './auth.module.js';
 export {
   AUTH_CACHE,
+  AUTH_OAUTH2_FLOW,
   AUTH_OAUTH2_HANDLERS,
   AUTH_OPTIONS,
   AUTH_SESSION_STORE,
@@ -22,6 +23,8 @@ export {
 // ---------- 服务 ----------
 export { AuthService } from './auth.service.js';
 export type { AuthServiceDeps, ChangePasswordInput, LoginInput, RegisterInput } from './auth.service.js';
+export { OAuth2FlowService, parseOAuth2Providers, parseRedirectWhitelist } from './oauth2-flow.js';
+export type { OAuth2CallbackResult, OAuth2FlowOptions } from './oauth2-flow.js';
 export { PasswordService, checkPasswordPolicy } from './password.service.js';
 export type { PasswordCheck } from './password.service.js';
 export { TokenService, TokenVerifyError } from './token.service.js';
@@ -62,6 +65,7 @@ export {
   OAuth2Strategy,
   SessionStrategy,
   StrategyRegistry,
+  apiKeySignature,
   parseApiKeys,
 } from './strategies.js';
 export type {
@@ -80,7 +84,7 @@ export { Audit, AuthStrategy as AuthStrategyDecorator, CurrentUser, IgnoreTenant
 export type { AuditMeta } from './decorators.js';
 
 // ---------- 常量与类型 ----------
-export { PERM, ROLE, MASKED, SENSITIVE_FIELDS, META_AUDIT, META_IGNORE_TENANT, META_PERMISSIONS, META_PUBLIC, META_STRATEGY, DEFAULT_PUBLIC_PATHS } from './constants.js';
+export { PERM, ROLE, MASKED, SENSITIVE_FIELDS, META_AUDIT, META_IGNORE_TENANT, META_PERMISSIONS, META_PUBLIC, META_STRATEGY, DEFAULT_PUBLIC_PATHS, DEFAULT_OAUTH2_STATE_TTL_SECONDS, DEFAULT_API_KEY_SIGN_SKEW_SECONDS, OAUTH2_STATE_CACHE_PREFIX } from './constants.js';
 export type { PermissionCode } from './constants.js';
 export type {
   AuditAction,
@@ -100,6 +104,7 @@ export type {
   LoginResult,
   MeResult,
   MenuNode,
+  OAuth2ProviderConfig,
   PageParams,
   PasswordPolicy,
   PermissionType,

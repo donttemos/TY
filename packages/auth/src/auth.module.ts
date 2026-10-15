@@ -9,6 +9,8 @@
  * @modified 2026-10-13 donttemo allowRegister 缺省回落 false（默认关闭自助注册）
  * @modified 2026-10-13 donttemo cache 支持类形态（M4：应用侧把 @fw/cache 适配为 AuthCachePort 需 DI）
  * @modified 2026-10-13 donttemo APP_GUARD / APP_INTERCEPTOR 改 useFactory + 显式 inject（不再依赖 design:paramtypes 元数据）
+ * @modified 2026-10-15 donttemo E-07：新增 AUTH_OAUTH2_FLOW（授权码流服务，state 经 AuthCachePort 多实例共享）、
+ *   apikey 签名密钥接线、AUTH_OAUTH2_PROVIDERS / AUTH_OAUTH2_REDIRECT_WHITELIST / AUTH_API_KEY_SIGN_SECRET 三个新键
  * @module @fw/auth
  */
 
@@ -33,6 +35,7 @@ import {
   DEFAULT_STRATEGY,
 } from './constants.js';
 import { parseDurationSeconds } from './duration.js';
+import { OAuth2FlowService, parseOAuth2Providers, parseRedirectWhitelist } from './oauth2-flow.js';
 import { LoginSecurity } from './login-security.js';
 import { PasswordService } from './password.service.js';
 import { PermissionService } from './permission.service.js';
@@ -50,7 +53,7 @@ import {
 } from './strategies.js';
 import { TokenService } from './token.service.js';
 import { TokenBlacklist } from './token-blacklist.js';
-import { AUTH_CACHE, AUTH_OAUTH2_HANDLERS, AUTH_OPTIONS, AUTH_SESSION_STORE, AUTH_STORE, AUTH_STRATEGY_REGISTRY } from './tokens.js';
+import { AUTH_CACHE, AUTH_OAUTH2_FLOW, AUTH_OAUTH2_HANDLERS, AUTH_OPTIONS, AUTH_SESSION_STORE, AUTH_STORE, AUTH_STRATEGY_REGISTRY } from './tokens.js';
 import type { AuthOptions, AuthStrategyName, PasswordPolicy } from './types.js';
 
 /** 环境变量结构子集（真实 Env 天然满足；测试可传桩对象） */
@@ -66,6 +69,12 @@ export interface AuthEnvLike {
   JWT_SECRET?: string;
   JWT_SECRET_PREV?: string;
   AUTH_API_KEYS?: string;
+  /** API Key 签名密钥（E-07）：配置后 apikey 策略强制验签 */
+  AUTH_API_KEY_SIGN_SECRET?: string;
+  /** OAuth2 提供方配置 JSON（E-07）：{ provider: { clientId, clientSecret, authorizeUrl, tokenUrl, userInfoUrl, scope? } } */
+  AUTH_OAUTH2_PROVIDERS?: string;
+  /** OAuth2 回调地址白名单（E-07）：逗号分隔前缀；空 = 全拒（默认安全） */
+  AUTH_OAUTH2_REDIRECT_WHITELIST?: string;
 }
 
 /** forRoot 入参 */
@@ -121,6 +130,11 @@ export function buildAuthOptions(env: AuthEnvLike, overrides: Partial<AuthOption
     jwtSecret,
     jwtSecretPrev: overrides.jwtSecretPrev ?? env.JWT_SECRET_PREV,
     apiKeys: overrides.apiKeys ?? parseApiKeys(env.AUTH_API_KEYS),
+    apiKeySignSecret: overrides.apiKeySignSecret ?? (env.AUTH_API_KEY_SIGN_SECRET || undefined),
+    oauth2Providers:
+      overrides.oauth2Providers ?? parseOAuth2Providers(env.AUTH_OAUTH2_PROVIDERS),
+    oauth2RedirectWhitelist:
+      overrides.oauth2RedirectWhitelist ?? parseRedirectWhitelist(env.AUTH_OAUTH2_REDIRECT_WHITELIST),
     loginRateLimit: overrides.loginRateLimit ?? DEFAULT_LOGIN_RATE_LIMIT,
     permissionCacheTtlSeconds: overrides.permissionCacheTtlSeconds ?? DEFAULT_PERMISSION_CACHE_TTL_SECONDS,
     publicPaths: overrides.publicPaths ?? [...DEFAULT_PUBLIC_PATHS],
@@ -215,12 +229,25 @@ export class AuthModule {
           for (const [provider, handler] of Object.entries(oauth2Handlers)) oauth2.registerProvider(provider, handler);
           return new StrategyRegistry([
             new JwtStrategy(tokens, blacklist),
-            new ApiKeyStrategy(config.apiKeys),
+            // E-07：签名密钥配置后 apikey 强制验签（X-Api-Sign / X-Api-Timestamp）
+            new ApiKeyStrategy(config.apiKeys, { signSecret: config.apiKeySignSecret }),
             new SessionStrategy(sessionStore),
             oauth2,
           ]);
         },
         inject: [TokenService, TokenBlacklist, AUTH_OPTIONS, AUTH_SESSION_STORE, AUTH_OAUTH2_HANDLERS],
+      },
+      {
+        // E-07：OAuth2 授权码流服务（authorize URL 构建 / state 一次性消费 / code 交换），
+        // 状态经 AuthCachePort 存取——redis 驱动下多实例共享，回调可落在任意实例
+        provide: AUTH_OAUTH2_FLOW,
+        useFactory: (config: AuthOptions, cache: AuthCachePort) =>
+          new OAuth2FlowService({
+            providers: config.oauth2Providers,
+            cache,
+            redirectWhitelist: config.oauth2RedirectWhitelist,
+          }),
+        inject: [AUTH_OPTIONS, AUTH_CACHE],
       },
       {
         provide: AuthService,
@@ -279,7 +306,7 @@ export class AuthModule {
       module: AuthModule,
       global: true,
       providers,
-      exports: [AUTH_STORE, AUTH_OPTIONS, AuthService, PermissionService, PasswordService, TokenService, TokenBlacklist, RefreshTokenService, AuditService, LoginSecurity],
+      exports: [AUTH_STORE, AUTH_OPTIONS, AUTH_OAUTH2_FLOW, AuthService, PermissionService, PasswordService, TokenService, TokenBlacklist, RefreshTokenService, AuditService, LoginSecurity],
     };
   }
 }

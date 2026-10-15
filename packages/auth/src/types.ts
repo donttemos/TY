@@ -271,6 +271,22 @@ export interface AuthOptions {
   jwtSecretPrev?: string;
   /** API Key 列表（AUTH_API_KEYS）：key → 主体名与权限码 */
   apiKeys: ApiKeyEntry[];
+  /**
+   * API Key 签名密钥（AUTH_API_KEY_SIGN_SECRET，E-07）：配置后 apikey 策略强制验签
+   * （`X-Api-Timestamp` + `X-Api-Sign`，约定见 docs/41）；缺省仅验 key（向后兼容）。
+   */
+  apiKeySignSecret?: string;
+  /**
+   * OAuth2 提供方配置（AUTH_OAUTH2_PROVIDERS，E-07）：授权码客户端所需端点与凭据，
+   * JSON 对象串解析（provider → 配置）；空串 = 未启用任何提供方。
+   */
+  oauth2Providers: OAuth2ProviderConfig[];
+  /**
+   * OAuth2 回调地址白名单（AUTH_OAUTH2_REDIRECT_WHITELIST，E-07）：
+   * authorize 端点只接受前缀命中白名单的 redirect_uri（NFR 安全：回调域名白名单）；
+   * 空 = 拒绝一切回调地址（默认安全）。
+   */
+  oauth2RedirectWhitelist: string[];
   /** 登录接口限流：窗口秒数与窗口内最大次数 */
   loginRateLimit: { windowSeconds: number; max: number };
   /** 权限缓存 TTL（秒） */
@@ -287,6 +303,27 @@ export interface ApiKeyEntry {
   subject: string;
   /** 授权权限码；空数组表示无任何权限（默认拒绝） */
   scopes: string[];
+}
+
+/**
+ * OAuth2 提供方配置（E-07 授权码客户端，AUTH_OAUTH2_PROVIDERS JSON 单条）
+ * 语义：标准 RFC 6749 授权码流程四端点 + 客户端凭据；scope 可选。
+ */
+export interface OAuth2ProviderConfig {
+  /** 提供方名（authorize/callback 路由段；须匹配 ^[a-z][a-z0-9_-]{0,31}$） */
+  provider: string;
+  /** 客户端 ID（IdP 签发） */
+  clientId: string;
+  /** 客户端密钥（仅服务端持有，不进日志） */
+  clientSecret: string;
+  /** IdP 授权端点（浏览器 302 目标） */
+  authorizeUrl: string;
+  /** IdP 令牌端点（code 换 access_token） */
+  tokenUrl: string;
+  /** IdP 用户信息端点（Bearer token 拉取身份声明） */
+  userInfoUrl: string;
+  /** 申请的 scope（空格分隔，可省略） */
+  scope?: string;
 }
 
 /** 密码强度策略档位 */

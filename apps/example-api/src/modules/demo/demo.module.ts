@@ -18,6 +18,7 @@ import { DbModule, DB_CLIENT, TENANT_DATA_SOURCE, withSlowQueryLog, type DbReadi
 import { DemoController } from './demo.controller.js';
 import { DemoItemRepository } from './demo-item.repository.js';
 import { DemoTenantItemsController } from './demo-tenant-items.controller.js';
+import { OpenController } from './open.controller.js';
 import { createTenantDataSource } from '../tenant/tenant-data-source.js';
 
 /** 配置驱动名 → Prisma provider 名（postgres 是配置侧简称） */
@@ -55,7 +56,7 @@ export const tenantDataSource = createTenantDataSource(instrumentedClient, env.D
       readinessProbe: dbReadinessProbe,
     }),
   ],
-  controllers: [DemoController, DemoTenantItemsController],
+  controllers: [DemoController, DemoTenantItemsController, OpenController],
   providers: [
     DemoItemRepository,
     { provide: TENANT_DATA_SOURCE, useValue: tenantDataSource },

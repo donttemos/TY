@@ -25,6 +25,9 @@ export const AUTH_SESSION_STORE = Symbol('fw.auth.sessionStore');
 /** OAuth2 提供方处理器集合 */
 export const AUTH_OAUTH2_HANDLERS = Symbol('fw.auth.oauth2Handlers');
 
+/** OAuth2 授权码流服务（E-07：authorize URL 构建 / state 消费 / code 交换） */
+export const AUTH_OAUTH2_FLOW = Symbol('fw.auth.oauth2Flow');
+
 /**
  * 数据范围组织解析端口（PRD-008 FR-04/FR-05）：org / org_below 档的部门查询能力，
  * 通常与 AuthStore 为同一实现（业务侧经 DI 适配注册，见 example-api AppAuthModule）。

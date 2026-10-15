@@ -19,6 +19,8 @@
  *   CONFIG_CENTER_NACOS_* 键（服务地址/dataId/分组/命名空间/鉴权用户名密码）——72 键
  * @modified 2026-10-15 donttemo M10/E-03 新增 5 个 RATE_LIMIT_* 键（容量/每秒补充/豁免前缀/
  *   故障放行/灰度仅告警）——G5「限流默认开启」的框架级落地，77 键
+ * @modified 2026-10-15 donttemo M10/E-07 新增 3 个 AUTH_* 键（OAuth2 提供方 JSON / 回调地址白名单 /
+ *   API Key 签名密钥）——认证策略名实相符，80 键；全部 boot 键不入热更白名单
  * @module config
  * @since v0.1.0
  */
@@ -135,6 +137,12 @@ export const envSchema = z.object({
   JWT_SECRET_PREV: optionalString().describe('上一版 JWT 签名密钥（轮换过渡）'),
   /** API Key 列表，格式 `key:主体名[:权限码,权限码]`，逗号分隔（开放接口策略） */
   AUTH_API_KEYS: z.string().default('').describe('API Key 列表'),
+  /** API Key 签名密钥（M10/E-07）：配置后 apikey 策略强制验签（X-Api-Timestamp + X-Api-Sign，约定见 docs/41）；敏感键不入日志 */
+  AUTH_API_KEY_SIGN_SECRET: optionalString().describe('API Key 签名密钥（AUTH_API_KEY_SIGN_SECRET）'),
+  /** OAuth2 提供方配置（M10/E-07）：JSON 对象串 { provider: { clientId, clientSecret, authorizeUrl, tokenUrl, userInfoUrl, scope? } }；空 = 未启用 */
+  AUTH_OAUTH2_PROVIDERS: z.string().default('').describe('OAuth2 提供方配置（AUTH_OAUTH2_PROVIDERS，JSON）'),
+  /** OAuth2 回调地址白名单（M10/E-07）：逗号分隔前缀（NFR 安全）；空 = 拒绝一切回调地址（默认安全） */
+  AUTH_OAUTH2_REDIRECT_WHITELIST: z.string().default('').describe('OAuth2 回调地址白名单（AUTH_OAUTH2_REDIRECT_WHITELIST，逗号分隔前缀）'),
   /** 队列驱动 */
   MQ_DRIVER: z.enum(MQ_DRIVER_VALUES).default('memory').describe('队列驱动'),
   /** 队列 Redis 连接串（bullmq 驱动；留空时回退 CACHE_URL，两者都为空则启动失败） */
@@ -295,6 +303,9 @@ export const ENV_KEY_PATHS = {
   AUTH_PASSWORD_POLICY: 'auth.passwordPolicy',
   AUTH_ALLOW_REGISTER: 'auth.allowRegister',
   AUTH_API_KEYS: 'auth.apiKeys',
+  AUTH_API_KEY_SIGN_SECRET: 'auth.apiKeySignSecret',
+  AUTH_OAUTH2_PROVIDERS: 'auth.oauth2.providers',
+  AUTH_OAUTH2_REDIRECT_WHITELIST: 'auth.oauth2.redirectWhitelist',
   JWT_SECRET: 'jwt.secret',
   JWT_SECRET_PREV: 'jwt.secretPrev',
   MQ_DRIVER: 'mq.driver',

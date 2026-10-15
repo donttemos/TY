@@ -42,6 +42,8 @@ export function buildTestOptions(overrides: Partial<AuthOptions> = {}): AuthOpti
     jwtSecret: TEST_SECRET,
     jwtSecretPrev: undefined,
     apiKeys: [],
+    oauth2Providers: [],
+    oauth2RedirectWhitelist: [],
     loginRateLimit: { windowSeconds: 60, max: 1000 },
     permissionCacheTtlSeconds: 60,
     publicPaths: ['/health', '/ready', '/metrics'],

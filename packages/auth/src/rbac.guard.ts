@@ -153,6 +153,9 @@ export class RbacGuard implements CanActivate {
       headers: request.headers ?? {},
       ip: request.ip,
       userAgent: typeof request.headers?.['user-agent'] === 'string' ? (request.headers['user-agent'] as string) : undefined,
+      // E-07：method/path 供 apikey 签名参与串接（路径不含查询串）
+      method: request.method,
+      path: (request.url ?? '').split('?')[0],
     });
   }
 
