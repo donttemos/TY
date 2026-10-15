@@ -352,3 +352,103 @@ describe('list / meta', () => {
     expect(center.meta().lastError).toBeNull();
   });
 });
+
+describe('一键回滚（M9 Backlog）', () => {
+  it('缺省回滚到上一版本：目标未覆盖的键恢复 env 默认，逐键通知，回滚计入历史', async () => {
+    const driver = makeDriver();
+    const audit = makeAudit();
+    const center = new ConfigCenterService({ driver, env: makeEnv(), audit });
+    await center.init();
+    const notified: Array<[string, unknown]> = [];
+    center.onChange('cache.ttl', (value) => notified.push(['cache.ttl', value]));
+
+    await center.write('log.level', 'debug', apiCtx); // v2：覆盖 {log.level}
+    await center.write('cache.ttl', 600, apiCtx); // v3：覆盖 {log.level, cache.ttl}
+
+    const result = await center.rollback(undefined, apiCtx); // → v2 的覆盖集 {log.level: debug}
+    expect(result.fromVersion).toBe(3);
+    expect(result.toVersion).toBe(2);
+    expect(result.changed).toEqual([{ key: 'cache.ttl', oldValue: 600, newValue: 300 }]); // log.level 同值不动
+    expect(result.snapshotVersion).toBe(4); // 回滚本身也是版本推进
+    expect(center.list().find((e) => e.key === 'cache.ttl')).toMatchObject({ value: 300, source: 'env' });
+    expect(center.list().find((e) => e.key === 'log.level')).toMatchObject({ value: 'debug', source: 'runtime' });
+    expect(notified).toContainEqual(['cache.ttl', 300]);
+    // 审计逐键落盘（仅 cache.ttl 一条实际变更）
+    const rollbackAudits = audit.records.slice(-1);
+    expect(rollbackAudits[0]).toMatchObject({ key: 'cache.ttl', ok: true, source: 'api', operator: 'admin' });
+    // 持久化的是目标覆盖集（不含已恢复的 cache.ttl）
+    expect(driver.persisted.at(-1)).toEqual({ 'log.level': 'debug' });
+  });
+
+  it('连续回滚可一路回到初始快照；回滚再回滚 = 撤销回滚；指定不存在版本 → 404/5003', async () => {
+    const driver = makeDriver();
+    const audit = makeAudit();
+    const center = new ConfigCenterService({ driver, env: makeEnv(), audit });
+    await center.init();
+    await center.write('log.level', 'debug', apiCtx); // v2
+
+    // 指定版本不存在（进程内只有 v1/v2）
+    await expect(center.rollback(99, apiCtx)).rejects.toMatchObject({ code: ErrorCode.CONFIG_NOT_FOUND });
+
+    const r1 = await center.rollback(undefined, apiCtx); // → v1 覆盖集 {}
+    expect(r1.changed).toEqual([{ key: 'log.level', oldValue: 'debug', newValue: 'info' }]);
+    expect(center.list().find((e) => e.key === 'log.level')?.source).toBe('env');
+
+    // 回滚本身计入历史 → 再次回滚 = 撤销回滚（回到 v2 的覆盖集）
+    const r2 = await center.rollback(undefined, apiCtx);
+    expect(r2.changed).toEqual([{ key: 'log.level', oldValue: 'info', newValue: 'debug' }]);
+    expect(center.list().find((e) => e.key === 'log.level')).toMatchObject({ value: 'debug', source: 'runtime' });
+  });
+
+  it('启动后无成功变更 → 无历史可回滚，1004 拒绝', async () => {
+    const driver = makeDriver();
+    const audit = makeAudit();
+    const center = new ConfigCenterService({ driver, env: makeEnv(), audit });
+    await center.init();
+    await expect(center.rollback(undefined, apiCtx)).rejects.toMatchObject({ code: ErrorCode.STATE_NOT_ALLOWED });
+  });
+
+  it('反向验证：审计失败 → 回滚整体不生效（覆盖集 / 版本号 / 事实源均保持回滚前状态）', async () => {
+    const driver = makeDriver();
+    const audit = makeAudit();
+    const center = new ConfigCenterService({ driver, env: makeEnv(), audit });
+    await center.init();
+    await center.write('log.level', 'debug', apiCtx); // v2
+    await center.write('cache.ttl', 600, apiCtx); // v3
+
+    audit.fail = true;
+    const persistedCount = driver.persisted.length;
+    await expect(center.rollback(undefined, apiCtx)).rejects.toMatchObject({ code: ErrorCode.INTERNAL });
+    // 全量预审计失败：事实源未写、覆盖集未动、版本号未推进
+    expect(driver.persisted).toHaveLength(persistedCount);
+    expect(center.list().find((e) => e.key === 'cache.ttl')).toMatchObject({ value: 600, source: 'runtime' });
+    expect(center.snapshotVersion).toBe(3);
+  });
+
+  it('回滚持久化失败 → 整体失败（先落盘后生效）', async () => {
+    const driver = makeDriver();
+    const audit = makeAudit();
+    const center = new ConfigCenterService({ driver, env: makeEnv(), audit });
+    await center.init();
+    await center.write('log.level', 'debug', apiCtx);
+    await center.write('cache.ttl', 600, apiCtx);
+
+    driver.failWrite = true;
+    await expect(center.rollback(undefined, apiCtx)).rejects.toMatchObject({ code: ErrorCode.INTERNAL });
+    expect(center.snapshotVersion).toBe(3); // 版本未推进
+    expect(center.list().find((e) => e.key === 'cache.ttl')).toMatchObject({ value: 600 });
+  });
+
+  it('目标状态与当前一致（无差异键）→ 不产生审计与持久化，版本号不变', async () => {
+    const driver = makeDriver();
+    const audit = makeAudit();
+    const center = new ConfigCenterService({ driver, env: makeEnv(), audit });
+    await center.init();
+    await center.write('log.level', 'debug', apiCtx); // v2
+
+    const result = await center.rollback(2, apiCtx); // 回滚到当前版本自身
+    expect(result.changed).toEqual([]);
+    expect(result.snapshotVersion).toBe(2);
+    expect(audit.records).toHaveLength(1); // 只有最初 write 的那一条
+  });
+});

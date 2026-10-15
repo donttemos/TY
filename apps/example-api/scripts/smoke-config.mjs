@@ -232,6 +232,41 @@ async function phaseEnabled(runtimeFile) {
     restoredTtl?.value === 300 && restoredTtl?.source === 'env',
     `value=${restoredTtl?.value} source=${restoredTtl?.source}`);
 
+  // ---------- G2. 一键回滚（M9 Backlog）----------
+  console.log('\n—— 阶段 G2：一键回滚 ——');
+  const rbPut1 = await call('/api/v1/configs/log.level', { method: 'PUT', headers: auth(admin), body: JSON.stringify({ value: 'debug' }) });
+  const rbPut2 = await call('/api/v1/configs/cache.ttl', { method: 'PUT', headers: auth(admin), body: JSON.stringify({ value: 900 }) });
+  const vA = rbPut1.body?.data?.snapshotVersion;
+  const vB = rbPut2.body?.data?.snapshotVersion;
+  check('回滚前置：两次 PUT 成功（v_a/v_b 版本号单调）', isOk(rbPut1.status) && isOk(rbPut2.status) && vB > vA, `vA=${vA} vB=${vB}`);
+
+  const aliceRb = await call('/api/v1/configs/rollback', { method: 'POST', headers: auth(alice), body: JSON.stringify({}) });
+  check('alice 无 system:config:write → 403/3002', aliceRb.status === 403 && aliceRb.body?.code === 3002, `http=${aliceRb.status} code=${aliceRb.body?.code}`);
+  const rbBad = await call('/api/v1/configs/rollback', { method: 'POST', headers: auth(admin), body: JSON.stringify({ version: 99999 }) });
+  check('回滚到不存在版本 → 404/5003', rbBad.status === 404 && rbBad.body?.code === 5003, `http=${rbBad.status} code=${rbBad.body?.code}`);
+
+  const rb1 = await call('/api/v1/configs/rollback', { method: 'POST', headers: auth(admin), body: JSON.stringify({ version: vA }) });
+  const rb1Changed = rb1.body?.data?.changed ?? [];
+  check(`回滚到 v${vA}：cache.ttl 恢复 env 默认（900→300），log.level 同值不动`,
+    isOk(rb1.status) && rb1.body?.data?.toVersion === vA
+    && rb1Changed.some((c) => c.key === 'cache.ttl' && c.oldValue === 900 && c.newValue === 300)
+    && !rb1Changed.some((c) => c.key === 'log.level'),
+    `http=${rb1.status} changed=${rb1Changed.map((c) => c.key).join(',')}`);
+  const listAfterRb1 = await call('/api/v1/configs', { headers: auth(admin) });
+  const rbTtl = (listAfterRb1.body?.data?.configs ?? []).find((c) => c.key === 'cache.ttl');
+  const rbLevel = (listAfterRb1.body?.data?.configs ?? []).find((c) => c.key === 'log.level');
+  check('回滚已生效：cache.ttl=300(env) / log.level=debug(runtime)',
+    rbTtl?.value === 300 && rbTtl?.source === 'env' && rbLevel?.value === 'debug' && rbLevel?.source === 'runtime',
+    `ttl=${rbTtl?.value}/${rbTtl?.source} level=${rbLevel?.value}/${rbLevel?.source}`);
+
+  const rb2 = await call('/api/v1/configs/rollback', { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${admin}` }, body: '{}' });
+  check('缺省回滚 = 撤销上一次回滚（cache.ttl 回到 900）',
+    isOk(rb2.status) && (rb2.body?.data?.changed ?? []).some((c) => c.key === 'cache.ttl' && c.newValue === 900),
+    `http=${rb2.status} toVersion=${rb2.body?.data?.toVersion}`);
+  const rbAudit = await call('/api/v1/audit-logs?module=config&page=1&pageSize=50', { headers: auth(admin) });
+  check('回滚逐键审计可查（cache.ttl 回滚链 ok=true）',
+    (rbAudit.body?.data?.items ?? []).some((a) => a.targetId === 'cache.ttl' && a.afterValue?.ok === true && a.afterValue?.value === 300));
+
   await stopServer(server);
   return { admin };
 }
@@ -254,6 +289,12 @@ async function phaseDisabled() {
   });
   check('未启用：PUT 一律 400/1004（无事实源，在线修改不可用）',
     put.status === 400 && put.body?.code === 1004, `http=${put.status} code=${put.body?.code}`);
+  const rollbackDisabled = await call('/api/v1/configs/rollback', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${admin}` },
+    body: '{}',
+  });
+  check('未启用：回滚一律 400/1004', rollbackDisabled.status === 400 && rollbackDisabled.body?.code === 1004, `http=${rollbackDisabled.status} code=${rollbackDisabled.body?.code}`);
   await stopServer(server);
 }
 

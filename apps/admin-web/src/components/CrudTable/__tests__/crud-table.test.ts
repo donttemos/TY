@@ -5,6 +5,8 @@
  *   查询参数拼装（分页 + 固定 filters）、错误态 traceId 展示。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo N-03：补 3002 无权限整页视图断言（出现 / 不误报「加载失败」/ 恢复路径），
+ *   并做反向验证——非 3002 错误码不得落入无权限视图
  * @module admin-web/components
  */
 
@@ -99,6 +101,41 @@ describe('CrudTable 四态与权限', () => {
     await flushPromises();
     expect(wrapper.text()).toContain('加载失败');
     expect(wrapper.text()).toContain('trace-xyz-789');
+  });
+
+  it('无权限态（N-03）：列表 3002 整页替换为无权限视图，不落「加载失败」', async () => {
+    mockedGet.mockRejectedValue(new BizError(BIZ_CODE.FORBIDDEN, '', 'trace-forbid-1'));
+    const wrapper = mountTable('user');
+    await flushPromises();
+    expect(wrapper.text()).toContain('403');
+    expect(wrapper.text()).toContain('无权访问该页面数据');
+    expect(wrapper.text()).toContain('返回工作台');
+    // 3002 是权限判定结论：不得出现「加载失败」与「重试」按钮（重试只会再次 3002）
+    expect(wrapper.text()).not.toContain('加载失败');
+    expect(wrapper.text()).not.toContain('重试');
+  });
+
+  it('反向验证：非 3002 业务错误（如 1003）仍走「加载失败」，不得误报无权限视图', async () => {
+    mockedGet.mockRejectedValue(new BizError(BIZ_CODE.CONFLICT, '冲突', 'trace-conflict-1'));
+    const wrapper = mountTable('user');
+    await flushPromises();
+    expect(wrapper.text()).toContain('加载失败');
+    expect(wrapper.text()).not.toContain('无权访问该页面数据');
+  });
+
+  it('恢复路径：无权限后重挂载重拉成功，无权限视图退场、表格回归', async () => {
+    mockedGet.mockRejectedValueOnce(new BizError(BIZ_CODE.FORBIDDEN, '', 'trace-forbid-2'));
+    const wrapper = mountTable('user');
+    await flushPromises();
+    expect(wrapper.text()).toContain('403');
+    wrapper.unmount();
+
+    // fetchList 每次进入都会重置 forbidden/error：同一实例重拉成功即退场（此处经重挂载覆盖同一路径）
+    mockedGet.mockResolvedValue(pagePayload([{ id: '1', username: 'admin', nickname: '管理员' }], 1));
+    const wrapper2 = mountTable('user');
+    await flushPromises();
+    expect(wrapper2.text()).toContain('admin');
+    expect(wrapper2.text()).not.toContain('无权访问该页面数据');
   });
 
   it('权限：持有 user:create 才渲染「新建」按钮', async () => {

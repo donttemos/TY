@@ -279,6 +279,7 @@
 |---|---|---|---|
 | GET | `/configs` | `system:config:read` | 白名单键当前生效值列表：`{key, value, source(runtime/env), hot, envKey, updatedAt}` + 运行元信息 `meta`（驱动 / 快照版本号 / 轮询间隔 / 最近生效时间 / 最近错误） |
 | PUT | `/configs/:key` | `system:config:write` | 修改白名单键，body `{value}`（JSON 语义）；响应 `{key, oldValue, newValue, snapshotVersion}`。错误：白名单外 `400/5001`、值非法 `400/5002`（`details` 带原因，**信封顶层**）、键不存在 `404/5003`；同值写入视为无变更（不产生审计） |
+| POST | `/configs/rollback` | `system:config:write` | 一键回滚（M9 Backlog）：body `{version?}`（缺省 = 上一个快照版本）；响应 `{fromVersion, toVersion, changed:[{key,oldValue,newValue}], snapshotVersion}`。三阶段：全量预审计（任一失败整体不生效）→ 持久化目标覆盖 → 逐键应用并通知；回滚本身计入历史（可再回滚 = 撤销回滚）。错误：版本不存在（进程内仅保留最近 20 版）`404/5003`、无历史可回滚 `400/1004`、审计/持久化失败 `500/9001`；未启用 `400/1004` |
 
 ## 4. 限流与幂等
 

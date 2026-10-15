@@ -8,7 +8,10 @@
  * @created 2026-10-13
  * @modified 2026-10-15 donttemo 死信窗口下推到 Redis：listDeadLetters 用 getFailed(start,end) 只取当前页，
  *   新增 countDeadLetters（优先 getFailedCount，缺失时按保留上限回退计数）
- * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：新增 applyRuntimeOptions——concurrency 经 Worker 原生可变属性即时生效；rateLimit 固化待重建并 WARN
+ * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：新增 applyRuntimeOptions——concurrency 经 Worker 原生可变属性即时生效
+ * @modified 2026-10-15 donttemo rateLimit 热更收口：限速变更时**先建新消费器（新 limiter）再关旧**，
+ *   消除「待重启才生效」的固化窗口；重建失败回滚沿用旧消费器，不让热更把消费面打没。
+ *   旧消费器优雅关闭（等待在途），短暂并存由 bullmq 同队列多消费器语义兜底。
  * @module @fw/queue
  */
 
@@ -87,6 +90,7 @@ export class BullmqQueueDriver implements QueueDriverPort {
 
   /** @inheritdoc */
   applyRuntimeOptions(patch: { concurrency?: number; rateLimit?: number }): void {
+    const prevRateLimit = this.options.rateLimit;
     Object.assign(this.options, patch);
     if (patch.concurrency !== undefined) {
       // bullmq Worker 的 concurrency 是原生可变属性：即时收敛在途消费循环
@@ -95,9 +99,38 @@ export class BullmqQueueDriver implements QueueDriverPort {
         logger.debug('消费器并发已热更', { queue: name, concurrency: patch.concurrency });
       }
     }
-    if (patch.rateLimit !== undefined) {
-      // limiter 随 Worker 创建固化、运行时不可变：记 WARN 提示待消费器重建（重启 / 队列重建）后生效
-      logger.warn('bullmq 限速器随消费器创建固化，运行时限速变更待消费器重建后生效', { rateLimit: patch.rateLimit });
+    if (patch.rateLimit !== undefined && patch.rateLimit !== prevRateLimit) {
+      // limiter 随 Worker 创建固化、运行时不可变 → 重建消费器生效（先建新再关旧，见 rebuildWorkers）
+      void this.rebuildWorkers().catch((error: unknown) => {
+        logger.error('限速热更重建流程异常', { rateLimit: patch.rateLimit, error: error instanceof Error ? error.message : String(error) });
+      });
+    }
+  }
+
+  /**
+   * 消费器重建（限速热更的生效路径）：**先建新（携带新 limiter）再关旧**——
+   * 新旧短暂并存（bullmq 同队列多消费器合法），避免重建期间的消费空窗；
+   * 旧消费器优雅关闭（等待在途，不强制），在途任务完成语义不变。
+   * 单队列重建失败时回滚登记旧消费器继续消费，不让热更把消费面打没。
+   */
+  private async rebuildWorkers(): Promise<void> {
+    for (const name of [...this.workers.keys()]) {
+      const stale = this.workers.get(name);
+      if (!stale) continue;
+      this.workers.delete(name);
+      try {
+        await this.ensureWorker(name);
+      } catch (error) {
+        this.workers.set(name, stale);
+        logger.error('消费器限速热更重建失败，沿用旧消费器（旧 limiter 语义不变）', {
+          queue: name,
+          rateLimit: this.options.rateLimit,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        continue;
+      }
+      logger.info('消费器已按新限速重建', { queue: name, rateLimit: this.options.rateLimit });
+      void stale.close().catch(() => undefined);
     }
   }
 

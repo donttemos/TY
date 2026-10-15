@@ -157,14 +157,16 @@ v0.3.0 收口「真机可用性」后，M8 终验留下的最后一个**需求�
 
 ## 6. 遗留问题
 
+> **2026-10-15 发布后收口注记**：R4-02（L-04）/ R4-04（N-03）/ R4-06（rateLimit）已于发布当日收口；R4-03 三项中两项（回滚 API / Nacos adapter）已实现、tenant-scoped config 设计完成待排期。详见 [CHANGELOG Unreleased](../CHANGELOG.md) 与 [94 实测记录](./94-redis-cluster-live-test.md)。下表保留发布时点结论。
+
 | 编号 | 内容 | 影响 | 归属 |
 |---|---|---|---|
 | R4-01 | **L-01** 真实 K8s 集群部署冒烟 | Helm Chart 已有离线渲染门禁，缺真实集群验证 | 需外部环境 |
-| R4-02 | **L-04** Redis Cluster 实跑 | cluster 驱动有单测与降级路径，缺真实实例实测 | 需外部环境 |
-| R4-03 | **M9 Backlog**：tenant-scoped config、一键回滚 API、Nacos adapter 示例 | 配置中心进阶能力 | v0.4.0 后迭代规划 |
-| R4-04 | **N-03 整页 403 视图**：`3002` 仍走通用错误提示 | 体验项，纯前端 | 待排期 |
+| ~~R4-02~~ | ~~L-04 Redis Cluster 实跑~~ → ✅ **已收口**（真机 6 节点集群实跑 8/8，见 [94](./94-redis-cluster-live-test.md)；`@fw/queue`/`@fw/transport` 的 cluster 段另行评估） | — | 已收口 |
+| R4-03 | **M9 Backlog**：~~一键回滚 API~~（✅ 已实现，api-spec §3.10）、~~Nacos adapter 示例~~（✅ 已实现，`NacosConfigDriver`）、tenant-scoped config（📐 设计完成待排期，PRD-009 §11） | 配置中心进阶能力 | 已大半收口 |
+| ~~R4-04~~ | ~~N-03 整页 403 视图~~ → ✅ **已收口**（CrudTable 3002 → 无权限整页视图，含反向验证单测） | — | 已收口 |
 | R4-05 | **R3-05（沿用）** 工作台统计口径与 `dataScope=self` 的关系未细化 | 指标语义 | 产品待决策 |
-| R4-06 | bullmq `rateLimit` 运行时固化（热更需 Worker 重建，当前 WARN 提示） | 极端场景下热更不完整，并发可热更 | 后续版本 |
+| ~~R4-06~~ | ~~bullmq rateLimit 运行时固化~~ → ✅ **已收口**（限速变更重建消费器生效：先建新再关旧，失败回滚） | — | 已收口 |
 
 ## 7. 判定
 

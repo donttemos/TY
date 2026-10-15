@@ -5,6 +5,8 @@
  *   白名单从 @fw/config 的 ENV_HOT_KEYS 派生（fail-safe：未登记即不可热更）；非法值拒绝时旧值保持并记失败审计。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-15 donttemo M9 Backlog：一键回滚——进程内快照历史环形表（20 条）+ rollback()
+ *   （先全量预审计 → 持久化目标覆盖 → 逐键应用并通知；回滚本身也是一次版本推进并计入历史）
  * @module config-center
  */
 import { envSchema, ENV_HOT_KEYS, ENV_KEY_PATHS, type Env } from '@fw/config';
@@ -15,12 +17,18 @@ import type {
   ConfigCenterMeta,
   ConfigDriverPort,
   ConfigEntryView,
+  ConfigRollbackChange,
+  ConfigRollbackResult,
+  ConfigSnapshotEntry,
   ConfigWriteContext,
   ConfigWriteResult,
   Unsubscribe,
 } from './types.js';
 
 const logger = Logger.for('config.center');
+
+/** 快照历史保留上限（进程内环形；超出淘汰最旧，回滚到已淘汰版本报 5003） */
+const MAX_HISTORY = 20;
 
 /** 点路径 → Env 键名（热更新白名单倒排） */
 const HOT_PATH_TO_ENV: ReadonlyMap<string, string> = new Map(Object.entries(ENV_HOT_KEYS).map(([path, envKey]) => [path, envKey]));
@@ -86,6 +94,9 @@ export class ConfigCenterService {
   /** 防止并发轮询 diff 与 API 写交错时重复应用同一键（进程内串行即可） */
   private applying = false;
 
+  /** 快照历史（环形，按 version 升序追加；回滚数据源） */
+  private readonly history: ConfigSnapshotEntry[] = [];
+
   constructor(options: ConfigCenterOptions) {
     this.driver = options.driver;
     this.env = options.env;
@@ -109,6 +120,7 @@ export class ConfigCenterService {
       this.lastError = '配置事实源缺失或损坏，按 env 快照启动（fail-open）';
       logger.warn('配置中心：事实源不可读，按 env 快照启动（fail-open）', { driver: this.driver.kind });
       this.version = 1;
+      this.recordHistory();
       return;
     }
     // 全量校验：键与值任一非法即启动失败
@@ -127,6 +139,7 @@ export class ConfigCenterService {
       this.updatedAt.set(key, this.now().toISOString());
     }
     this.version = 1;
+    this.recordHistory();
     // 启动轮询：外部事实源变更 → ingestExternal（file 适配 = mtime 轮询回调；单实例语义，文档已明示）
     this.driver.watch((snapshot) => {
       void this.ingestExternal(snapshot).catch((error: unknown) => {
@@ -242,6 +255,7 @@ export class ConfigCenterService {
     this.updatedAt.set(key, change.at);
     this.version += 1;
     this.lastAppliedAt = change.at;
+    this.recordHistory();
     this.notify(key, value);
     logger.info('配置变更已生效', { key, source: ctx.source, operator: ctx.operator, snapshotVersion: this.version });
     return { key, oldValue, newValue: value, snapshotVersion: this.version };
@@ -312,12 +326,128 @@ export class ConfigCenterService {
         this.updatedAt.set(key, this.now().toISOString());
         this.version += 1;
         this.lastAppliedAt = this.updatedAt.get(key) as string;
+        this.recordHistory();
         this.notify(key, envValue);
         logger.info('配置覆盖已被事实源移除，恢复 env 默认值', { key, snapshotVersion: this.version });
       }
     } finally {
       this.applying = false;
     }
+  }
+
+  /**
+   * 一键回滚（M9 Backlog）：把运行时覆盖集恢复到某个历史快照版本。
+   *
+   * 语义与安全：
+   * - `version` 缺省 = 回滚到**上一个**历史版本（当前版本之前的最近一条）；
+   * - 目标版本必须仍在进程内历史环形表中（仅保留最近 20 条），已淘汰报 404/5003；
+   * - 三阶段：**先全量预审计**（任一审计失败 → 整体不生效）→ **持久化目标覆盖集**（API 源；失败整体失败）
+   *   → **逐键应用并通知**（与单键管道同一生效语义；目标未覆盖的键 = 恢复 env 快照值）；
+   * - 回滚本身也是一次版本推进并计入历史（回滚后可再回滚）；
+   * - 目标状态与当前一致（无差异键）→ 不产生审计与持久化，版本号不变。
+   *
+   * @param targetVersion 目标历史版本号（缺省 = 上一个版本）
+   * @param ctx 调用方上下文（api 源；回滚仅开放给管理端点）
+   */
+  async rollback(targetVersion: number | undefined, ctx: ConfigWriteContext): Promise<ConfigRollbackResult> {
+    const fromVersion = this.version;
+    let entry: ConfigSnapshotEntry;
+    if (targetVersion === undefined) {
+      const previous = [...this.history].reverse().find((e) => e.version < fromVersion);
+      if (!previous) {
+        throw new BizError(ErrorCode.STATE_NOT_ALLOWED, '没有可回滚的历史版本（启动后无成功变更）');
+      }
+      entry = previous;
+    } else {
+      const found = this.history.find((e) => e.version === targetVersion);
+      if (!found) {
+        throw new BizError(
+          ErrorCode.CONFIG_NOT_FOUND,
+          `配置历史版本 ${targetVersion} 不存在（进程内仅保留最近 ${MAX_HISTORY} 个版本）`,
+        );
+      }
+      entry = found;
+    }
+
+    // 差集计算：目标覆盖集 vs 当前覆盖集（键新增/值变化 → 写入；键移除 → 恢复 env 默认）
+    const target = entry.overlay;
+    const changes: Array<ConfigRollbackChange & { envKey: string; unset: boolean }> = [];
+    for (const [key, value] of Object.entries(target)) {
+      const envKey = HOT_PATH_TO_ENV.get(key);
+      if (!envKey) continue; // 历史条目只可能来自白名单键；防御性跳过
+      const oldValue = this.effectiveValue(key);
+      if (deepEqual(oldValue, value)) continue;
+      changes.push({ key, oldValue, newValue: value, envKey, unset: false });
+    }
+    for (const key of this.overlay.keys()) {
+      if (key in target) continue;
+      const envKey = HOT_PATH_TO_ENV.get(key);
+      if (!envKey) continue;
+      const oldValue = this.overlay.get(key);
+      const newValue = this.envValue(envKey);
+      if (deepEqual(oldValue, newValue)) continue; // 覆盖值与 env 默认相同：无生效差异，无需动
+      changes.push({ key, oldValue, newValue, envKey, unset: true });
+    }
+    if (changes.length === 0) {
+      return { fromVersion, toVersion: entry.version, changed: [], snapshotVersion: this.version };
+    }
+
+    // 阶段 1：全量预审计（任一失败 → 整体失败，不落持久化、不应用）
+    const at = this.now().toISOString();
+    for (const change of changes) {
+      await this.auditOrThrow({
+        key: change.key,
+        oldValue: change.oldValue,
+        newValue: change.newValue,
+        source: ctx.source,
+        operator: ctx.operator,
+        operatorId: ctx.operatorId ?? null,
+        ok: true,
+        traceId: getTraceId() || null,
+        at,
+      });
+    }
+
+    // 阶段 2：持久化目标覆盖集（API 源；与单键管道一致，先落盘后生效）
+    if (ctx.source === 'api') {
+      try {
+        await this.driver.write({ ...target });
+      } catch (error) {
+        const reason = `回滚持久化失败：${error instanceof Error ? error.message : String(error)}`;
+        this.lastError = reason;
+        logger.error('配置中心：回滚持久化失败（进程内保持回滚前状态）', { targetVersion: entry.version, error: reason });
+        throw new BizError(ErrorCode.INTERNAL, `配置回滚持久化失败，未生效：${reason}`);
+      }
+    }
+
+    // 阶段 3：逐键应用并通知
+    for (const change of changes) {
+      if (change.unset) this.overlay.delete(change.key);
+      else this.overlay.set(change.key, change.newValue);
+      this.updatedAt.set(change.key, at);
+      this.notify(change.key, change.newValue);
+    }
+    this.version += 1;
+    this.lastAppliedAt = at;
+    this.recordHistory();
+    logger.info('配置已回滚', {
+      fromVersion,
+      toVersion: entry.version,
+      snapshotVersion: this.version,
+      keys: changes.map((c) => c.key),
+      operator: ctx.operator,
+    });
+    return {
+      fromVersion,
+      toVersion: entry.version,
+      changed: changes.map(({ key, oldValue, newValue }) => ({ key, oldValue, newValue })),
+      snapshotVersion: this.version,
+    };
+  }
+
+  /** 快照历史条目数（诊断用） */
+  get historySize(): number {
+    return this.history.length;
   }
 
   /** 白名单键列表（GET /configs 数据源；boot 键不进列表——env 独占，重启变更） */
@@ -417,6 +547,16 @@ export class ConfigCenterService {
     for (const [key, value] of this.overlay) snapshot[key] = value;
     snapshot[pendingKey] = pendingValue;
     await this.driver.write(snapshot);
+  }
+
+  /** 记录当前版本的覆盖集快照到历史环形表（每次版本推进后调用；超上限淘汰最旧） */
+  private recordHistory(): void {
+    this.history.push({
+      version: this.version,
+      at: this.lastAppliedAt ?? this.now().toISOString(),
+      overlay: Object.fromEntries(this.overlay),
+    });
+    while (this.history.length > MAX_HISTORY) this.history.shift();
   }
 
   /** 通知订阅者：单订阅者异常不影响其他订阅者与生效结果（值已生效，通知失败不回滚） */

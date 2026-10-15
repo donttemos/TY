@@ -19,6 +19,9 @@
  *   转 snake_case（列配置可用 sortField 显式覆盖，用于展示字段 ≠ 排序字段的场景）
  * @modified 2026-10-15 donttemo 新增 hideDelete：端点语义不是「物理删除」的页面（如租户的
  *   DELETE 实为「停用」）需要自定义确认文案与提示，内置删除按钮的「删除后不可恢复」会造成误导
+ * @modified 2026-10-15 donttemo N-03：列表接口返回 3002（无操作权限）时整页替换为无权限视图
+ *   （与 /403 页同形），不再落「加载失败」通用错误态——3002 是权限判定结论而非瞬时故障，
+ *   重试按钮会造成「点了也没用」的误导；其他错误码维持原错误态。
  * @module admin-web/components
 -->
 
@@ -29,7 +32,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, Search, Setting } from '@element-plus/icons-vue';
 import DictSelect from '@/components/DictSelect/index.vue';
 import FormDialog from '@/components/FormDialog/index.vue';
-import { request, BizError, describeBizError } from '@/utils/request';
+import { request, BizError, describeBizError, BIZ_CODE } from '@/utils/request';
 import { useUserStore } from '@/store/user';
 import type { PermissionCode } from '@/api/types';
 import type { CrudColumn, FormField, FormModel, PagePayload, SearchField, SearchModel } from './types';
@@ -113,6 +116,8 @@ const page = ref(1);
 const size = ref(props.pageSize);
 const loading = ref(false);
 const error = ref<{ message: string; traceId: string | null } | null>(null);
+/** 列表接口返回 3002（无操作权限）：整页替换为无权限视图（N-03），与 /403 页同形 */
+const forbidden = ref(false);
 const sort = ref<string | null>(null);
 const selectedRows = ref<Record<string, unknown>[]>([]);
 
@@ -236,6 +241,7 @@ function buildParams(): SearchModel {
 async function fetchList(): Promise<void> {
   loading.value = true;
   error.value = null;
+  forbidden.value = false;
   try {
     const data = await request.get<PagePayload<Record<string, unknown>> | Record<string, unknown>[]>(props.api, { params: buildParams() });
     if (props.pagination) {
@@ -252,7 +258,9 @@ async function fetchList(): Promise<void> {
     list.value = [];
     total.value = 0;
     if (err instanceof BizError) {
-      error.value = { message: describeBizError(err), traceId: err.traceId };
+      // N-03：3002 是权限判定结论（非瞬时故障），整页替换为无权限视图；重试只会再次 3002
+      forbidden.value = err.code === BIZ_CODE.FORBIDDEN;
+      error.value = forbidden.value ? null : { message: describeBizError(err), traceId: err.traceId };
     } else {
       error.value = { message: '加载失败，请重试', traceId: null };
     }
@@ -533,8 +541,17 @@ onMounted(() => {
       </div>
     </div>
 
+    <!-- 无权限整页视图（N-03：列表接口 3002，与 /403 页同形） -->
+    <div v-if="forbidden" class="fw-crud-error">
+      <el-result icon="warning" title="403" sub-title="抱歉，你无权访问该页面数据（服务端权限判定：3002）">
+        <template #extra>
+          <el-button type="primary" @click="$router.push('/dashboard')">返回工作台</el-button>
+        </template>
+      </el-result>
+    </div>
+
     <!-- 错误态（含 traceId 便于报障） -->
-    <div v-if="error" class="fw-crud-error">
+    <div v-else-if="error" class="fw-crud-error">
       <el-result icon="error" title="加载失败" :sub-title="error.message">
         <template #extra>
           <span v-if="error.traceId" class="fw-text-weak">traceId：{{ error.traceId }}</span>

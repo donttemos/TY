@@ -84,6 +84,7 @@ framework/
     85-parallel-workstreams.md # 并行开发工作线划分（契约 / 所有权 / 集成点）
     90-release-v0.4.0.md      # v0.4.0 发布验收报告（配置中心与热更新 + 管理面补齐）
     90-release-v0.3.0.md      # v0.3.0 发布验收报告（真机可用性收口）
+    94-redis-cluster-live-test.md # L-04 收口：Redis Cluster 真机实跑实测记录
     95-doc-audit.md           # 文档一致性核对报告
     99-admin-web-enhancement-and-fixes.md # 管理后台前端功能补充与缺陷修复方案
     adr/                      # 架构决策记录 0001–0013

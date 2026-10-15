@@ -9,7 +9,8 @@
  * @modified 2026-10-15 donttemo 死信查询加窗口：listDeadLetters 增加可选 window（窗口下推到驱动），
  *   新增 countDeadLetters 供分页 total 使用（体验债：死信列表无分页）
  * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：新增可选 applyRuntimeOptions——mq.concurrency /
- *   mq.rateLimit 热更的驱动生效路径（memory 即时生效；bullmq concurrency 即时、rateLimit 待消费器重建）
+ *   mq.rateLimit 热更的驱动生效路径（memory 即时生效；bullmq concurrency 即时、rateLimit 重建消费器生效）
+ * @modified 2026-10-15 donttemo rateLimit 热更收口：bullmq 重建消费器「先建新再关旧」，消除固化窗口
  * @module @fw/queue
  */
 

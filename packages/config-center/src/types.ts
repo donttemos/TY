@@ -135,5 +135,37 @@ export interface ConfigWriteResult {
   snapshotVersion: number;
 }
 
+/** 快照历史条目（回滚数据源；进程内环形保留，超上限淘汰最旧） */
+export interface ConfigSnapshotEntry {
+  /** 快照版本号（与 meta.snapshotVersion 同一口径） */
+  version: number;
+  /** 该版本生效时间（ISO 串） */
+  at: string;
+  /** 该版本生效时刻的运行时覆盖集（点路径 → 覆盖值；不含 env 基线） */
+  overlay: Record<string, unknown>;
+}
+
+/** 回滚单个键的实际变更 */
+export interface ConfigRollbackChange {
+  /** 点路径 */
+  key: string;
+  /** 回滚前生效值 */
+  oldValue: unknown;
+  /** 回滚后生效值（目标版本的覆盖值；目标版本未覆盖的键为 env 快照值） */
+  newValue: unknown;
+}
+
+/** 回滚结果 */
+export interface ConfigRollbackResult {
+  /** 回滚前的快照版本号 */
+  fromVersion: number;
+  /** 回滚目标的历史版本号（= fromVersion 表示无可应用差异） */
+  toVersion: number;
+  /** 实际发生变化的键（空数组 = 目标状态与当前一致） */
+  changed: ConfigRollbackChange[];
+  /** 回滚后的快照版本号（回滚本身也是一次版本推进） */
+  snapshotVersion: number;
+}
+
 /** 订阅退订函数 */
 export type Unsubscribe = () => void;

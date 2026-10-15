@@ -4,16 +4,24 @@
  *              （boot 键 env 独占，不进列表——列出只会诱导修改；不可热更语义由 5001 覆盖）
  *              PUT  /api/v1/configs/:key  需 system:config:write —— 白名单键在线修改，
  *              走单一生效管道（校验 → 审计 → 持久化 → 应用 → 通知）。
+ *              POST /api/v1/configs/rollback 需 system:config:write —— 一键回滚到历史快照版本
+ *              （缺省 = 上一个版本；三阶段：全量预审计 → 持久化目标覆盖 → 逐键应用）。
  *              错误语义：白名单外（boot 键）400/5001；值非法 400/5002（details 带原因）；
- *              键不存在 404/5003；越权 403/3002；未启用 400/1004。
+ *              键/版本不存在 404/5003；越权 403/3002；未启用 400/1004。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-15 donttemo M9 Backlog：新增 POST /rollback 一键回滚端点
  * @module example-api/config-center
  */
-import { Body, Controller, Get, Inject, Param, Put, Req } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Param, Post, Put, Req } from '@nestjs/common';
 import { PERM, CurrentUser, Permissions } from '@fw/auth';
 import { BizError, ErrorCode } from '@fw/core';
-import type { ConfigCenterMeta, ConfigEntryView, ConfigWriteResult } from '@fw/config-center';
+import type {
+  ConfigCenterMeta,
+  ConfigEntryView,
+  ConfigRollbackResult,
+  ConfigWriteResult,
+} from '@fw/config-center';
 import { CONFIG_CENTER, CONFIG_CENTER_STATE } from './config-center.tokens.js';
 import type { ConfigCenterService } from '@fw/config-center';
 import type { Request } from 'express';
@@ -59,5 +67,26 @@ export class ConfigsController {
       throw new BizError(ErrorCode.BAD_REQUEST, 'body.value 必填（新配置值，JSON 语义）');
     }
     return this.center.write(key, body.value, { source: 'api', operator, operatorId });
+  }
+
+  /**
+   * 一键回滚到历史快照版本（M9 Backlog）：body.version 缺省 = 上一个版本。
+   * 回滚走配置中心三阶段管道（全量预审计 → 持久化目标覆盖 → 逐键应用），审计 module=config 可查。
+   */
+  @Permissions(PERM.CONFIG_WRITE)
+  @Post('rollback')
+  async rollback(
+    @Body() body: { version?: number } | undefined,
+    @CurrentUser('id') operatorId: string,
+    @CurrentUser('username') operator: string,
+    @Req() request: Request,
+  ): Promise<ConfigRollbackResult> {
+    if (!this.state.enabled) {
+      throw new BizError(ErrorCode.STATE_NOT_ALLOWED, '配置中心未启用（CONFIG_CENTER_ENABLED=false），回滚不可用');
+    }
+    if (body?.version !== undefined && (!Number.isInteger(body.version) || body.version < 1)) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'body.version 必须为正整数（历史快照版本号）');
+    }
+    return this.center.rollback(body?.version, { source: 'api', operator, operatorId });
   }
 }

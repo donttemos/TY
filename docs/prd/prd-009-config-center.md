@@ -124,3 +124,25 @@ boot 键（env 独占）：APP_PORT / *_DRIVER / *_URL / 密钥 / 总开关 —�
 | 白名单首版范围是否含 `auth.maxFailed` / `auth.lockMinutes`？ | 倾向**不含**——登录策略属于安全基线，改策略应走有评审的重启路径；有运营诉求再纳入 | donttemo | **已定稿（2026-10-15）：不含**。白名单 11 键固定为 log/cache/mq/otel/tenant 五个运行时可调域，安全基线键单测禁入（`env-registry.test.ts` boot 键断言） |
 | 放 `@fw/config` 内子模块还是独立包 `@fw/config-center`？ | 倾向独立包（沿用 queue / transport 双驱动端口先例，避免 config 包依赖面变宽）；实现时按体量终定 | donttemo | **已定稿（2026-10-15）：独立包 `@fw/config-center`**（依赖 `@fw/config` + `@fw/core` + `@fw/logger`，只依赖 zod 与 node:fs 的传递面；审计经 `ConfigAuditPort` 端口反转由应用装配） |
 | 是否需要配置快照版本号与一键回滚 API？ | 首版不做（审计历史人工恢复）；若变更频率高再立项 | donttemo | **部分采纳（2026-10-15）**：快照版本号已实现（`snapshotVersion` 单调递增，纳入 `meta` 诊断与响应）；一键回滚 API 不做（审计历史人工恢复，登记后续 Backlog） |
+
+## 10. Backlog 收口（2026-10-15，v0.4.0 后迭代）
+
+| 项 | 结论 |
+|---|---|
+| 一键回滚 API | ✅ **已实现**（推翻 §9「不做」的初版结论——配置热更上线后变更频率显著高于预期，人工从审计历史恢复不现实）。`POST /api/v1/configs/rollback`（api-spec §3.10）：进程内快照历史环形表（20 版）+ 三阶段管道（全量预审计 → 持久化目标覆盖 → 逐键应用并通知）；回滚本身计入历史（再回滚 = 撤销回滚）。证据：`@fw/config-center` 单测 6 条（含审计失败 / 持久化失败整体不生效的反向验证）+ `smoke-config.mjs` 阶段 G2（35/35） |
+| Nacos adapter 示例 | ✅ **已实现**（`@fw/config-center` 导出 `NacosConfigDriver`）：走 Nacos v1 HTTP Open API（不引 SDK，Node 20+ 内置 fetch），读 404 → fail-open、写 = 发布、内容 MD5 周期轮询（多实例安全，不用长轮询监听端点）、可选鉴权惰性登录、fetch 可注入测试桩。**装配方式**：落地项目在装配处实例化注入（`CONFIG_CENTER_DRIVER` 枚举仍仅 `file`，环境契约不变）；单测 9 条（fetch 桩，含自触发抑制与解析失败 fail-keep 反向验证） |
+| tenant-scoped config | 📐 **设计完成，实现待排期**（见 §11 附录——半成品实现不如不出；消费端接线面大，独立排期） |
+
+## 11. 附录：tenant-scoped config 设计草案（未实现，排期输入）
+
+**目标**：同一热更键可按租户差异化（如 `cache.ttl` 对 acme 生效 60s、对其他租户 300s）。
+
+**数据模型**：运行时覆盖集从「点路径 → 值」扩展为两层——全局覆盖（现状不变）+ 租户覆盖（`tenant:<id>/<点路径> → 值`，仍受同一白名单与 zod 校验约束）。事实源文件同构扩展（顶层分 `global` / `tenants` 两节，旧格式向后兼容读入）。
+
+**生效语义**：`effective(tenantId, key)` 解析序 = 租户覆盖 → 全局覆盖 → env 快照。租户覆盖**不进**现有 11 键的全局订阅通知（避免无租户上下文的订阅者误消费）；新增 `onChangeScoped(tenantId, key)` 供感知租户的消费者订阅。
+
+**消费端接线面（实现工作量所在）**：① `@fw/cache` 的 CacheService 需要按调用方租户解析 TTL（TenantContext 已在请求链路，键生成需带租户段）；② `@fw/queue` 的并发 / 限速是进程级资源，**不支持按租户拆分**（明确排除，文档写死）；③ `@fw/tenant` 自身的 `cacheTtl` 是租户解析缓存，按租户覆盖会造成「解析缓存的配置本身按租户」的自指，排除。**建议首版范围：仅 `cache.ttl` / `cache.nullTtl` 两键支持租户覆盖**。
+
+**管理面**：`GET/PUT /configs/tenants/:tenantId/:key`（`system:config:write` + `system:tenant:ignore`，与 N-01 同型）；审计 `module=config`，`after` 携带 tenantId。
+
+**风险**：覆盖组合爆炸（全局 × 租户 × env 三层）的排障复杂度 → 列表接口需带「生效来源 = tenant/global/env」标注；租户停用后其覆盖仍残留 → 随 `DELETE /tenants/:id` 级联清理。

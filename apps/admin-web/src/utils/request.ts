@@ -181,4 +181,4 @@ export function toastBizError(error: unknown): string {
   return '请求失败，请稍后重试';
 }
 
-export { BizError, describeBizError };
+export { BizError, describeBizError, BIZ_CODE };

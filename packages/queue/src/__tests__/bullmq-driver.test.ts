@@ -465,3 +465,77 @@ describe('bullmq 依赖边界', () => {
     await expect(createBullConnection('')).rejects.toBeInstanceOf(QueueUnavailableError);
   });
 });
+
+describe('BullmqQueueDriver：限速热更重建（M9 收口，替代「固化 WARN」）', () => {
+  it('rateLimit 变更 → 先建新消费器（新 limiter）再优雅关旧；新消费器带同并发与事件面', async () => {
+    const { driver, workers, runner } = makeDriver();
+    await driver.start(runner);
+    const oldWorker = workers.get('default')!;
+    expect(oldWorker.opts.limiter).toBeUndefined(); // 初始 rateLimit=0 不下发 limiter
+
+    driver.applyRuntimeOptions({ rateLimit: 5 });
+    // 重建是 fire-and-forget：让微任务与 ensureWorker 链路跑完
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const fresh = workers.get('default')!;
+    expect(fresh).not.toBe(oldWorker); // 换了新消费器
+    expect(fresh.opts.limiter).toEqual({ max: 5, duration: 1000 }); // 新 limiter 即刻生效
+    expect(oldWorker.closes).toEqual([false]); // 旧消费器优雅关闭（非强制）
+    expect(fresh.opts.concurrency).toBe(2); // 并发语义不变
+  });
+
+  it('反向验证：rateLimit 同值不触发重建（避免无意义重建抖动）', async () => {
+    const { driver, workers, runner } = makeDriver();
+    await driver.start(runner);
+    const oldWorker = workers.get('default')!;
+
+    driver.applyRuntimeOptions({ rateLimit: 0 }); // 与初始值相同
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(workers.get('default')!).toBe(oldWorker);
+    expect(oldWorker.closes).toEqual([]);
+  });
+
+  it('重建失败 → 回滚沿用旧消费器（消费面不被热更打没）', async () => {
+    const stub = makeStubModule();
+    const connection = makeConnection();
+    // Worker 第 2 次构造起抛错：初始 start() 正常建旧消费器（注册类先登记），重建时模拟创建失败
+    const RegisteringWorker = stub.module.Worker as unknown as new (
+      name: string,
+      processor: (job: BullJobLike) => Promise<unknown>,
+      opts: Record<string, unknown>,
+    ) => StubWorker;
+    let created = 0;
+    const brokenModule = {
+      ...stub.module,
+      Worker: class extends RegisteringWorker {
+        constructor(name: string, processor: (job: BullJobLike) => Promise<unknown>, opts: Record<string, unknown>) {
+          super(name, processor, opts);
+          created++;
+          if (created >= 2) throw new Error('boom: worker create failed');
+        }
+      },
+    } as unknown as BullmqModuleLike;
+    const driver = new BullmqQueueDriver({
+      url: 'redis://127.0.0.1:6379/0',
+      prefix: 'fw:test',
+      concurrency: 2,
+      rateLimit: 0,
+      deadLetterMax: 50,
+      module: brokenModule,
+      connection,
+    });
+    const runner = { run: vi.fn(async () => undefined), onDeadLetter: vi.fn() };
+    driver.ensureQueue('default');
+    await driver.start(runner);
+    const oldWorker = stub.workers.get('default')!;
+
+    driver.applyRuntimeOptions({ rateLimit: 10 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // 驱动内部登记表仍是旧消费器（回滚），旧消费器未被关闭
+    const internal = (driver as unknown as { workers: Map<string, StubWorker> }).workers;
+    expect(internal.get('default')).toBe(oldWorker);
+    expect(oldWorker.closes).toEqual([]);
+  });
+});

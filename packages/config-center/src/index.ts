@@ -9,6 +9,8 @@ export { ConfigCenterService } from './center.js';
 export type { ConfigCenterOptions } from './center.js';
 export { FileConfigDriver } from './drivers/file.driver.js';
 export type { FileConfigDriverOptions } from './drivers/file.driver.js';
+export { NacosConfigDriver } from './drivers/nacos.driver.js';
+export type { NacosConfigDriverOptions, FetchLike, ResponseLike } from './drivers/nacos.driver.js';
 export type {
   ConfigAuditPort,
   ConfigChangeRecord,
@@ -16,6 +18,9 @@ export type {
   ConfigCenterMeta,
   ConfigDriverPort,
   ConfigEntryView,
+  ConfigRollbackChange,
+  ConfigRollbackResult,
+  ConfigSnapshotEntry,
   ConfigWriteContext,
   ConfigWriteResult,
   Unsubscribe,
