@@ -114,7 +114,8 @@ jobs:
         run: |
           pnpm exec prisma migrate deploy --schema prisma/schema.prisma
           pnpm exec tsx prisma/seed.ts
-          node dist/main.js & echo $! > /tmp/fw-api.pid
+          # M10 E-03：框架级限流默认开启，冒烟为可信高频调用方——CI 放大容量（脚本内 429 探测段不受影响）
+          RATE_LIMIT_CAPACITY=1000000 RATE_LIMIT_REFILL_PER_SECOND=100000 node dist/main.js & echo $! > /tmp/fw-api.pid
           for i in $(seq 1 30); do
             curl -sf http://127.0.0.1:3000/health > /dev/null && break
             sleep 1
@@ -128,7 +129,7 @@ jobs:
       - name: C-06 管理后台端点冒烟（SQLite）
         working-directory: apps/example-api
         run: |
-          node dist/main.js & echo $! > /tmp/fw-api-admin.pid
+          RATE_LIMIT_CAPACITY=1000000 RATE_LIMIT_REFILL_PER_SECOND=100000 node dist/main.js & echo $! > /tmp/fw-api-admin.pid
           for i in $(seq 1 30); do
             curl -sf http://127.0.0.1:3000/health > /dev/null && break
             sleep 1

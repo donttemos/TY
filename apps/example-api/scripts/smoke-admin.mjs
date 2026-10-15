@@ -61,7 +61,10 @@ async function login(user, label) {
   // 登录接口限流 60 秒 10 次（AUTH_LOGIN_RATE_LIMIT）：连续跑本脚本会打满。
   // 此时后续断言必然全是 401，继续跑只会输出一堆无意义的假失败，直接退出并说明原因。
   if (res.status === 429) {
-    check(`${label} 登录被限流`, false, '登录限流 60 秒 10 次已打满，请间隔 60 秒再跑（CI 中为独立 step，不会累积）');
+    const hint = res.body?.code === 9003
+      ? '框架级限流（9003）打满：冒烟属可信高频调用方，起服务时请放大 RATE_LIMIT_CAPACITY/REFILL（CI 已放大）'
+      : '登录限流 60 秒 10 次已打满，请间隔 60 秒再跑（CI 中为独立 step，不会累积）';
+    check(`${label} 登录被限流`, false, hint);
     console.error('\n[smoke-admin] 登录限流：提前退出，避免输出无意义的 401 断言');
     process.exit(1);
   }
