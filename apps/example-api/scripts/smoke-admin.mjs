@@ -11,6 +11,11 @@
  * @author donttemo
  * @created 2026-10-14
  * @modified 2026-10-14 donttemo BUG-15：新增 /audit-logs 排序断言（升序生效 + 未知字段 / 非法方向 → 400/1001）
+ * @modified 2026-10-15 donttemo N-01/N-02：新增租户管理五端点与异步任务面冒烟段——列表过滤与
+ *   排序白名单（400 语义）、开租户（dedicated 必填 dbUrl / 编码唯一 1003）、停用（DELETE=停用，
+ *   legacy 1004）、迁移长任务派发 → /jobs 轮询到终态 → 控制面切换落库、retry 成功任务 1004、
+ *   任务不存在 404、/audit-logs/export 派发 → 下载 CSV 产物；越权面补 tenant / export 与
+ *   「alice 读他人任务 404」的归属人隔离断言
  * @module example-api
  */
 
@@ -510,6 +515,151 @@ async function main() {
       `http=${auditMissing.status} code=${auditMissing.body.code}`);
   }
 
+  // ======================= 租户管理 + 异步任务（N-01/N-02） =======================
+  console.log('\n---- 租户管理与异步任务（N-01 / N-02） ----');
+
+  // --- 租户列表（种子四行：legacy / acme / off / dedicated） ---
+  const tenantList = await call('/api/v1/tenants?page=1&pageSize=20', { token });
+  const tenants = tenantList.body.data?.items ?? [];
+  check('GET /tenants 分页列表（种子行 + 视图绝不外泄连接串）',
+    isOk(tenantList.status) && tenants.length >= 4
+    && tenants.every((t) => typeof t.code === 'string' && typeof t.dedicatedDbConfigured === 'boolean')
+    && !JSON.stringify(tenants).includes('dbUrlEnc') && !JSON.stringify(tenants).includes('db_url_enc'),
+    `http=${tenantList.status} 行数=${tenants.length}`);
+
+  const tenantFiltered = await call('/api/v1/tenants?isolation=dedicated', { token });
+  check('GET /tenants isolation=dedicated 过滤生效',
+    isOk(tenantFiltered.status) && (tenantFiltered.body.data?.items ?? []).length >= 1
+    && (tenantFiltered.body.data?.items ?? []).every((t) => t.isolation === 'dedicated'),
+    `http=${tenantFiltered.status}`);
+
+  const tenantBadEnum = await call('/api/v1/tenants?isolation=nope', { token });
+  check('GET /tenants 非法 isolation → 400/1001（不静默忽略）',
+    tenantBadEnum.status === 400 && tenantBadEnum.body.code === 1001,
+    `http=${tenantBadEnum.status} code=${tenantBadEnum.body.code}`);
+
+  const tenantBadSort = await call('/api/v1/tenants?sort=secret:asc', { token });
+  check('GET /tenants sort 未知字段 → 400/1001（白名单同 @fw/db parseSortQuery）',
+    tenantBadSort.status === 400 && tenantBadSort.body.code === 1001,
+    `http=${tenantBadSort.status} code=${tenantBadSort.body.code}`);
+
+  // --- 开租户：临时探针（shared 不带连接串；dedicated 必须带） ---
+  // 探针编码带时间戳：租户无硬删端点（停用即终态），固定编码会让脚本不可重入（二次跑必 1003）
+  const probeCode = `smoke-probe-${Date.now().toString(36)}`;
+  const tmpTenant = await call('/api/v1/tenants', {
+    method: 'POST', token, body: { code: probeCode, name: '冒烟探针租户', isolation: 'shared', plan: 'probe' },
+  });
+  const tenantId = tmpTenant.body.data?.id;
+  check('POST /tenants 开租户（shared 不带连接串）', isOk(tmpTenant.status) && !!tenantId,
+    `http=${tmpTenant.status} id=${tenantId}`);
+
+  const dedicatedNoUrl = await call('/api/v1/tenants', {
+    method: 'POST', token, body: { code: 'smoke-probe-ded', name: '探针独立库', isolation: 'dedicated' },
+  });
+  check('POST /tenants dedicated 不带 dbUrl → 400/1001',
+    dedicatedNoUrl.status === 400 && dedicatedNoUrl.body.code === 1001,
+    `http=${dedicatedNoUrl.status} code=${dedicatedNoUrl.body.code}`);
+
+  const dupTenant = await call('/api/v1/tenants', {
+    method: 'POST', token, body: { code: 'acme', name: '重复编码', isolation: 'shared' },
+  });
+  check('POST /tenants 编码重复 → 409/1003（唯一性预检，不抛成 500）',
+    dupTenant.status === 409 && dupTenant.body.code === 1003,
+    `http=${dupTenant.status} code=${dupTenant.body.code}`);
+
+  // --- 更新 + 停用（DELETE = 停用，不物理删） ---
+  const updatedTenant = await call(`/api/v1/tenants/${tenantId}`, {
+    method: 'PUT', token, body: { name: '冒烟探针租户（改名）', plan: 'probe-plus' },
+  });
+  check('PUT /tenants/:id 更新名称与套餐',
+    isOk(updatedTenant.status) && updatedTenant.body.data?.name === '冒烟探针租户（改名）' && updatedTenant.body.data?.plan === 'probe-plus',
+    `http=${updatedTenant.status}`);
+
+  const legacyDisable = await call('/api/v1/tenants/0', { method: 'DELETE', token });
+  check('DELETE /tenants/0（legacy）→ 400/1004（存量单租户停用即全站不可访问）',
+    legacyDisable.status === 400 && legacyDisable.body.code === 1004,
+    `http=${legacyDisable.status} code=${legacyDisable.body.code}`);
+
+  const disabledTenant = await call(`/api/v1/tenants/${tenantId}`, { method: 'DELETE', token });
+  check('DELETE /tenants/:id 停用（status=0，行保留供解析给 4001）',
+    isOk(disabledTenant.status) && disabledTenant.body.data?.status === 0,
+    `http=${disabledTenant.status}`);
+
+  // --- 迁移：长任务派发 → 任务面轮询 → 控制面切换生效 ---
+  const migrate = await call(`/api/v1/tenants/${tenantId}/migrate`, {
+    method: 'POST', token, body: { isolation: 'dedicated', dbUrl: 'postgresql://probe:pw@127.0.0.1:5432/probe' },
+  });
+  const jobId = migrate.body.data?.id;
+  check('POST /tenants/:id/migrate 派发任务返回 JobView（pending + jobId，不阻塞）',
+    isOk(migrate.status) && !!jobId && migrate.body.data?.status === 'pending' && migrate.body.data?.type === 'tenant.migrate',
+    `http=${migrate.status} jobId=${jobId}`);
+
+  const migrateSameLevel = await call(`/api/v1/tenants/1/migrate`, {
+    method: 'POST', token, body: { isolation: 'shared' },
+  });
+  check('POST /tenants/:id/migrate 同级别 → 400/1004',
+    migrateSameLevel.status === 400 && migrateSameLevel.body.code === 1004,
+    `http=${migrateSameLevel.status} code=${migrateSameLevel.body.code}`);
+
+  /** 轮询任务到终态（退避由前端负责，冒烟固定 100ms） */
+  let jobView = null;
+  for (let i = 0; i < 60 && (!jobView || (jobView.status !== 'succeeded' && jobView.status !== 'failed')); i += 1) {
+    const progress = await call(`/api/v1/jobs/${jobId}/progress`, { token });
+    jobView = progress.body.data ?? null;
+    if (jobView && (jobView.status === 'succeeded' || jobView.status === 'failed')) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  check('GET /jobs/:id/progress 轮询到终态（迁移任务 succeeded 且进度 100）',
+    jobView?.status === 'succeeded' && jobView?.progress === 100,
+    `status=${jobView?.status} progress=${jobView?.progress}`);
+
+  const migratedProbe = await call(`/api/v1/tenants?keyword=${probeCode}`, { token });
+  check('迁移后 isolation=dedicated 生效（控制面切换落库）',
+    (migratedProbe.body.data?.items ?? []).some((t) => t.id === tenantId && t.isolation === 'dedicated' && t.dedicatedDbConfigured === true),
+    `http=${migratedProbe.status}`);
+
+  const retrySucceeded = await call(`/api/v1/jobs/${jobId}/retry`, { method: 'POST', token });
+  check('POST /jobs/:id/retry 成功任务 → 400/1004（不重复跑，避免重复产物）',
+    retrySucceeded.status === 400 && retrySucceeded.body.code === 1004,
+    `http=${retrySucceeded.status} code=${retrySucceeded.body.code}`);
+
+  const jobMissing = await call('/api/v1/jobs/job-does-not-exist/progress', { token });
+  check('GET /jobs/:id/progress 不存在 → 404/1002（不泄露存在性）',
+    jobMissing.status === 404 && jobMissing.body.code === 1002,
+    `http=${jobMissing.status} code=${jobMissing.body.code}`);
+
+  // --- 审计异步导出（N-02 派发侧） ---
+  const exportJob = await call('/api/v1/audit-logs/export', { token });
+  const exportJobId = exportJob.body.data?.id;
+  check('GET /audit-logs/export 派发导出任务返回 JobView（audit.export）',
+    isOk(exportJob.status) && !!exportJobId && exportJob.body.data?.type === 'audit.export',
+    `http=${exportJob.status} jobId=${exportJobId}`);
+
+  let exportView = null;
+  for (let i = 0; i < 80 && (!exportView || (exportView.status !== 'succeeded' && exportView.status !== 'failed')); i += 1) {
+    const progress = await call(`/api/v1/jobs/${exportJobId}/progress`, { token });
+    exportView = progress.body.data ?? null;
+    if (exportView && (exportView.status === 'succeeded' || exportView.status === 'failed')) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  check('GET /jobs/:id/progress 导出任务轮询到 succeeded',
+    exportView?.status === 'succeeded' && exportView?.progress === 100 && !!exportView?.fileName,
+    `status=${exportView?.status} fileName=${exportView?.fileName}`);
+
+  const download = await fetch(`${BASE}/api/v1/jobs/${exportJobId}/download`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  // 注意：response.text() 会剥掉 UTF-8 BOM（TextDecoder 标准行为），BOM 必须验字节
+  const csvBytes = Buffer.from(await download.arrayBuffer());
+  const csvText = csvBytes.toString('utf8');
+  // CSV 形状与 buildAuditCsv 一致：BOM(ef bb bf) + 表头 id,createdAt,userId,... + CRLF 行尾
+  check('GET /jobs/:id/download 取回 CSV 产物（BOM + 表头 + 至少一行，非统一信封）',
+    download.status === 200
+    && csvBytes[0] === 0xef && csvBytes[1] === 0xbb && csvBytes[2] === 0xbf
+    && csvText.includes('id,createdAt,userId,module,action,targetType,targetId,ip,traceId,before,after')
+    && csvText.split('\r\n').length >= 2,
+    `http=${download.status} bytes=${csvBytes.length}`);
+
   // ======================= 越权面（alice 仅 user:read） =======================
   console.log('\n---- 越权面（最小权限角色） ----');
 
@@ -522,10 +672,20 @@ async function main() {
     ['新建用户', '/api/v1/users', 'POST', { username: 'alice_probe', password: 'Probe@123456' }],
     ['新建角色', '/api/v1/roles', 'POST', { code: 'alice_probe_role', name: '越权探针角色' }],
     ['下线登录设备', '/api/v1/auth/sessions/00000000-0000-0000-0000-000000000000', 'DELETE', undefined],
+    ['查询租户列表', '/api/v1/tenants', 'GET', undefined],
+    ['派发审计导出', '/api/v1/audit-logs/export', 'GET', undefined],
   ]) {
     const res = await call(path, { method, token: aliceToken, body });
     check(`alice ${name} → 403/3002（无对应权限码）`, res.status === 403 && res.body.code === 3002,
       `http=${res.status} code=${res.body.code}`);
+  }
+
+  // 任务面按归属人隔离：alice 读 admin 派发的任务一律 404（不泄露存在性）
+  if (jobId) {
+    const aliceJob = await call(`/api/v1/jobs/${jobId}/progress`, { token: aliceToken });
+    check('alice 读他人任务 → 404/1002（归属人鉴权）',
+      aliceJob.status === 404 && aliceJob.body.code === 1002,
+      `http=${aliceJob.status} code=${aliceJob.body.code}`);
   }
 
   // dict:read 是刻意授予普通角色的例外（seed.ts USER_ROLE_CODES）：全站状态列 / 下拉走 useDict，
