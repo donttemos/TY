@@ -9,6 +9,8 @@
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo 修复字典项维护按钮永不渲染（权限码推导与后端 dict:write 不匹配），
  *   并给分类的新建/编辑/删除补 v-permission="'dict:write'"
+ * @modified 2026-10-15 donttemo BUG-15 增量：字典项表格 label/value/sort 3 列开启 sortable
+ *   （后端 GET /dict/items 同步接入排序白名单，未知字段 400）
  * @module admin-web/views
 -->
 
@@ -30,10 +32,10 @@ const activeCategory = ref<string>('');
 const currentCategory = computed(() => categories.value.find((c) => c.id === activeCategory.value) ?? null);
 
 const itemColumns: CrudColumn[] = [
-  { prop: 'label', label: '标签', minWidth: 140 },
-  { prop: 'value', label: '值', minWidth: 120 },
+  { prop: 'label', label: '标签', minWidth: 140, sortable: true },
+  { prop: 'value', label: '值', minWidth: 120, sortable: true },
   { prop: 'color', label: '颜色', width: 110, align: 'center', slot: 'color' },
-  { prop: 'sort', label: '排序', width: 80, align: 'center' },
+  { prop: 'sort', label: '排序', width: 80, align: 'center', sortable: true },
 ];
 
 const itemFormFields: FormField[] = [

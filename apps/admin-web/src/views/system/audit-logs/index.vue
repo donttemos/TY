@@ -8,6 +8,8 @@
  *   （docs/40-api-spec.md §3.7 标注 Backlog），按钮点了无任何反应属死 UI
  * @modified 2026-10-15 donttemo N-02：恢复导出入口并改为**异步任务**——点击只派发任务拿到 jobId，
  *   进度与下载由全局任务条（layout/JobBar.vue）承载，页面不阻塞；失败可在任务条上重试并看到 traceId
+ * @modified 2026-10-15 donttemo E-07：模块筛选项由硬编码改为 audit_module 字典消费（原选项过期：
+ *   缺 tenant 且含从未写入审计的 order）
  * @module admin-web/views
 -->
 
@@ -35,12 +37,8 @@ const columns: CrudColumn[] = [
 
 const searchForm: SearchField[] = [
   { prop: 'user_id', label: '操作人', type: 'select', options: [] },
-  { prop: 'module', label: '模块', type: 'select', options: [
-    { label: '用户', value: 'user' },
-    { label: '角色', value: 'role' },
-    { label: '认证', value: 'auth' },
-    { label: '订单', value: 'order' },
-  ] },
+  // E-07：模块取值走 audit_module 字典（原硬编码选项过期——缺 tenant 且含从未写入审计的 order）
+  { prop: 'module', label: '模块', type: 'select', dictCode: 'audit_module' },
   { prop: 'action', label: '动作', type: 'select', dictCode: 'audit_action' },
   { prop: 'from', label: '开始', type: 'date' },
   { prop: 'to', label: '结束', type: 'date' },

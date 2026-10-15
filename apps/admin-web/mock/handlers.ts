@@ -21,6 +21,9 @@
  *   权限 tenant:* + system:tenant:ignore 双重要求，legacy 停用/迁移 1004，dedicated 必填 dbUrl）；
  *   ③ 异步任务面（/jobs/:id/progress|retry|download，虚拟时间线推进进度，归属人隔离，404 不泄露存在性）
  *   与 GET /audit-logs/export 派发（audit:export，产物 CSV 快照）
+ * @modified 2026-10-15 donttemo BUG-15 增量 + E-07：/roles、/dict/categories、/dict/items 接入排序
+ *   白名单（与 example-api 逐项一致，未知字段 400/1001 不静默忽略）；/dict/audit_module 字典端点
+ *   随字典数据落地（GET /dict/:code 通用段直接命中，无需单独 handler）
  * @module admin-web/mock
  */
 
@@ -427,6 +430,35 @@ const MOCK_TENANT_SORT_FIELDS: Record<string, string> = {
   created_at: 'createdAt',
   updated_at: 'updatedAt',
   expire_at: 'expireAt',
+};
+
+/**
+ * 角色列表排序白名单（BUG-15 增量，与 example-api 的 ROLE_SORT_FIELDS 逐项一致）；
+ * permissionCount 为聚合计算字段、createdAt 不在视图内，均不可排序
+ */
+const MOCK_ROLE_SORT_FIELDS: Record<string, string> = {
+  id: 'id',
+  code: 'code',
+  name: 'name',
+  remark: 'remark',
+  data_scope: 'dataScope',
+  sort: 'sort',
+};
+
+/** 字典分类排序白名单（与 example-api 的 DICT_CATEGORY_SORT_FIELDS 逐项一致；视图无 createdAt） */
+const MOCK_DICT_CATEGORY_SORT_FIELDS: Record<string, string> = {
+  id: 'id',
+  code: 'code',
+  name: 'name',
+  remark: 'remark',
+};
+
+/** 字典项排序白名单（与 example-api 的 DICT_ITEM_SORT_FIELDS 逐项一致） */
+const MOCK_DICT_ITEM_SORT_FIELDS: Record<string, string> = {
+  id: 'id',
+  label: 'label',
+  value: 'value',
+  sort: 'sort',
 };
 
 /**
@@ -904,7 +936,18 @@ export async function handleMockRequest(
       send(res, perm.code, perm.message, null, traceId);
       return { handled: true };
     }
-    send(res, CODE.OK, 'ok', database.roles.map(stripRole), traceId);
+    const parsedSort = parseMockSort(query.get('sort'), MOCK_ROLE_SORT_FIELDS);
+    if ('error' in parsedSort) {
+      send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
+      return { handled: true };
+    }
+    const views = applyMockSort(
+      database.roles.map(stripRole),
+      parsedSort.items,
+      'sort',
+      'asc',
+    );
+    send(res, CODE.OK, 'ok', views, traceId);
     return { handled: true };
   }
   if (path === '/roles' && method === 'POST') {
@@ -1119,7 +1162,12 @@ export async function handleMockRequest(
       send(res, perm.code, perm.message, null, traceId);
       return { handled: true };
     }
-    send(res, CODE.OK, 'ok', database.dictCategories, traceId);
+    const parsedSort = parseMockSort(query.get('sort'), MOCK_DICT_CATEGORY_SORT_FIELDS);
+    if ('error' in parsedSort) {
+      send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
+      return { handled: true };
+    }
+    send(res, CODE.OK, 'ok', applyMockSort(database.dictCategories, parsedSort.items, 'id', 'asc'), traceId);
     return { handled: true };
   }
   if (path === '/dict/categories' && method === 'POST') {
@@ -1173,7 +1221,17 @@ export async function handleMockRequest(
       return { handled: true };
     }
     const categoryId = query.get('category_id') ?? '';
-    const items = database.dictItems.filter((i) => i.categoryId === categoryId).sort((a, b) => a.sort - b.sort);
+    const parsedSort = parseMockSort(query.get('sort'), MOCK_DICT_ITEM_SORT_FIELDS);
+    if ('error' in parsedSort) {
+      send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
+      return { handled: true };
+    }
+    const items = applyMockSort(
+      database.dictItems.filter((i) => i.categoryId === categoryId),
+      parsedSort.items,
+      'sort',
+      'asc',
+    );
     send(res, CODE.OK, 'ok', items, traceId);
     return { handled: true };
   }

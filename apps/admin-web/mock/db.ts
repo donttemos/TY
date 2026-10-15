@@ -12,6 +12,8 @@
  *   /api/v1/orders 端点），避免后续误判为 mock 与生产菜单应该一致
  * @modified 2026-10-15 donttemo N-01/N-02：新增租户数据源（tenants，镜像 seed 的 legacy/acme/off/dedicated
  *   四行同构）、异步任务表（jobs，内存任务中心，进度按时间线推进）与对应权限点 / 菜单 / 字典
+ * @modified 2026-10-15 donttemo E-07：新增 audit_module 字典（分类 + auth/user/role/tenant 四项，
+ *   与 example-api seed 同形——审计页模块筛选项的数据源）
  * @module admin-web/mock
  */
 
@@ -342,6 +344,7 @@ const DICT_CATEGORIES: MockDictCategory[] = [
   { id: 'dc-user-status', code: 'user_status', name: '用户状态', remark: '账号启用 / 禁用' },
   { id: 'dc-yes-no', code: 'sys_yes_no', name: '是否', remark: null },
   { id: 'dc-audit-action', code: 'audit_action', name: '审计动作', remark: null },
+  { id: 'dc-audit-module', code: 'audit_module', name: '审计模块', remark: 'E-07：与 example-api seed 的 audit_module 同形' },
   { id: 'dc-data-scope', code: 'data_scope', name: '数据范围', remark: '与 roles.data_scope 同源' },
   { id: 'dc-order-channel', code: 'order_channel', name: '订单渠道', remark: null },
   { id: 'dc-tenant-isolation', code: 'tenant_isolation', name: '租户隔离级别', remark: 'N-01 租户管理页：shared=共享库+tenant_id / dedicated=独立库' },
@@ -360,6 +363,10 @@ const DICT_ITEMS: MockDictItem[] = [
   { id: 'di-aa-logout', categoryId: 'dc-audit-action', label: '登出', value: 'logout', color: 'info', sort: 5 },
   { id: 'di-aa-export', categoryId: 'dc-audit-action', label: '导出', value: 'export', color: 'info', sort: 6 },
   { id: 'di-aa-grant', categoryId: 'dc-audit-action', label: '授权', value: 'grant', color: 'warning', sort: 7 },
+  { id: 'di-am-auth', categoryId: 'dc-audit-module', label: '认证', value: 'auth', color: 'primary', sort: 1 },
+  { id: 'di-am-user', categoryId: 'dc-audit-module', label: '用户', value: 'user', color: 'success', sort: 2 },
+  { id: 'di-am-role', categoryId: 'dc-audit-module', label: '角色', value: 'role', color: 'warning', sort: 3 },
+  { id: 'di-am-tenant', categoryId: 'dc-audit-module', label: '租户', value: 'tenant', color: 'info', sort: 4 },
   { id: 'di-ds-all', categoryId: 'dc-data-scope', label: '全部数据', value: 'all', color: 'primary', sort: 1 },
   { id: 'di-ds-org-below', categoryId: 'dc-data-scope', label: '本组织及下级', value: 'org_below', color: 'success', sort: 2 },
   { id: 'di-ds-org', categoryId: 'dc-data-scope', label: '本组织', value: 'org', color: 'warning', sort: 3 },

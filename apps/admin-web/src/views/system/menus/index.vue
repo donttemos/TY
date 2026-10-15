@@ -7,6 +7,8 @@
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo 补按钮级权限：新建/新增子级 = menu:create，编辑 = menu:update，
  *   删除 = menu:delete（此前仅页面级可见性由菜单树控制，只读角色仍能点到写操作并吃 3002）
+ * @modified 2026-10-15 donttemo E-06：图标改 IconPicker 选择器（icon-map 登记表点选，防手打未登记名
+ *   静默回退）、权限码改从权限点列表点选（防手打出不存在的码，登录时快照校验会 403）、图标列可视化
  * @module admin-web/views
 -->
 
@@ -14,8 +16,11 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import * as menuApi from '@/api/menu';
+import * as roleApi from '@/api/role';
+import { resolveIcon } from '@/layout/icon-map';
+import IconPicker from '@/components/IconPicker/index.vue';
 import { BizError, describeBizError } from '@/utils/biz-error';
-import type { MenuManageItem, MenuUpsertInput, PermissionCode } from '@/api/types';
+import type { MenuManageItem, MenuUpsertInput, PermissionCode, PermissionGroup } from '@/api/types';
 
 interface TreeNode extends MenuManageItem {
   children: TreeNode[];
@@ -110,6 +115,7 @@ function isSelfOrDescendant(id: string): boolean {
 function openCreate(parentId = '0'): void {
   editing.value = null;
   Object.assign(form, { parentId, name: '', path: '', component: '', icon: '', permissionCode: '', visible: true, sort: flatMenus.value.length + 1 });
+  void ensurePermissionCodes();
   dialogVisible.value = true;
 }
 
@@ -125,7 +131,23 @@ function openEdit(row: MenuManageItem): void {
     visible: row.visible,
     sort: row.sort,
   });
+  void ensurePermissionCodes();
   dialogVisible.value = true;
+}
+
+/** ---------- E-06：权限码选择器选项（首次打开弹窗时懒加载，失败不阻塞表单） ---------- */
+const permissionCodeOptions = ref<string[]>([]);
+
+async function ensurePermissionCodes(): Promise<void> {
+  if (permissionCodeOptions.value.length > 0) return;
+  try {
+    const groups: PermissionGroup[] = await roleApi.fetchPermissionGroups();
+    permissionCodeOptions.value = groups.flatMap((group) => group.items.map((item) => item.code));
+  } catch {
+    // 加载失败不阻塞表单，但要让用户知道权限码选不了（而非静默的空下拉）
+    ElMessage.warning('权限点列表加载失败，暂只能维护其他字段');
+    permissionCodeOptions.value = [];
+  }
 }
 
 async function submit(): Promise<void> {
@@ -189,7 +211,14 @@ async function handleDelete(row: MenuManageItem): Promise<void> {
         <el-table-column prop="name" label="名称" min-width="160" />
         <el-table-column prop="path" label="路径" min-width="160" />
         <el-table-column prop="component" label="组件" min-width="160" />
-        <el-table-column prop="icon" label="图标" width="100" />
+        <el-table-column prop="icon" label="图标" width="110">
+          <template #default="{ row }">
+            <span v-if="row.icon" class="fw-menu-icon-cell">
+              <el-icon><component :is="resolveIcon(row.icon)" /></el-icon>
+              <span>{{ row.icon }}</span>
+            </span>
+          </template>
+        </el-table-column>
         <el-table-column prop="permissionCode" label="权限码" min-width="140" />
         <el-table-column label="显示" width="80" align="center">
           <template #default="{ row }">
@@ -224,10 +253,19 @@ async function handleDelete(row: MenuManageItem): Promise<void> {
           <el-input v-model="form.component" placeholder="system/users（views 下相对路径）" maxlength="128" />
         </el-form-item>
         <el-form-item label="图标">
-          <el-input v-model="form.icon" placeholder="user / setting ..." maxlength="32" />
+          <IconPicker v-model="form.icon" style="width: 100%" />
         </el-form-item>
         <el-form-item label="权限码">
-          <el-input v-model="form.permissionCode" placeholder="user:read（留空=登录即可见）" maxlength="64" />
+          <el-select
+            v-model="form.permissionCode"
+            filterable
+            clearable
+            placeholder="从权限点中选择（留空=登录即可见）"
+            style="width: 100%"
+            data-test="menu-permission-select"
+          >
+            <el-option v-for="code in permissionCodeOptions" :key="code" :label="code" :value="code" />
+          </el-select>
         </el-form-item>
         <el-form-item label="排序">
           <el-input-number v-model="form.sort" :min="1" controls-position="right" />
@@ -243,3 +281,16 @@ async function handleDelete(row: MenuManageItem): Promise<void> {
     </el-dialog>
   </div>
 </template>
+
+<style scoped>
+.fw-menu-icon-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--el-text-color-regular);
+}
+
+.fw-menu-icon-cell .el-icon {
+  color: var(--el-color-primary);
+}
+</style>

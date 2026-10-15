@@ -4,6 +4,8 @@
  *   保存授权为全量覆盖（PUT /roles/:id/permissions），提交前提示覆盖语义；内置管理员角色不可授权 / 删除（服务端强约束）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo BUG-15 增量：名称/编码/数据范围/备注 4 列开启 sortable
+ *   （权限数为聚合计算字段、类型为布尔旗标，均不可排序）
  * @module admin-web/views
 -->
 
@@ -18,11 +20,11 @@ import type { CrudColumn } from '@/components/CrudTable/types';
 import type { DataScope, PermissionGroup, PermissionItem, RoleListItem } from '@/api/types';
 
 const columns: CrudColumn[] = [
-  { prop: 'name', label: '角色名称', minWidth: 140 },
-  { prop: 'code', label: '编码', minWidth: 120 },
-  { prop: 'dataScope', label: '数据范围', width: 130, align: 'center', slot: 'dataScope' },
+  { prop: 'name', label: '角色名称', minWidth: 140, sortable: true },
+  { prop: 'code', label: '编码', minWidth: 120, sortable: true },
+  { prop: 'dataScope', label: '数据范围', width: 130, align: 'center', slot: 'dataScope', sortable: true },
   { prop: 'permissionCount', label: '权限数', width: 90, align: 'center' },
-  { prop: 'remark', label: '备注', minWidth: 160, showOverflowTooltip: true },
+  { prop: 'remark', label: '备注', minWidth: 160, showOverflowTooltip: true, sortable: true },
   { prop: 'isSystem', label: '类型', width: 90, align: 'center', slot: 'isSystem' },
 ];
 

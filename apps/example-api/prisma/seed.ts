@@ -27,6 +27,8 @@
  * @modified 2026-10-15 donttemo N-01/N-02：① 补租户管理五权限点（tenant:read/create/update/delete/manage）与
  *   audit:export，并新增「租户管理」菜单（/system/tenants，需 tenant:read）——权限点与菜单同批建出，
  *   否则页面即便有路由也会被 RBAC 守卫拒绝；② 补字典 tenant_isolation / tenant_status（租户管理页标签与下拉数据源）
+ * @modified 2026-10-15 donttemo E-07：补字典 audit_module（审计日志页模块筛选项数据源，取值与各控制器
+ *   写入的 module 值同源：auth/user/role/tenant）
  * @module example-api
  */
 
@@ -215,6 +217,7 @@ interface DictSeed {
  *   user_status  —— 用户管理页状态列 / 表单（views/system/users/index.vue）
  *   data_scope   —— 角色管理页数据范围列 / 表单（views/system/roles/index.vue，四档与 roles.data_scope 同源）
  *   audit_action —— 审计日志页动作筛选列（views/system/audit-logs/index.vue）
+ *   audit_module —— 审计日志页模块筛选列（E-07：原硬编码选项过期且缺 tenant，改字典消费）
  *   order_channel—— 订单演示页渠道筛选（views/demo/orders/index.vue）
  * 缺任一项，对应页面首次渲染即 404（GET /api/v1/dict/:code）。
  */
@@ -251,6 +254,17 @@ const DICT_SEED: DictSeed[] = [
       { label: '登出', value: 'logout', color: 'info' },
       { label: '导出', value: 'export', color: 'info' },
       { label: '授权', value: 'grant', color: 'primary' },
+    ],
+  },
+  {
+    code: 'audit_module',
+    name: '审计模块',
+    remark: '审计日志 module 字段取值（与各控制器写入值同源，E-07）',
+    items: [
+      { label: '认证', value: 'auth', color: 'primary' },
+      { label: '用户', value: 'user', color: 'success' },
+      { label: '角色', value: 'role', color: 'warning' },
+      { label: '租户', value: 'tenant', color: 'info' },
     ],
   },
   {
