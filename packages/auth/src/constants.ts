@@ -5,6 +5,8 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo C-06 收口：新增 dict:read / dict:write / auth:revoke-session（补齐管理后台契约声明的权限点）
+ * @modified 2026-10-15 donttemo N-01/N-02：新增 tenant:read/create/update/delete/manage（api-spec §3.9 租户端点守卫）
+ *   与 audit:export（§3.7 异步导出）
  * @module @fw/auth
  */
 
@@ -50,11 +52,25 @@ export const PERM = {
   MENU_DELETE: 'menu:delete',
   /** 审计日志查询 */
   AUDIT_READ: 'audit:read',
+  /** 审计日志异步导出（N-02：返回 jobId，进度与结果走 /jobs/:id/*） */
+  AUDIT_EXPORT: 'audit:export',
   /** 字典读 / 维护（PRD-005 FR-07：字典项避免前端硬编码枚举） */
   DICT_READ: 'dict:read',
   DICT_WRITE: 'dict:write',
   /** 下线本人登录设备 */
   AUTH_REVOKE_SESSION: 'auth:revoke-session',
+  /**
+   * 租户（PRD-008 §3.9，M8）：平台管理员视角的租户生命周期管理。
+   * 与管理面守卫用的 `system:tenant:ignore`（TENANT_IGNORE）语义不同——后者表示「本请求不参与租户解析」，
+   * 前者是「可以读写 tenants 表」。两者共存且不可互换。
+   */
+  TENANT_READ: 'tenant:read',
+  TENANT_CREATE: 'tenant:create',
+  TENANT_UPDATE: 'tenant:update',
+  /** 停用租户（DELETE /tenants/:id，不物理删） */
+  TENANT_DELETE: 'tenant:delete',
+  /** 隔离级别迁移（shared ↔ dedicated，长任务） */
+  TENANT_MANAGE: 'tenant:manage',
 } as const;
 
 /** 权限码字面量类型 */

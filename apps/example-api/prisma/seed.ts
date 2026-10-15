@@ -24,6 +24,9 @@
  *   真实部署下必然点击落 404；演示用订单列表页只存在于前端 mock（dev/test），故整支移除，
  *   真实部署的业务菜单示范由 /demo-items 承担（order:read / order:refund 权限点保留，供授权页与前端演示页使用）；
  *   ③ 普通用户角色补 dict:read：状态列 / 下拉全站走 useDict，缺该权限时普通用户只能看到原始值（0/1）而非「启用/禁用」
+ * @modified 2026-10-15 donttemo N-01/N-02：① 补租户管理五权限点（tenant:read/create/update/delete/manage）与
+ *   audit:export，并新增「租户管理」菜单（/system/tenants，需 tenant:read）——权限点与菜单同批建出，
+ *   否则页面即便有路由也会被 RBAC 守卫拒绝；② 补字典 tenant_isolation / tenant_status（租户管理页标签与下拉数据源）
  * @module example-api
  */
 
@@ -89,9 +92,19 @@ const FRAMEWORK_PERMISSIONS: PermissionSeed[] = [
   { code: PERM.MENU_UPDATE, name: '菜单修改', type: 'menu', module: 'menu' },
   { code: PERM.MENU_DELETE, name: '菜单删除', type: 'menu', module: 'menu' },
   { code: PERM.AUDIT_READ, name: '审计日志查询', type: 'api', module: 'audit' },
+  { code: PERM.AUDIT_EXPORT, name: '审计日志导出', type: 'api', module: 'audit' },
   { code: PERM.DICT_READ, name: '字典查询', type: 'api', module: 'dict' },
   { code: PERM.DICT_WRITE, name: '字典维护', type: 'api', module: 'dict' },
   { code: PERM.AUTH_REVOKE_SESSION, name: '下线登录设备', type: 'api', module: 'auth' },
+  // N-01 租户管理（api-spec §3.9）：平台管理员对 tenants 表的读写与隔离级别迁移
+  { code: PERM.TENANT_READ, name: '租户查询', type: 'api', module: 'tenant' },
+  { code: PERM.TENANT_CREATE, name: '开租户', type: 'api', module: 'tenant' },
+  { code: PERM.TENANT_UPDATE, name: '租户修改', type: 'api', module: 'tenant' },
+  { code: PERM.TENANT_DELETE, name: '租户停用', type: 'api', module: 'tenant' },
+  { code: PERM.TENANT_MANAGE, name: '租户隔离级别迁移', type: 'api', module: 'tenant' },
+  // 跨租户维护豁免（@fw/auth 的 @IgnoreTenant）：租户管理端点是平台管理员视角，
+  // 必须豁免租户解析（否则 TENANT_ENABLED=true 时自身 4001），守卫要求显式持有本权限并写豁免审计。
+  { code: PERM.TENANT_IGNORE, name: '跨租户维护', type: 'api', module: 'tenant' },
   // M7 队列管理端点（@fw/queue 的 QueueAdminController，路径 /api/v1/admin/queue）的守卫权限。
   // 真机部署修复：缺少这两点会让整个队列管理功能面对任何角色都返回 3002，必须随种子建出并授予 admin。
   { code: QUEUE_PERM_LIST, name: '队列查看', type: 'api', module: 'queue' },
@@ -159,6 +172,8 @@ const MENU_TREE: MenuSeed[] = [
       { name: '字典管理', path: '/system/dict', component: 'system/dict', icon: 'collection', permissionCode: PERM.DICT_READ, sort: 5 },
       // M7 队列管理页（views/system/queue）：前端动态路由由菜单树生成，缺此条则页面不可达（直输 URL 落 403）
       { name: '队列管理', path: '/system/queue', component: 'system/queue', icon: 'list', permissionCode: QUEUE_PERM_LIST, sort: 6 },
+      // N-01 租户管理页（views/system/tenants）：列表 / 开租户 / 改套餐状态 / 停用 / 隔离级别迁移
+      { name: '租户管理', path: '/system/tenants', component: 'system/tenants', icon: 'office-building', permissionCode: PERM.TENANT_READ, sort: 7 },
     ],
   },
   // 注意：历史种子在此挂了「订单中心 /order → 订单退款(order/refund)」，但 views/order/refund 视图
@@ -247,6 +262,24 @@ const DICT_SEED: DictSeed[] = [
       { label: 'APP', value: 'app', color: 'success' },
       { label: '网页', value: 'web', color: 'info' },
       { label: '线下', value: 'offline', color: 'warning' },
+    ],
+  },
+  {
+    code: 'tenant_isolation',
+    name: '租户隔离级别',
+    remark: 'N-01 租户管理页：shared=共享库+tenant_id / dedicated=独立库（按租户路由数据源）',
+    items: [
+      { label: '共享库', value: 'shared', color: 'primary' },
+      { label: '独立库', value: 'dedicated', color: 'warning' },
+    ],
+  },
+  {
+    code: 'tenant_status',
+    name: '租户状态',
+    remark: 'N-01 租户管理页：停用租户在租户解析上 fail-closed（4001）',
+    items: [
+      { label: '启用', value: '1', color: 'success' },
+      { label: '停用', value: '0', color: 'danger' },
     ],
   },
 ];

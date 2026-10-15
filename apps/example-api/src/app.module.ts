@@ -12,6 +12,8 @@
  * @modified 2026-10-13 donttemo M8 接入 TenantModule（默认单租户模式；TENANT_ENABLED 一改即切多租户）
  * @modified 2026-10-14 donttemo M8 接入 TransportModule（in-process 默认）+ 传输就绪探针 + 传输演示模块
  * @modified 2026-10-14 donttemo M8 T-M8-06 接入 TelemetryModule（OTEL_ENABLED=false 零开销）
+ * @modified 2026-10-15 donttemo N-01/N-02 接入 JobsModule（异步任务中心，@Global）与 TenantAdminModule
+ *   （/api/v1/tenants 五端点）
  * @module example-api
  */
 import { Module } from '@nestjs/common';
@@ -28,6 +30,8 @@ import { DemoModule, dbReadinessProbe } from './modules/demo/demo.module.js';
 import { DemoItemModule } from './modules/demo-item/demo-item.module.js';
 import { DemoQueueModule } from './modules/demo-queue/demo-queue.module.js';
 import { DemoTransportModule } from './modules/demo-transport/demo-transport.module.js';
+import { JobsModule } from './modules/jobs/jobs.module.js';
+import { TenantAdminModule } from './modules/tenant/tenant-admin.module.js';
 import { PrismaTenantStore } from './modules/tenant/prisma-tenant-store.js';
 
 /** 缓存就绪探针：与 CacheModule.forRoot 共用同一实例（装配后由模块绑定缓存服务） */
@@ -64,6 +68,10 @@ export const transportReadinessProbe = createTransportReadinessProbe();
     DemoItemModule,
     DemoQueueModule,
     DemoTransportModule,
+    // N-02：异步任务中心（@Global，审计导出与租户迁移共用；任务面端点 /api/v1/jobs）
+    JobsModule,
+    // N-01：租户管理端点（/api/v1/tenants 五端点；跨租户维护面，标 @IgnoreTenant）
+    TenantAdminModule,
   ],
 })
 export class AppModule {}
