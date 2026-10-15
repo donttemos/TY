@@ -40,7 +40,7 @@ interface IoredisModule {
 }
 
 /** 解析多节点连接串（逗号分隔）→ 节点数组；非逗号串返回 null */
-function parseClusterNodes(url: string): Array<{ host: string; port: number }> | null {
+export function parseClusterNodes(url: string): Array<{ host: string; port: number }> | null {
   if (!url.includes(',')) return null;
   return url
     .split(',')
