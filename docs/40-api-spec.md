@@ -11,6 +11,10 @@
 > 新增 §3.11 异步任务中心（`/jobs/:id/progress|retry|download`，登录即可 + 归属人隔离）；§3.9 补注跨租户维护面的
 > `@IgnoreTenant()` + `system:tenant:ignore` 双重要求与 legacy 守卫语义；§4 导出/批量行的「M7 未实现通用进度端点」标注作废。
 >
+> 变更记录：2026-10-15 donttemo BUG-15 增量 + E-07：§3.4 `GET /roles`、§3.6 `GET /dict/categories` / `GET /dict/items`
+> 接入 `sort` 白名单（未知字段 / 非法方向 / 超上限一律 `400/1001`，白名单只收视图可见字段）；新增 `audit_module`
+> 字典（审计日志页模块筛选项数据源，取值与各控制器写入的 `module` 同源：`auth` / `user` / `role` / `tenant`）。
+>
 > 约定：接口由代码装饰器自动生成 OpenAPI 3.1 文档（`GET /docs`），本文件定义**规范与清单**，实现必须与本文件一致（CI 校验 spec 与路由一致）。
 
 ## 1. 通用约定
@@ -160,7 +164,7 @@
 
 | 方法 | 路径 | 权限点 | 说明 |
 |---|---|---|---|
-| GET | `/roles` | `role:read` | 角色列表 |
+| GET | `/roles` | `role:read` | 角色列表（支持 `sort`，白名单 `id` / `code` / `name` / `remark` / `data_scope` / `sort`；未知字段 `400/1001`） |
 | POST | `/roles` | `role:create` | 新建角色（含 `dataScope`） |
 | PUT | `/roles/:id` | `role:update` | 更新（内置角色不可改 code） |
 | DELETE | `/roles/:id` | `role:delete` | 删除（内置角色拒绝） |
@@ -183,9 +187,9 @@
 
 | 方法 | 路径 | 权限点 | 说明 |
 |---|---|---|---|
-| GET | `/dict/categories` | `dict:read` | 分类列表 |
+| GET | `/dict/categories` | `dict:read` | 分类列表（支持 `sort`，白名单 `id` / `code` / `name` / `remark`） |
 | POST / PUT / DELETE | `/dict/categories[/:id]` | `dict:write` | 分类维护（删除连带其下字典项；软删同时释放编码唯一键） |
-| GET | `/dict/items` | `dict:read` | 字典项列表（按 `category_id`） |
+| GET | `/dict/items` | `dict:read` | 字典项列表（按 `category_id`；支持 `sort`，白名单 `id` / `label` / `value` / `sort`） |
 | POST / PUT / DELETE | `/dict/items[/:id]` | `dict:write` | 字典项维护 |
 | GET | `/dict/:code` | `dict:read` | 按分类编码取字典项，供前端 `useDict()` 消费；编码不存在返回空数组而非报错。**前端在无 `dict:read` 时短路不发请求并降级显示原始值**（此前误标「登录后」，与实现不符） |
 
