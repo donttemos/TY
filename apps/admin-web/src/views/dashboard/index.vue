@@ -11,6 +11,10 @@
  *   ② 统计卡三态化（加载中 / 有值 / 取数失败显示「—」），不再用 0 冒充；
  *   ③ 常用入口按权限过滤；④ 一个指标都不可读时给出明确说明而非空卡片。
  *   权限码与后端守卫的对应：/users=user:read、/roles=role:read、/permissions=permission:read、/audit-logs=audit:read
+ * @modified 2026-10-15 donttemo R4-05 收口：统计口径与 dataScope 对齐标注。后端 /users 与 /audit-logs
+ *   已按 dataScope 四档收敛（M8 T-M8-04），self/org 用户看到的 total 即「其范围内数量」，
+ *   与列表页所见一致——口径本身无误，缺的是**标注**：非 all 档时在范围敏感卡（用户数 / 审计记录）
+ *   副标题标注生效范围，避免「用户数 1」被误读为全站规模；角色数 / 权限点是全局目录（无范围概念），不标注。
  * @module admin-web/views
 -->
 
@@ -30,20 +34,35 @@ const user = useUserStore();
 interface StatDef {
   label: string;
   permission: PermissionCode;
+  /** true = 该指标受 dataScope 收敛（后端按调用方范围过滤 total），需随档位标注口径（R4-05） */
+  scoped?: boolean;
   /** 返回该指标的数值；失败由调用方兜成 null（显示「—」） */
   load: () => Promise<number>;
 }
 
 const STAT_DEFS: StatDef[] = [
-  { label: '用户数', permission: 'user:read', load: async () => (await userApi.fetchUsers({ pageSize: 1 })).total },
+  { label: '用户数', permission: 'user:read', scoped: true, load: async () => (await userApi.fetchUsers({ pageSize: 1 })).total },
   { label: '角色数', permission: 'role:read', load: async () => (await roleApi.fetchRoles()).length },
   {
     label: '权限点',
     permission: 'permission:read',
     load: async () => (await roleApi.fetchPermissionGroups()).reduce((sum, group) => sum + group.items.length, 0),
   },
-  { label: '审计记录', permission: 'audit:read', load: async () => (await auditApi.fetchAuditLogs({ pageSize: 1 })).total },
+  { label: '审计记录', permission: 'audit:read', scoped: true, load: async () => (await auditApi.fetchAuditLogs({ pageSize: 1 })).total },
 ];
+
+/** dataScope 档位 → 口径标注文案（与角色表单字典 data_scope 同语义） */
+const SCOPE_NOTES: Record<string, string> = {
+  org: '（限本部门）',
+  org_below: '（限本部门及下级）',
+  self: '（限本人）',
+};
+
+/** 非 all 档的口径标注（all = 全部数据，无需标注） */
+const scopeNote = computed(() => {
+  const ds = user.profile?.dataScope;
+  return (ds && ds !== 'all' && SCOPE_NOTES[ds]) || '';
+});
 
 /** 常用入口：同样按权限过滤，避免出现点了就 403 的死入口 */
 const QUICK_LINKS: { title: string; path: string; desc: string; permission: PermissionCode }[] = [
@@ -58,6 +77,8 @@ interface StatCard {
   label: string;
   /** null = 取数失败（显示「—」），与真实的 0 区分开 */
   value: number | null;
+  /** 口径标注（仅范围敏感卡在非 all 档携带；空串 = 不标注） */
+  note: string;
 }
 
 const loading = ref(true);
@@ -72,10 +93,11 @@ onMounted(async () => {
   const visible = STAT_DEFS.filter((def) => user.hasPermission(def.permission));
   cards.value = await Promise.all(
     visible.map(async (def): Promise<StatCard> => {
+      const note = def.scoped ? scopeNote.value : '';
       try {
-        return { label: def.label, value: await def.load() };
+        return { label: def.label, value: await def.load(), note };
       } catch {
-        return { label: def.label, value: null };
+        return { label: def.label, value: null, note };
       }
     }),
   );
@@ -94,7 +116,9 @@ onMounted(async () => {
     <div v-else-if="cards.length" class="fw-dashboard-stats">
       <div v-for="card in cards" :key="card.label" class="fw-card fw-dashboard-stat">
         <div class="fw-dashboard-stat-value">{{ card.value ?? '—' }}</div>
-        <div class="fw-text-weak">{{ card.label }}</div>
+        <div class="fw-text-weak">
+          {{ card.label }}<span v-if="card.note" class="fw-dashboard-scope-note">{{ card.note }}</span>
+        </div>
       </div>
     </div>
     <div v-else class="fw-card">
@@ -139,6 +163,10 @@ onMounted(async () => {
   font-size: 28px;
   font-weight: 600;
   color: var(--el-color-primary);
+}
+
+.fw-dashboard-scope-note {
+  color: var(--el-color-warning);
 }
 
 .fw-dashboard-section-title {
