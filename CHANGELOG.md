@@ -14,6 +14,14 @@
 
 ## [Unreleased]
 
+### Added（PRD-010 立项，2026-10-15）
+
+- **PRD-010 · 下一阶段增强：多实例一致性收口与模板生态（[docs/prd/prd-010-next-stage-enhancements.md](./docs/prd/prd-010-next-stage-enhancements.md)，M10，草案）**：把 [81 号增强规划](./docs/81-enhancement-roadmap.md) 的 E-01~E-17 收编为标准 PRD 形态（背景目标 / 范围 / 用户故事 / FR 表 / NFR / 关键设计 / 8 条 AC / 依赖与风险 / 4 条 Open Questions）。四阶段：P0 多实例一致性收口（任务中心驱动化、配置中心多实例语义 + nacos 驱动转正、框架级 API 限流、`/permissions/tree` 落地）→ P1 规模化遗留（K8s 冒烟、bullmq/transport cluster、OAuth2 端到端）→ P2 模板生态（admin 全栈模板、`@fw/storage`、审计归档、压测补课）→ P3 体验增强（SSE、站内信、i18n、暗色模式、上限配置化、前端 RUM）。PRD 索引同步（原「待规划」中的文件存储 / 消息通知 / 国际化三项由本 PRD 收编）；81 号规划文档头加收编交叉引用。
+
+### Added（下一阶段增强规划落盘，2026-10-15）
+
+- **增强功能规划文档（[docs/81-enhancement-roadmap.md](./docs/81-enhancement-roadmap.md)）**：基于 v0.4.0 + Unreleased 现状的下一阶段（v0.5.x–v0.6.x）完善项清单（E-01~E-17），按 P0–P3 排序。核心评估结论：单实例叙事已闭环，主线转向**多实例与规模化叙事**——任务中心进程内存态（A-01）、配置快照历史进程内环形表（A-02）在多副本下破坏无状态性；G5「限流默认开启」目前仅覆盖登录面（A-03）；`/permissions/tree` 是唯一悬空契约（A-04）。P0 四项（E-01 任务中心驱动化 / E-02 配置中心多实例语义 + nacos 驱动转正 / E-03 框架级 API 限流 / E-04 权限树落地）建议构成 v0.5.0 主线；E-05~E-07（K8s 冒烟、bullmq/transport cluster 支持、OAuth2 端到端）为规模化遗留；E-08~E-11（admin 模板、`@fw/storage`、审计归档、压测补课）为模板生态；E-12~E-17（SSE、站内信、i18n、暗色模式、上限配置化、前端 RUM）按需穿插。每项含目标/收益/验收口径/依赖；明确不做清单与非目标对齐（Kafka 驱动经 O-5 评估不排期）。
+
 ### Added（M9 Backlog 收口与 L-04 实测，2026-10-15）
 
 - **配置一键回滚 API（M9 Backlog）**：`POST /api/v1/configs/rollback`（`system:config:write`）——`@fw/config-center` 进程内快照历史环形表（20 版，每次版本推进登记），回滚走三阶段管道：**全量预审计**（任一失败整体不生效）→ **持久化目标覆盖集**（API 源，先落盘后生效）→ **逐键应用并通知**；目标未覆盖的键恢复 env 快照值；回滚本身计入历史（再回滚 = 撤销回滚）；版本不存在 `404/5003`（仅保留最近 20 版）、无历史 `400/1004`、未启用 `400/1004`。api-spec §3.10 与 PRD-009 §10 同步（推翻该 PRD §9「回滚 API 不做」的初版结论并记录决策理由）。验证：`@fw/config-center` 回滚单测 6 条（含审计失败 / 持久化失败整体不生效的反向验证）、`smoke-config` 阶段 G2 新增 8 条（**35/35**）。
