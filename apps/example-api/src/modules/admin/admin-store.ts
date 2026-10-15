@@ -10,12 +10,14 @@
  *   tenant 收敛由基类保证；关联表与字典项用模型委托（条件超出 Repository<T> 公共子集），全部参数化查询。
  * @author donttemo
  * @created 2026-10-14
+ * @modified 2026-10-15 donttemo BUG-15 增量：listRoleDetails / listDictCategories / listDictItems
+ *   增加可选 sort 参数（控制器白名单收敛后透传，缺省行为不变，存储层自带主键 tie-breaker）
  * @module example-api/admin
  */
 
 import { Inject, Injectable } from '@nestjs/common';
 import { BizError, ErrorCode } from '@fw/core';
-import { DB_CLIENT, PrismaRepository, type ModelDelegate, type PrismaClientLike } from '@fw/db';
+import { DB_CLIENT, PrismaRepository, type ModelDelegate, type PrismaClientLike, type Sort } from '@fw/db';
 import type { BaseEntity } from '@fw/db';
 import type {
   AuditAction,
@@ -215,8 +217,11 @@ export interface AdminStore {
 
   // ---------- 角色维护 ----------
 
-  /** 角色详情列表（含权限点计数，按 sort 升序） */
-  listRoleDetails(): Promise<RoleDetail[]>;
+  /**
+   * 角色详情列表（含权限点计数）。
+   * @param sort 排序说明（BUG-15 增量，白名单已在控制器收敛）；缺省按 `sort asc` + 主键 tie-breaker
+   */
+  listRoleDetails(sort?: Sort<RoleDetail>): Promise<RoleDetail[]>;
   /** 新建角色（code 唯一冲突抛 409） */
   createRole(input: RoleUpsertInput): Promise<RoleDetail>;
   /** 更新角色资料（内置角色不可改 code，由调用方裁定） */
@@ -251,12 +256,14 @@ export interface AdminStore {
 
   // ---------- 字典 ----------
 
-  listDictCategories(): Promise<DictCategoryView[]>;
+  /** 分类列表（sort 缺省按 createdAt asc + 主键 tie-breaker） */
+  listDictCategories(sort?: Sort<DictCategoryView>): Promise<DictCategoryView[]>;
   createDictCategory(input: DictCategoryUpsertInput): Promise<DictCategoryView>;
   updateDictCategory(id: ID, patch: Partial<DictCategoryUpsertInput>): Promise<DictCategoryView>;
   /** 删除分类（连带软删其下字典项） */
   deleteDictCategory(id: ID): Promise<void>;
-  listDictItems(categoryId: ID): Promise<DictItemView[]>;
+  /** 字典项列表（按分类；sort 缺省按 sort asc + 主键 tie-breaker） */
+  listDictItems(categoryId: ID, sort?: Sort<DictItemView>): Promise<DictItemView[]>;
   /** 按分类编码取字典项（useDict 消费入口） */
   listDictItemsByCode(code: string): Promise<DictItemView[]>;
   createDictItem(categoryId: ID, input: DictItemUpsertInput): Promise<DictItemView>;
@@ -347,8 +354,9 @@ export class PrismaAdminStore implements AdminStore {
 
   // ---------- 角色维护 ----------
 
-  async listRoleDetails(): Promise<RoleDetail[]> {
-    const rows = await this.roles.list(undefined, { sort: 'asc' });
+  async listRoleDetails(sort?: Sort<RoleDetail>): Promise<RoleDetail[]> {
+    // 排序说明透传存储层（PrismaRepository 自动追加主键 tie-breaker）；缺省按展示序号 sort asc
+    const rows = await this.roles.list(undefined, (sort ?? { sort: 'asc' }) as Sort<RoleRow>);
     // 权限点计数一次聚合，避免列表 N+1（role_permission 无 relation，Prisma 不能 include）
     const links = (await this.delegate('rolePermission').findMany({})) as Array<{ roleId: string }>;
     const counts = new Map<string, number>();
@@ -502,8 +510,8 @@ export class PrismaAdminStore implements AdminStore {
 
   // ---------- 字典 ----------
 
-  async listDictCategories(): Promise<DictCategoryView[]> {
-    const rows = await this.dictCategories.list(undefined, { createdAt: 'asc' });
+  async listDictCategories(sort?: Sort<DictCategoryView>): Promise<DictCategoryView[]> {
+    const rows = await this.dictCategories.list(undefined, (sort ?? { createdAt: 'asc' }) as Sort<DictCategoryRow>);
     return rows.map((row) => ({
       id: row.id,
       code: row.code,
@@ -545,8 +553,11 @@ export class PrismaAdminStore implements AdminStore {
     } as Partial<DictCategoryRow>);
   }
 
-  async listDictItems(categoryId: ID): Promise<DictItemView[]> {
-    const rows = await this.dictItems.list({ categoryId } as Partial<DictItemRow>, { sort: 'asc' });
+  async listDictItems(categoryId: ID, sort?: Sort<DictItemView>): Promise<DictItemView[]> {
+    const rows = await this.dictItems.list(
+      { categoryId } as Partial<DictItemRow>,
+      (sort ?? { sort: 'asc' }) as Sort<DictItemRow>,
+    );
     return rows.map((row) => this.toDictItem(row));
   }
 

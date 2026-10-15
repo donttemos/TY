@@ -1,17 +1,20 @@
 /*
  * @file 角色与权限端点（PRD-003 §3.4）
  * @description /api/v1/roles、/api/v1/permissions：
- *   GET  /roles                     需 role:read
+ *   GET  /roles                     需 role:read；支持 sort=<snake_case 字段>:<asc|desc>（白名单解析）
  *   GET  /roles/:id/permissions      需 role:read
  *   PUT  /roles/:id/permissions      需 role:grant —— 全量授权，写入 role_permission 并即时失效相关用户权限缓存
  *   GET  /permissions                需 permission:read（按 module 分组，供后台角色授权页勾选）
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo GET /roles 接入排序白名单（BUG-15 增量）：parseSortQuery 解析后
+ *   透传存储层，未知字段 / 非法方向 / 超上限一律 400，与 users / audit-logs / tenants 同语义
  * @module example-api/auth
  */
 
-import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Query, Req } from '@nestjs/common';
 import { BizError, ErrorCode } from '@fw/core';
+import { parseSortQuery, type Sort } from '@fw/db';
 import {
   AUTH_STORE,
   Audit,
@@ -35,6 +38,17 @@ interface PermissionGroup {
   items: AuthPermission[];
 }
 
+/** GET /roles 排序白名单（HTTP 参数名 snake_case → RoleDetail 字段名）。
+ * 只收视图可见字段：permissionCount 是聚合计算字段、createdAt 不在 RoleDetail 视图内，均不可排序 */
+const ROLE_SORT_FIELDS = {
+  id: 'id',
+  code: 'code',
+  name: 'name',
+  remark: 'remark',
+  data_scope: 'dataScope',
+  sort: 'sort',
+} as const;
+
 /**
  * 角色与权限控制器：/api/v1
  */
@@ -46,11 +60,12 @@ export class RbacController {
     @Inject(ADMIN_STORE) private readonly admin: AdminStore,
   ) {}
 
-  /** 角色列表（含权限点计数，C-06 契约 §3.4 RoleListItem） */
+  /** 角色列表（含权限点计数，C-06 契约 §3.4 RoleListItem）；sort 经白名单解析，非法即 400 */
   @Permissions(PERM.ROLE_READ)
   @Get('roles')
-  async listRoles(): Promise<RoleDetail[]> {
-    return this.admin.listRoleDetails();
+  async listRoles(@Query('sort') sort?: string): Promise<RoleDetail[]> {
+    const parsedSort = parseSortQuery<RoleDetail>(sort, ROLE_SORT_FIELDS);
+    return this.admin.listRoleDetails(parsedSort as Sort<RoleDetail> | undefined);
   }
 
   /** 某角色已授权的权限点 */

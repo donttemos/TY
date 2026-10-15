@@ -5,12 +5,15 @@
  *   路由顺序：静态段（categories / items）必须先于动态段（:code）注册，否则 :code 会吞掉静态路径。
  * @author donttemo
  * @created 2026-10-14
+ * @modified 2026-10-15 donttemo BUG-15 增量：GET /dict/categories 与 GET /dict/items 接入排序白名单
+ *   （parseSortQuery，未知字段 / 非法方向 / 超上限一律 400/1001；白名单只收视图可见字段）
  * @module example-api/admin
  */
 
 import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Query } from '@nestjs/common';
 import { BizError, ErrorCode } from '@fw/core';
 import { PERM, Permissions } from '@fw/auth';
+import { parseSortQuery } from '@fw/db';
 import { ADMIN_STORE } from './admin-store.js';
 import type {
   AdminStore,
@@ -23,6 +26,22 @@ import type {
 /** Prisma 唯一约束冲突错误码 */
 const PRISMA_UNIQUE_VIOLATION = 'P2002';
 
+/** GET /dict/categories 排序白名单（BUG-15 增量）——只收视图可见字段（DictCategoryView 无 createdAt） */
+const DICT_CATEGORY_SORT_FIELDS = {
+  id: 'id',
+  code: 'code',
+  name: 'name',
+  remark: 'remark',
+} as const;
+
+/** GET /dict/items 排序白名单（DictItemView 无 createdAt，color 排序无业务意义） */
+const DICT_ITEM_SORT_FIELDS = {
+  id: 'id',
+  label: 'label',
+  value: 'value',
+  sort: 'sort',
+} as const;
+
 /**
  * 字典控制器：/api/v1/dict
  */
@@ -30,11 +49,11 @@ const PRISMA_UNIQUE_VIOLATION = 'P2002';
 export class DictController {
   constructor(@Inject(ADMIN_STORE) private readonly admin: AdminStore) {}
 
-  /** 分类列表 */
+  /** 分类列表（sort 经白名单解析，非法即 400） */
   @Permissions(PERM.DICT_READ)
   @Get('categories')
-  async categories(): Promise<DictCategoryView[]> {
-    return this.admin.listDictCategories();
+  async categories(@Query('sort') sort?: string): Promise<DictCategoryView[]> {
+    return this.admin.listDictCategories(parseSortQuery<DictCategoryView>(sort, DICT_CATEGORY_SORT_FIELDS));
   }
 
   /** 新建分类（编码唯一，冲突 409） */
@@ -66,12 +85,12 @@ export class DictController {
     return { id };
   }
 
-  /** 字典项列表（按分类） */
+  /** 字典项列表（按分类；sort 经白名单解析，非法即 400） */
   @Permissions(PERM.DICT_READ)
   @Get('items')
-  async items(@Query('category_id') categoryId: string): Promise<DictItemView[]> {
+  async items(@Query('category_id') categoryId: string, @Query('sort') sort?: string): Promise<DictItemView[]> {
     if (!categoryId) throw new BizError(ErrorCode.BAD_REQUEST, 'category_id 必填');
-    return this.admin.listDictItems(categoryId);
+    return this.admin.listDictItems(categoryId, parseSortQuery<DictItemView>(sort, DICT_ITEM_SORT_FIELDS));
   }
 
   /** 新建字典项 */
