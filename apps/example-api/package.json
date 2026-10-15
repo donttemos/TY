@@ -21,6 +21,7 @@
     "@fw/auth": "workspace:*",
     "@fw/cache": "workspace:*",
     "@fw/config": "workspace:*",
+    "@fw/config-center": "workspace:*",
     "@fw/core": "workspace:*",
     "@fw/db": "workspace:*",
     "@fw/logger": "workspace:*",
