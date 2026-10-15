@@ -66,6 +66,7 @@
 | 队列 | `MQ_DRIVER` | 否 | memory | `memory` / `bullmq`；`kafka` 尚未实现 |
 | | `MQ_URL` | 条件 | — | bullmq 的 Redis 连接串；留空回退 `CACHE_URL`，两者皆空则启动失败 |
 | | `MQ_PREFIX` | 否 | `fw:<APP_ENV>` | 队列键前缀，部署间须隔离 |
+| | **Redis Cluster 形态**（M10 E-06） | — | — | `MQ_URL` 支持逗号分隔多节点（自动走 `ioredis.Cluster`）；**cluster 下必须 `MQ_PREFIX={...}:`（hash-tag，BullMQ 键族同槽）**，缺失时启动 WARN；`@fw/transport` 的 redis 驱动同样支持多节点串且**无 hash-tag 要求**（键操作全单键）；实测见 [94b](./94b-queue-transport-cluster-live-test.md) |
 | | `MQ_CONCURRENCY` | 否 | 10 | 每队列消费并发 |
 | | `MQ_MAX_ATTEMPTS` | 否 | 4 | 最大执行次数，含首次（即最多重试 3 次） |
 | | `MQ_BACKOFF` | 否 | `1000,5000,30000` | 重试退避序列，单位毫秒 |

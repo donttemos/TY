@@ -4,6 +4,7 @@
 >
 > 变更记录：2026-10-15 donttemo 起草——核心功能（M1–M9）已交付，本 PRD 承接下一阶段完善规划，系统评估结果来自 [增强功能规划](../81-enhancement-roadmap.md)（E-01~E-17）。核心判断：**单实例叙事已闭环，下一阶段主线是「多实例与规模化叙事」+「模板生态补全」**——三处进程内存态（任务中心、配置快照历史、登录限流计数之外的业务 API 裸奔面）在多副本部署下打破 G2「业务代码零改动规模演进」承诺。
 > 变更记录：2026-10-15 donttemo P0 落地——**E-01 已交付**（任务中心驱动化，OQ-1 采纳建议结论：产物 ≤20MB 内联起步；AC1 经 `smoke-jobs-db.mjs` 双进程冒烟 10/10）；**E-02 已交付**（快照历史下沉持久层 + nacos 转正，OQ-2 采纳建议结论：持久层方案；AC2 经 `smoke-config-multi.mjs` 双进程冒烟 10/10）；**E-04 已交付**（权限树契约收口，AC4 前端两处选择器换接，实现注记：权限点无菜单归属外键，树不伪造归属层级——契约字面差异如实登记于 api-spec §3.4 与 CHANGELOG）。**E-03 已交付**（框架级 API 限流——令牌桶原语进 `CacheStorePort`（memory 进程内 / redis Lua 原子多实例共享）、429/9003 + Retry-After、白名单豁免、dry-run 灰度、计数进 `/metrics`；AC3 经 `smoke-rate-limit.mjs` 冒烟 8/8。实现注记：按 IP 维度（中间件在鉴权守卫前）+ dry-run 承接灰度观测（PRD §8 风险缓解「计数先行」），语义与 §6 关键设计的差异（令牌桶状态经 store 原语而非 CacheService 表面）已在 CHANGELOG 登记）。**P0 四项（E-01~E-04）全部交付**。
+> 变更记录：2026-10-15 donttemo **E-06 已交付**（bullmq/transport 的 redis-cluster 实测收口——多节点连接串走 ioredis.Cluster + bullmq hash-tag 约定与启动告警；真机 6 节点集群实测 [docs/94b](../94b-queue-transport-cluster-live-test.md)：bullmq 8 断言含失速恢复演练、transport 3 断言全通过；AC8 的 E-06 部分勾选）。**E-07 进行中**。
 
 ## 1. 背景与目标
 

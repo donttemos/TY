@@ -378,11 +378,14 @@ async function phaseBullmq() {
     return;
   }
   console.log('\n=== 阶段 D：bullmq 驱动 + 真实 Redis（TC-JOB-001/003/004 + AC-001）===');
+  // M10 E-06：cluster URL（逗号分隔）→ MQ_PREFIX 包 hash-tag（BullMQ 键族同槽）+ CACHE 切 redis-cluster
+  //（cache 单实例客户端对 cluster 节点会收 MOVED 假错误）；单节点保持原形态。
+  const isCluster = url.includes(',');
   const server = await startServer({
     MQ_DRIVER: 'bullmq',
     MQ_URL: url,
-    MQ_PREFIX: `fw:smoke:${Date.now()}`,
-    CACHE_DRIVER: 'redis',
+    MQ_PREFIX: isCluster ? `{fw:smoke:${Date.now()}}:` : `fw:smoke:${Date.now()}`,
+    CACHE_DRIVER: isCluster ? 'redis-cluster' : 'redis',
     CACHE_URL: url,
   });
   try {
@@ -473,7 +476,13 @@ async function phaseStallRecovery() {
   console.log('\n=== 阶段 F：失速恢复演练（TC-JOB-008：真实 Redis 上强杀在途消费进程）===');
   // 独立前缀避免与其他阶段/历史残留串队列；MQ_STALLED_MS=1s 让失速检测尽快发现
   // （锁本身随消费进程死亡需等 lockDuration（默认 30s）过期，恢复窗口约 31~35s）
-  const env = { MQ_DRIVER: 'bullmq', MQ_URL: url, MQ_PREFIX: `fw:stall:${Date.now()}`, MQ_STALLED_MS: '1000' };
+  // M10 E-06：cluster URL（逗号分隔）→ prefix 包 hash-tag（与阶段 D 同理，键族同槽）
+  const env = {
+    MQ_DRIVER: 'bullmq',
+    MQ_URL: url,
+    MQ_PREFIX: url.includes(',') ? `{fw:stall:${Date.now()}}:` : `fw:stall:${Date.now()}`,
+    MQ_STALLED_MS: '1000',
+  };
   const serverA = await startServer(env);
   try {
     await post('/api/v1/demo-queue/reset');
