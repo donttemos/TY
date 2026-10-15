@@ -42,14 +42,16 @@
 
 ### 1.2 认证
 
-| 方式 | 用法 | 适用场景 |
-|---|---|---|
-| Bearer JWT | `Authorization: Bearer <access_token>` | 默认，后台与客户端 |
-| API Key | `X-Api-Key: <key>` + `X-Api-Sign` + `X-Api-Timestamp` | 开放接口、三方系统 |
-| Session | Cookie（`HttpOnly; Secure; SameSite`） | `AUTH_STRATEGY=session` 的内网后台 |
+| 方式 | 用法 | 适用场景 | 状态（M10 E-07 名实相符） |
+|---|---|---|---|
+| Bearer JWT | `Authorization: Bearer <access_token>` | 默认，后台与客户端 | 端到端可用（`AUTH_STRATEGY=jwt`） |
+| API Key | `X-Api-Key: <key>`；配置 `AUTH_API_KEY_SIGN_SECRET` 后强制 `X-Api-Timestamp` + `X-Api-Sign`（HMAC-SHA256，算法见 [41](./41-auth-strategies.md)） | 开放接口、三方系统（`/api/v1/open/*` 示例路由） | 端到端可用（`@AuthStrategy('apikey')` 路由级声明） |
+| OAuth2 授权码 | `GET /auth/oauth2/:provider/authorize` → IdP → `GET /auth/oauth2/:provider/callback`（回调域名白名单 + state 防 CSRF） | 企业 SSO 登录（example-api + admin-web 登录页端到端） | 端到端可用（提供方经 `AUTH_OAUTH2_PROVIDERS` 注册） |
+| Session | Cookie（`HttpOnly; Secure; SameSite`，`fw_sid`） | `AUTH_STRATEGY=session` 的内网后台 | 策略可用；SessionStore 端口由业务侧提供（不注入即明确拒绝） |
 
 - access token 有效期 2h，refresh token 7d；令牌刷新用 `POST /auth/refresh`。
 - 401 时前端应静默刷新一次并重试，仍失败则跳登录。
+- OAuth2 授权码流程与 apikey 签名约定详见 [认证策略端到端指南](./41-auth-strategies.md)。
 
 ### 1.3 统一响应
 
@@ -146,8 +148,12 @@
 | POST | `/auth/change-password` | `auth:change-password` | 改密，成功后其它设备下线 |
 | GET | `/auth/sessions` | `auth:me` | 当前用户登录设备列表（一个刷新轮换族即一台设备） |
 | DELETE | `/auth/sessions/:id` | `auth:revoke-session` | 下线指定设备（仅限本人设备；整族撤销） |
-| GET | `/auth/oauth/:provider` | 公开 | OAuth2 跳转（微信 / 企业微信 / GitHub） |
-| GET | `/auth/oauth/:provider/callback` | 公开 | OAuth2 回调，绑定或创建用户 |
+| GET | `/auth/oauth2/providers` | 公开 | 已注册 OAuth2 提供方列表（`AUTH_OAUTH2_PROVIDERS`；空列表 = 未启用，登录页不渲染入口） |
+| GET | `/auth/oauth2/:provider/authorize` | 公开 | 发起授权：`redirect_uri` 必须前缀命中 `AUTH_OAUTH2_REDIRECT_WHITELIST`（否则 `400/1001`），302 到 IdP 并携带一次性 `state`（TTL 300s） |
+| GET | `/auth/oauth2/:provider/callback` | 公开 | 授权回调：`state` 一次性校验（重放/跨提供方 `401/3001`）→ code 换 token → 拉用户信息 → 按 `email`/`username` 映射本地账号（不自动建号，未绑定 `401/3001`）；`response_mode=json` 返回 TokenPair，缺省 302 回 `redirect_uri` 且令牌放 URL fragment |
+
+> **订正（M10 E-07）**：原 `/auth/oauth/:provider` 两行契约自 M3 起从未实现（悬空契约），已按本次落地的
+> `/auth/oauth2/*` 三端点改写；流程与安全约束详见 [41](./41-auth-strategies.md)。
 
 ### 3.3 用户（PRD-003 / PRD-005）
 

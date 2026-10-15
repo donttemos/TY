@@ -63,6 +63,9 @@
 | | `AUTH_PASSWORD_POLICY` | 否 | medium | 密码强度策略：`low` / `medium` / `high` |
 | | `AUTH_ALLOW_REGISTER` | 否 | false | 是否开放自助注册（默认关闭，「默认安全」） |
 | | `AUTH_API_KEYS` | 否 | 空 | 开放接口 API Key，格式 `<key>:<主体名>:<权限码,权限码>`；多条用 `|` 分隔。**权限码本身含冒号，按前两段切分** |
+| | `AUTH_API_KEY_SIGN_SECRET` | 否 | — | API Key 签名密钥（M10/E-07）：配置后 apikey 策略强制验签（`X-Api-Timestamp` + `X-Api-Sign`，算法与示例见 [41](./41-auth-strategies.md)）；敏感键不入日志 |
+| | `AUTH_OAUTH2_PROVIDERS` | 否 | 空 | OAuth2 提供方配置（M10/E-07）：JSON 对象串 `{ provider: { clientId, clientSecret, authorizeUrl, tokenUrl, userInfoUrl, scope? } }`；空 = 未启用（`/auth/oauth2/providers` 返回空列表，登录页不渲染入口） |
+| | `AUTH_OAUTH2_REDIRECT_WHITELIST` | 否 | 空 | OAuth2 回调地址白名单（M10/E-07）：逗号分隔 URL 前缀；**空 = 拒绝一切回调地址（默认安全）**，启用 OAuth2 端到端必须显式配置 |
 | 队列 | `MQ_DRIVER` | 否 | memory | `memory` / `bullmq`；`kafka` 尚未实现 |
 | | `MQ_URL` | 条件 | — | bullmq 的 Redis 连接串；留空回退 `CACHE_URL`，两者皆空则启动失败 |
 | | `MQ_PREFIX` | 否 | `fw:<APP_ENV>` | 队列键前缀，部署间须隔离 |

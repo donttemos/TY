@@ -5,6 +5,7 @@
 > 变更记录：2026-10-15 donttemo 起草——核心功能（M1–M9）已交付，本 PRD 承接下一阶段完善规划，系统评估结果来自 [增强功能规划](../81-enhancement-roadmap.md)（E-01~E-17）。核心判断：**单实例叙事已闭环，下一阶段主线是「多实例与规模化叙事」+「模板生态补全」**——三处进程内存态（任务中心、配置快照历史、登录限流计数之外的业务 API 裸奔面）在多副本部署下打破 G2「业务代码零改动规模演进」承诺。
 > 变更记录：2026-10-15 donttemo P0 落地——**E-01 已交付**（任务中心驱动化，OQ-1 采纳建议结论：产物 ≤20MB 内联起步；AC1 经 `smoke-jobs-db.mjs` 双进程冒烟 10/10）；**E-02 已交付**（快照历史下沉持久层 + nacos 转正，OQ-2 采纳建议结论：持久层方案；AC2 经 `smoke-config-multi.mjs` 双进程冒烟 10/10）；**E-04 已交付**（权限树契约收口，AC4 前端两处选择器换接，实现注记：权限点无菜单归属外键，树不伪造归属层级——契约字面差异如实登记于 api-spec §3.4 与 CHANGELOG）。**E-03 已交付**（框架级 API 限流——令牌桶原语进 `CacheStorePort`（memory 进程内 / redis Lua 原子多实例共享）、429/9003 + Retry-After、白名单豁免、dry-run 灰度、计数进 `/metrics`；AC3 经 `smoke-rate-limit.mjs` 冒烟 8/8。实现注记：按 IP 维度（中间件在鉴权守卫前）+ dry-run 承接灰度观测（PRD §8 风险缓解「计数先行」），语义与 §6 关键设计的差异（令牌桶状态经 store 原语而非 CacheService 表面）已在 CHANGELOG 登记）。**P0 四项（E-01~E-04）全部交付**。
 > 变更记录：2026-10-15 donttemo **E-06 已交付**（bullmq/transport 的 redis-cluster 实测收口——多节点连接串走 ioredis.Cluster + bullmq hash-tag 约定与启动告警；真机 6 节点集群实测 [docs/94b](../94b-queue-transport-cluster-live-test.md)：bullmq 8 断言含失速恢复演练、transport 3 断言全通过；AC8 的 E-06 部分勾选）。**E-07 进行中**。
+> 变更记录：2026-10-15 donttemo **E-07 已交付**（OAuth2 授权码端到端——`@fw/auth` OAuth2FlowService（state 一次性消费 + 回调域名白名单边界校验）+ example-api 三端点 + admin-web 登录页入口与回调接管；apikey 强制验签 + `/api/v1/open/ping` 策略载体补上「枚举有、路径无」缺口；session 保持端口注入语义并文档化；`AUTH_STRATEGY` 名实相符经 api-spec §1.2 状态列收口（含 `/auth/oauth/:provider` 悬空契约订正为 `/auth/oauth2/*`）；新配置键 3 个（77→80）。验证：`@fw/auth` 129/129、`smoke-oauth2` 15/15（stub IdP 全链路 + 反向验证）、admin-web 94/94、smoke-mock 119/119；AC6 勾选（跳转→回调→换 token→登录会话全链路 + 越权/重放/白名单反向验证成立）。约定与流程见 [docs/41](../41-auth-strategies.md)）。
 
 ## 1. 背景与目标
 
@@ -96,7 +97,7 @@ M1–M9 交付后，框架在单实例形态下功能完整（鉴权、多库、
 - [ ] AC3（E-03）：未豁免路由超限返回 `429` + 限流错误码（进 api-spec §2 错误码段）；白名单路由不受影响；多实例下全局限流阈值语义正确（redis 驱动实测）。
 - [ ] AC4（E-04）：`/permissions/tree` 返回三层树且受 `permission:read` 保护；前端两处选择器消费该端点；`check-api-parity` 对该端点零提示。
 - [ ] AC5（E-08）：`fw new --template=admin` 生成的项目从 migrate 到登录 + CRUD + 附件上传三端点连通 ≤ 30 分钟，全程无手工改码。
-- [ ] AC6（E-07）：OAuth2 授权码端到端（跳转 → 回调 → 换 token → 登录会话）在 example-api + admin-web 走通，越权与回调域名白名单反向验证成立。
+- [x] AC6（E-07）：OAuth2 授权码端到端（跳转 → 回调 → 换 token → 登录会话）在 example-api + admin-web 走通，越权与回调域名白名单反向验证成立。
 - [ ] AC7（E-10）：归档任务按保留天数迁移审计记录到归档表，分布式锁保证多副本单执行；在线表行数回落。
 - [ ] AC8（环境依赖项 E-05/E-06/E-11）：环境到位即执行，验收数据写入对应实测报告；长期不闭环须在每轮发布报告重申状态（95 报告风险 ② 同款纪律）。
 
