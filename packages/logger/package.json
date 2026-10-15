@@ -1,6 +1,6 @@
 {
   "name": "@fw/logger",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "日志模块：结构化 JSON 日志、traceId 注入、敏感字段脱敏",
   "type": "module",
   "main": "./dist/index.js",

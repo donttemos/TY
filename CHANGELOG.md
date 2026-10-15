@@ -2,7 +2,7 @@
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
-> **当前状态：v0.4.0 已发布（2026-10-15）** —— 在 v0.3.0（真机可用性收口）之上，本次发布把 M8 终验留下的最后一个需求级缺口收掉：**M9 配置中心与热更新（PRD-009）全量落地**——新增独立框架包 `@fw/config-center`（本地文件驱动 + mtime 轮询 + 原子写，「校验 → 审计（先审计后生效）→ 持久化 → 应用覆盖 → 通知订阅者」单一生效管道、fail-keep/fail-fast 语义）、热更新白名单**从 env-schema 键注册表派生**（65 键全量登记 + 11 键白名单，boot 键禁改，防键集漂移）、`@fw/cache` / `@fw/queue` / `@fw/telemetry` / `@fw/tenant` 四服务热更入口与 example-api 订阅装配（**反向验证**：11 键逐一断言生效路径）、`GET/PUT /api/v1/configs` 管理端点 + **5xxx 错误码段**、前端「参数配置」页与变更历史、mock 同构与 `smoke-config` 冒烟；同时补齐 **N-01 租户管理**（后端五端点 + 前端页面 + 迁移任务化 + 越权面收口）、**N-02 异步导出任务中心**（JobCenter 生命周期状态机 + 页脚任务条 + CSV 产物与 mock 逐字节同构）、**列表排序全量收口**（users / audit-logs / roles / dict 四面接入 `parseSortQuery` 白名单 + 前端 sortable + tie-breaker）、死信列表分页、E-06/E-07 体验增强（图标/权限码选择器、审计模块字典化）、L-05 按「配置诚实原则」移除无效 `LOG_FORMAT` 键、7 份点时性文档归档与 PRD 状态订正。发布记录见 [v0.4.0 发布验收报告](./docs/90-release-v0.4.0.md)，上一版见 [v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md)，M1–M8 里程碑证据见 [v0.2.0 发布验收报告](docs/archive/release/90-release-v0.2.0.md)。
+> **当前状态：v0.5.0 已发布（2026-10-15）** —— M10（PRD-010）的 P0 + P1 阶段整体成版：**多实例一致性收口**（E-01 任务中心驱动化 memory/db/bullmq 三驱动、E-02 配置中心多实例语义 + nacos 驱动转正、E-03 框架级 API 令牌桶限流默认开启、E-04 `/permissions/tree` 权限树契约落地）+ **规模化遗留**（E-06 bullmq/transport Redis Cluster 实测收口、**E-07 OAuth2 授权码端到端 + apikey 签名验签**，`AUTH_STRATEGY` 四策略名实相符）+ 遗留缺陷收口（N-03 整页 403 视图、bullmq rateLimit 热更重建、R4-05 工作台统计口径标注）；配置键 65→80，新文档 [docs/41 认证策略端到端指南](./docs/41-auth-strategies.md)。发布记录见 [v0.5.0 发布验收报告](./docs/90-release-v0.5.0.md)，上一版见 [v0.4.0 发布验收报告](./docs/90-release-v0.4.0.md)，M1–M8 里程碑证据见 [v0.2.0 发布验收报告](docs/archive/release/90-release-v0.2.0.md)。
 
 ## 版本与变更规则
 
@@ -12,7 +12,14 @@
 - **来源**：需求变更先记入对应 PRD 的「变更记录」，发布时汇总到本文件。本文件只记**对外可见**的变更，内部重构不在此记录。
 - **频率**：每个发布版本一条记录；`Unreleased` 区间持续累积，发布时转为版本条目并清空。
 
-## [Unreleased]
+## [0.5.0] - 2026-10-15
+
+> 发布说明与验收证据见 **[v0.5.0 发布验收报告](./docs/90-release-v0.5.0.md)**。
+> 本版聚焦「多实例一致性收口 + 规模化遗留 + 认证策略名实相符」：PRD-010 的 P0（E-01~E-04）与 P1（E-06/E-07）阶段交付。
+
+### Added（M10 E-07 认证策略端到端，2026-10-15）
+
+- **E-07 OAuth2 / apikey / session 端到端（PRD-010 P1 / AC6，`AUTH_STRATEGY` 枚举名实相符）**：① `@fw/auth` 新增 **OAuth2 授权码流服务**（`OAuth2FlowService` + `AUTH_OAUTH2_FLOW`）——authorize URL 构建、state 防 CSRF（随机 UUID 经 `AuthCachePort` 一次性消费：取后即删 + TTL 300s，redis 驱动下多实例共享，回调可落任意实例）、RFC 6749 §4.1.3/§4.1.4 标准 form 交换（Node 内置 fetch 不引 SDK，与 NacosConfigDriver 同策略，fetch 可注入测试桩）；**回调域名白名单**（`AUTH_OAUTH2_REDIRECT_WHITELIST` 前缀匹配且边界完整——`http://ok.com.evil.com` 不命中 `http://ok.com`，未配置 = 全拒默认安全）。② example-api 三端点 `GET /auth/oauth2/providers | :provider/authorize | :provider/callback`（providers 驱动登录页入口渲染；身份映射在应用层——本地账号取 IdP `email`/`username`，**不自动建号**防外部身份提权；`response_mode=json` 返回 TokenPair、缺省 302 以 URL fragment 回传令牌不进服务器日志）；`AuthService.loginByOAuth2` 会话落地与口令登录同源（refresh 轮换族/权限加载/审计 `after.provider`）。③ **apikey 强制验签**（`AUTH_API_KEY_SIGN_SECRET` 配置后生效，向后兼容）：`X-Api-Sign = HMAC-SHA256(secret, key\nts\METHOD\path)` + 时间戳 300s 防重放窗口 + 常量时间比对，算法导出 `apiKeySignature` 供业务同源生成；example-api 新增 `/api/v1/open/ping`（`@AuthStrategy('apikey')` 示例路由——原先全仓没有任何 apikey 路由，即「枚举有、路径无」缺口本体）。④ 前端：登录页按 providers 列表渲染 OAuth2 入口（拉取失败按空处理不阻塞密码登录）、回调 fragment 解析（抽 `utils/oauth2.ts` 纯函数 + 单测）、解析后立即清 hash 防令牌留历史记录；mock 同构（同形 providers 端点，无 IdP 如实返回空）。⑤ 新配置键 3 个 `AUTH_OAUTH2_PROVIDERS / AUTH_OAUTH2_REDIRECT_WHITELIST / AUTH_API_KEY_SIGN_SECRET`（`ENV_KEY_PATHS` 77→80 键，护栏同步；全部 boot 键不入热更白名单）。**验证**：`@fw/auth` **129/129**（新增 18 条含 state 重放/跨提供方/白名单边界绕过等反向验证）、`smoke-oauth2.mjs` 新冒烟 **15/15**（本机 stub IdP 全链路：跳转→授权→换 token→`/auth/me` 会话成立 + 反向验证 9 条 + apikey 签名段 4 条）、admin-web **94/94** + `vue-tsc` 0 错误、example-api **52/52**、`@fw/config` **16/16**（80 键）、`smoke-mock` **119/119**、静态门禁 4 项全绿。**契约订正**：api-spec §3.2 原 `/auth/oauth/:provider` 两行自 M3 起悬空未实现，按落地形态改写为 `/auth/oauth2/*`；§1.2 策略表加「名实相符状态」列；流程与签名约定见新文档 [docs/41](./docs/41-auth-strategies.md)。
 
 ### Added（M10 E-06 Redis Cluster 实测收口，2026-10-15）
 

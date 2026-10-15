@@ -1,6 +1,6 @@
 {
   "name": "@fw/queue",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "队列与定时任务：统一 Job 抽象、memory/bullmq 双驱动、@JobHandler/@Cron、重试退避、死信重放、幂等、限速与优雅停机（PRD-007）",
   "type": "module",
   "main": "./dist/index.js",

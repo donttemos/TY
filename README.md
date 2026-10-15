@@ -2,7 +2,7 @@
 
 > 一套「框架之上的框架」：用它在 1 天内搭出任意业务系统的可运行骨架，小到内部工具站、大到多租户 SaaS，规模升级时业务代码零重写。
 >
-> **当前状态：v0.4.0 已发布（2026-10-15）** —— v0.1.0 交付 M1–M4，v0.2.0 一次性纳入 **M5 管理后台前端（PRD-005）、M6 CRUD 代码生成器（PRD-006）、M7 队列与定时任务（PRD-007）、M8 多租户与规模化演进（PRD-008）**（M1–M8 全部交付），v0.3.0 做「真机可用性收口」（修复管理后台 15+4 项前端/路由缺陷、C-06 契约收口、1Panel/裸机真机部署路径）；本次 **v0.4.0 把 M8 终验留下的最后一个需求级缺口收掉：M9 配置中心与热更新（PRD-009）全量落地**——新增独立框架包 `@fw/config-center`（file 驱动 mtime 轮询 + 原子写 + 单一生效管道 + fail-keep）、热更新白名单从 env-schema 键注册表派生（65 键登记 + 11 键白名单）、四框架服务热更入口与订阅装配反向验证、`GET/PUT /api/v1/configs` 管理端点与 5xxx 错误码段、前端「参数配置」页；同时补齐 **N-01 租户管理**（五端点 + 页面 + 迁移任务化）、**N-02 异步导出任务中心**（JobCenter + 页脚任务条 + CSV 逐字节同构）、**列表排序全量收口**（users / audit-logs / roles / dict）、死信列表分页、E-06/E-07 体验增强、L-05 移除无效 `LOG_FORMAT` 键、文档归档与状态订正。发布验收记录见 [v0.4.0 发布验收报告](./docs/90-release-v0.4.0.md)，上一版见 [v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md)。
+> **当前状态：v0.5.0 已发布（2026-10-15）** —— v0.1.0 交付 M1–M4，v0.2.0 一次性纳入 **M5 管理后台前端（PRD-005）、M6 CRUD 代码生成器（PRD-006）、M7 队列与定时任务（PRD-007）、M8 多租户与规模化演进（PRD-008）**（M1–M8 全部交付），v0.3.0 做「真机可用性收口」，v0.4.0 落地 **M9 配置中心与热更新（PRD-009）全量**；本次 **v0.5.0 交付 M10（PRD-010）的 P0 + P1 阶段：多实例一致性收口**（E-01 任务中心驱动化 / E-02 配置中心多实例语义 + nacos 转正 / E-03 框架级 API 限流默认开启 / E-04 权限树契约落地）**与规模化遗留**（E-06 Redis Cluster 实测收口、E-07 OAuth2 授权码端到端 + apikey 签名验签——`AUTH_STRATEGY` 四策略名实相符），配置键 65→80，新文档 [docs/41 认证策略端到端指南](./docs/41-auth-strategies.md)。发布验收记录见 [v0.5.0 发布验收报告](./docs/90-release-v0.5.0.md)，上一版见 [v0.4.0 发布验收报告](./docs/90-release-v0.4.0.md)。
 >
 > **仓库与流水线**：[`donttemos/TY`](https://github.com/donttemos/TY)（private）。CI（GitHub Actions）在 v0.2.0 推送后**首次真实运行**；经修复 6 处「只在干净环境复现」的流水线/环境适配缺陷后，**四大作业全绿**（基础门禁 24 步 + sqlite/postgres/mysql 三库集成矩阵），见 [发布报告 §5.1 / §8](docs/archive/release/90-release-v0.2.0.md)。
 
@@ -74,6 +74,7 @@ framework/
     25-ui-prototype.md        # 原型与 UI 规范
     30-data-dictionary.md     # ER 图与数据字典
     40-api-spec.md            # API 文档
+    41-auth-strategies.md     # 认证策略端到端指南（OAuth2 授权码 / API Key 签名约定）
     50-test-cases.md          # 测试用例
     60-deployment-ops.md      # 部署与运维手册
     61-bare-metal-deploy.md   # 云服务器裸机部署手册（宿主 nginx，无容器）
@@ -82,6 +83,7 @@ framework/
     70-engineering-standards.md # 编码 / Git / PR 规范
     80-project-plan.md        # 项目计划与任务板
     85-parallel-workstreams.md # 并行开发工作线划分（契约 / 所有权 / 集成点）
+    90-release-v0.5.0.md      # v0.5.0 发布验收报告（PRD-010 P0+P1：多实例收口 + OAuth2/apikey 端到端）
     90-release-v0.4.0.md      # v0.4.0 发布验收报告（配置中心与热更新 + 管理面补齐）
     90-release-v0.3.0.md      # v0.3.0 发布验收报告（真机可用性收口）
     94-redis-cluster-live-test.md # L-04 收口：Redis Cluster 真机实跑实测记录
@@ -141,11 +143,12 @@ fw gen crud order
 | [原型与 UI](./docs/25-ui-prototype.md) | 设计令牌、页面清单与路由、布局与关键页线框、组件与交互规范、响应式 |
 | [ER 图与数据字典](./docs/30-data-dictionary.md) | 建模约定、权限/系统/租户三域 ER 图、15 张表字段字典 |
 | [API 文档](./docs/40-api-spec.md) | 通用约定、错误码、10 类接口清单、限流与幂等、版本策略 |
+| [认证策略端到端指南](./docs/41-auth-strategies.md) | OAuth2 授权码端到端（配置 / 流程 / 反向验证清单）与 API Key 签名约定（算法 / 示例 / 路由声明） |
 | [部署与运维手册](./docs/60-deployment-ops.md) | 三档部署、配置清单、备份恢复、监控告警、故障 Runbook、升级回滚 |
 | [云服务器裸机部署手册](./docs/61-bare-metal-deploy.md) | 不用容器的服务器部署：systemd 进程托管、release 软链发版与秒级回滚、nginx 静态托管与 HTTPS、数据库档位与 provider 约束、备份监控与排障速查 |
 | [1Panel 真机部署手册](./docs/62-1panel-real-deploy.md) | 已有 1Panel 面板的服务器落地：OpenResty host 网络反代、容器化数据库的宿主端口接入、PostgreSQL schema 变体与迁移重建、2C2G 内存约束（V8 堆 + cgroup MemoryMax）、站点目录与 HTTPS |
 | [1Panel 真机部署验证报告](./docs/63-1panel-real-deploy-verification.md) | 上述手册在腾讯云 2C2G4M 上的**完整实测记录**：逐项耗时与内存数据、三条约束的实测结论、端到端冒烟结果、**5 个只有真机才会暴露的缺陷**（队列权限缺失、dedicated 租户连接串、pnpm bin 时序、迁移计数、镜像配置）与结清后的遗留清单 |
-| [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.4.0 已发布：配置中心与热更新 + 管理面补齐） |
+| [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.5.0 已发布：多实例一致性收口 + 认证策略端到端） |
 | [ADR 架构决策记录](./docs/adr/README.md) | 13 条决策：NestJS / Prisma（已定稿）/ monorepo / 缓存 / 异步任务 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 |
 | [编码 Git PR 规范](./docs/70-engineering-standards.md) | 编码规范、**中文注释规范（文件头含作者与日期）**、反模式清单、分支与提交约定、PR 与评审规则 |
 | [项目计划与任务板](./docs/80-project-plan.md) | 15 周甘特、M1–M8 WBS（40+ 任务）、任务板列与标签、当前快照 |
@@ -156,6 +159,7 @@ fw gen crud order
 | [贡献指南](./CONTRIBUTING.md) | 三步上手与硬性规则入口 |
 | [PRD 索引](./docs/prd/README.md) | 迭代清单与 PRD 模板约定 |
 | PRD-001 ~ PRD-009 | 见 `docs/prd/`，每个功能 / 迭代一份 |
+| [v0.5.0 发布验收报告](./docs/90-release-v0.5.0.md) | 「多实例一致性收口 + 认证策略端到端」发布门禁逐条判定（E-01~E-04/E-06/E-07 的 AC 证据）、升级影响（配置键 65→80、契约订正、零迁移零 seed）、验证证据清单（单测 + 冒烟 + 静态 4 项）、遗留问题与发布结论 |
 | [v0.4.0 发布验收报告](./docs/90-release-v0.4.0.md) | 「配置中心与热更新 + 管理面补齐」发布门禁逐条判定、升级影响（种子语义变更：新增参数配置/租户菜单与权限点）、验证证据清单（单测 + 冒烟 8 套 + 静态 4 项 + 真机）、遗留问题与发布结论 |
 | [v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md) | 「真机可用性收口」发布门禁逐条判定、升级影响（种子语义与标签键变更）、验证证据清单（单测 782 + 冒烟 203 + 静态 4 项 + 真机）、遗留问题与发布结论（通过） |
 | [v0.2.0 发布验收报告](docs/archive/release/90-release-v0.2.0.md) | M5–M8 发布门禁逐条判定、验证证据清单、遗留问题与发布结论（条件通过） |

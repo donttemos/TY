@@ -1,6 +1,6 @@
 {
   "name": "@fw/config-center",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "配置中心：ConfigCenterPort、本地文件适配（mtime 轮询 + 原子写）、热更新白名单与单一生效管道（PRD-009）",
   "type": "module",
   "main": "./dist/index.js",
