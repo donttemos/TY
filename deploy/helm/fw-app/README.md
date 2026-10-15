@@ -1,9 +1,10 @@
 <!--
 @file fw-app Helm Chart 使用说明（T-M8-07 / PRD-008 FR-09）
 @description Chart 目录结构、安装/升级/回滚流程、关键 values 说明、探针与迁移 Job 语义、
-  以及本机无 helm 时的离线校验方式。
+  以及本机无 helm 时的离线校验方式；§7 为集群最低规格结论（L-01 暂缓期间的规划输入）。
 @author donttemo
 @created 2026-10-14
+@modified 2026-10-15 donttemo L-01 暂缓决策落档：新增 §7 集群最低规格与形态结论（1 台冒烟 / 2 台最小生产 / 3 台 HA）
 -->
 
 # fw-app Helm Chart
@@ -109,3 +110,30 @@ curl -fsS http://127.0.0.1:3000/metrics | grep -E 'cache_hit|fw_queue_'
 kubectl get hpa,pdb -n fw
 kubectl get jobs -l app.kubernetes.io/component=migrate -n fw
 ```
+
+## 7. 集群最低规格与形态结论（2026-10-15，L-01 暂缓期间的规划输入）
+
+> 状态：真实 K8s 集群部署冒烟（遗留 L-01）**暂缓**——当前无可用集群环境。本节把选型决策所需的服务器规格结论先行落档，待有环境时按此直接开测。
+
+### 7.1 K8s 本身的底线
+
+| 形态 | 节点数 | 说明 |
+|---|---|---|
+| 冒烟 / 验证（k3s 单节点） | **1 台** | 控制面 + 工作负载混布，Chart 可装可跑，无高可用；**L-01 冒烟用此形态即可**（建议 4C8G） |
+| 最小可用生产 | 2 台 | 1 控制面 + 1 工作节点；控制面仍单点 |
+| 最小高可用 | **3 台起** | etcd 仲裁要求奇数票（1 或 3），3 台起才能容忍 1 台故障——生产 HA 的事实最低线 |
+
+### 7.2 本 Chart 的资源账（默认 values）
+
+默认副本：**app ×3（`replicaCount: 3`）+ worker ×2 + admin-web ×2 = 7 个 Pod**；
+PG / Redis 走**外置地址**（values `database` / `cache` 为 host URL，不占集群节点）——「几台服务器」只需算 K8s 节点 + 外置中间件宿主。
+
+| 目标 | 建议 | values 调整 |
+|---|---|---|
+| 关闭 L-01（验证 Chart 在真集群可装：探针 / HPA / PDB / 迁移 Job 语义） | 1 台 4C8G k3s | 精简档：app×1 / worker×1 / adminWeb×1，`autoscaling.enabled=false` |
+| 小规模生产 | 2 台 4C8G worker | app×2 / worker×1 / adminWeb×1，中间件沿用现有外置实例 |
+| 认真上 HA | 3 台起（或 3 worker + 独立控制面） | 默认 values + `values-prod.yaml`（HPA + PDB） |
+
+### 7.3 暂缓期间的替代保障
+
+无集群不等于无门禁：`pnpm check:helm`（离线渲染 + 清单语义断言 63/63）持续在 CI 生效；上生产前仍须在目标集群补 `helm template` + `--dry-run=server` + 灰度发布验证（见 [60 手册 §6](../../../docs/60-deployment-ops.md)）。

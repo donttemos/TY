@@ -231,6 +231,8 @@ pnpm check:helm        # 等价 node scripts/check-helm-chart.mjs，离线渲染
 **变更触发滚动**：Deployment 带 `checksum/config: {{ include "fw-app.configData" . | sha256sum }}` 注解，ConfigMap 内容变化即触发 Pod 滚动，保证配置与进程同步生效。
 
 > **验收现状（M8 T-M8-07）**：Chart 与 compose 资产已交付、离线校验 63/63 通过；**真实 K8s 集群部署冒烟未执行**（本机沙箱无 kubectl/集群，遗留 L-01，见 `docs/archive/m8/96-m8-drills.md` §6.4）。上生产前请在目标集群补一次 `helm template` + `--dry-run=server` + 灰度发布验证。
+>
+> **2026-10-15 决策**：L-01 **暂缓**（暂无可用集群环境，不为冒烟单独购机）。选型所需的服务器规格结论已先行落档——**验证 1 台（k3s 单节点 4C8G）/ 最小生产 2 台 / 高可用 3 台起（etcd 奇数票）**，Chart 默认 7 Pod 资源账与各目标档的 values 精简建议见 [Helm README §7](../deploy/helm/fw-app/README.md)。暂缓期间门禁不裸奔：`pnpm check:helm` 离线校验持续在 CI 生效。
 
 ## 7. 启动、停止与优雅停机
 
