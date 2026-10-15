@@ -27,7 +27,7 @@
 | `/system/dict` | 字典管理 | ❌ **字典项维护按钮全部不渲染** | BUG-02 |
 | `/system/audit-logs` | 审计日志 | ❌ **「详情」入口不可达（diff 看不到）** | BUG-01 |
 | `/system/queue` | 队列管理 | ❌ **真机不可达**（种子缺菜单） | BUG-04 |
-| `/system/tenants` | 租户管理 | ❌ **未实现**（前端页面与后端端点都缺） | N-01 |
+| `/system/tenants` | 租户管理 | ✅ **已实现**（N-01 收口，2026-10-15） | N-01 |
 | `/order/list`、`/demo-items` | 生成器/演示列表页 | ❌ **生成器页面菜单不可达** | BUG-03 |
 
 ## 2. 需要新增或完善的前端功能模块与页面
@@ -36,8 +36,8 @@
 
 | 编号 | 模块 / 页面 | 目标行为（交互流程 + 数据展示） | 依赖 | 验收 |
 |---|---|---|---|---|
-| **N-01** | **租户管理页 `/system/tenants`**（原型 §3 M8 规划项） | 列表展示租户编码/名称/隔离级别（`shared`/`dedicated`）/状态/创建时间；支持新建（选 `isolation`）、改套餐与状态、停用（不物理删除）、`shared ↔ dedicated` 迁移（长任务 → 进度反馈）。隔离级别与状态用 `<StatusTag>` + 字典 `tenant_isolation` / `tenant_status`；停用与迁移必须二次确认 | **后端 `/tenants` 五个端点（api-spec §3.9 已定义，实现为零）+ 权限点 `tenant:read/create/update/delete/manage`** | 列表分页 20 条；无 `tenant:read` 时菜单不出现、直输 URL 落 403 |
-| **N-02** | **异步导出任务中心**（原型 §7「导出 / 批量走异步任务」） | 列表页点导出 → 派发任务返回 `jobId` → 页脚常驻任务条（进度百分比 + 轮询退避）→ 完成后下载；失败可重试并展示 `traceId` | **后端 `/audit-logs/export`（api-spec §3.7 标 Backlog）与通用 `/jobs/:id/progress`** | 导出中不阻塞页面；关闭弹窗任务继续；失败不丢任务 |
+| **N-01** | **租户管理页 `/system/tenants`**（原型 §3 M8 规划项） | 列表展示租户编码/名称/隔离级别（`shared`/`dedicated`）/状态/创建时间；支持新建（选 `isolation`）、改套餐与状态、停用（不物理删除）、`shared ↔ dedicated` 迁移（长任务 → 进度反馈）。隔离级别与状态用 `<StatusTag>` + 字典 `tenant_isolation` / `tenant_status`；停用与迁移必须二次确认 | **后端 `/tenants` 五个端点（api-spec §3.9 已定义，实现为零）+ 权限点 `tenant:read/create/update/delete/manage`** | ✅ **已完成（2026-10-15）**：后端五端点 + `TenantAdminStore`（Prisma/内存双实现）+ `@IgnoreTenant` 豁免 + legacy 守卫；前端 `views/system/tenants/index.vue`（CrudTable + 停用/迁移二次确认，迁移接入任务条）；mock 同构；`tenant-admin` 单测 20 + `smoke-admin` 22 条断言通过 |
+| **N-02** | **异步导出任务中心**（原型 §7「导出 / 批量走异步任务」） | 列表页点导出 → 派发任务返回 `jobId` → 页脚常驻任务条（进度百分比 + 轮询退避）→ 完成后下载；失败可重试并展示 `traceId` | **后端 `/audit-logs/export`（api-spec §3.7 标 Backlog）与通用 `/jobs/:id/progress`** | ✅ **已完成（2026-10-15）**：`JobCenterService`（进程内存登记表 / 归属人隔离 / 产物上限 20MB / 重跑状态机）+ `/jobs/:id/progress|retry|download`；`GET /audit-logs/export` 派发；前端 `useJobCenter` store + `JobBar.vue`（轮询退避 1s×1.5 封顶 10s、连续 3 失败标 stale、sessionStorage 按用户持久化）+ 审计页导出按钮；CSV 与 mock 逐字节同构；单测 10 + 12 + 冒烟通过 |
 | **N-03** | **403 无权限整页视图**（CrudTable 四态之一，原型 §5.2） | 列表接口返回 `3002` 时，**整页替换**为无权限插画 + 「申请权限」引导 + 返回工作台，不再渲染表格骨架 | 无（前端自闭环） | 有权限与无权限的页面截图可对比；`3002` 不与其他错误共用同一提示文案 |
 
 ### 2.2 完善（已存在但行为不达要求）
@@ -246,10 +246,10 @@
 
 ## 9. 遗留与后续（按优先级）
 
-1. **必须配套后端**：N-01 租户管理（后端 `/tenants` 五端点**未实现**，前端亦无页面）、N-02 异步导出任务中心（后端无任务表/端点）。~~N-03 整页 403（纯前端可先做）~~ —— **已实现并随 v0.3.0 交付**：`router/guard.ts` 的 `resolveFallback()` 三分类（公开页 login/403/404 放行 → 已知系统路径命中 `/403` → 其余 `/404`）+ `routes.ts` 的 `/403` 静态记录 + `views/error/403.vue`，随路由重构（提交 `68d9334` / `f351be3`）落地；本条原有待办标注作废（2026-10-14 核查订正）。~~BUG-15 排序参数消费~~ —— **已完成（后端 + 前端）**：`@fw/db` 的 `parseSortQuery()` 白名单解析 + `@fw/auth` `UserQuery.sort` + 双 store 消费 + `GET /users` 接线 + `CrudTable` 前端接线（`buildSortParam()` 转 snake_case，`users` 页 5 列开启 `sortable`），冒烟 28/28（后端）+ 68/68（mock）；**剩余为增量项**：将其余列表端点（roles / dictionary 等小规模枚举型列表）接入同一解析器（2026-10-14 核查订正）。
+1. **必须配套后端**：~~N-01 租户管理（后端 `/tenants` 五端点**未实现**，前端亦无页面）~~ —— **已完成（2026-10-15）**：`tenant-admin.controller.ts` 五端点（`@IgnoreTenant` + `system:tenant:ignore` 双重要求，legacy 停用/迁移一律 `1004`，DELETE = 停用不写 `deletedAt`）+ `TenantAdminStore`（Prisma 与内存双实现，编码格式/dedicated 必填/唯一性校验/连接串密文）+ 前端 `views/system/tenants/index.vue`；~~N-02 异步导出任务中心（后端无任务表/端点）~~ —— **已完成（2026-10-15）**：`JobCenterService`（进程内存登记表、归属人隔离、产物上限 20MB、重跑状态机）+ `/jobs/:id/progress|retry|download` + `GET /audit-logs/export` 派发 + 前端 `useJobCenter`/`JobBar.vue`（轮询退避、stale 标记、按用户持久化）；api-spec 已同步（§3.7/§3.9/§3.11/§4）。~~N-03 整页 403（纯前端可先做）~~ —— **已实现并随 v0.3.0 交付**：`router/guard.ts` 的 `resolveFallback()` 三分类（公开页 login/403/404 放行 → 已知系统路径命中 `/403` → 其余 `/404`）+ `routes.ts` 的 `/403` 静态记录 + `views/error/403.vue`，随路由重构（提交 `68d9334` / `f351be3`）落地；本条原有待办标注作废（2026-10-14 核查订正）。~~BUG-15 排序参数消费~~ —— **已完成（后端 + 前端）**：`@fw/db` 的 `parseSortQuery()` 白名单解析 + `@fw/auth` `UserQuery.sort` + 双 store 消费 + `GET /users` 接线 + `CrudTable` 前端接线（`buildSortParam()` 转 snake_case，`users` 页 5 列开启 `sortable`），冒烟 28/28（后端）+ 68/68（mock）；**剩余为增量项**：将其余列表端点（roles / dictionary 等小规模枚举型列表）接入同一解析器（2026-10-14 核查订正）。
 2. **发版注意（分两段）**：① **BUG-01~15 那一段**改了菜单与角色种子 → 真机必须**重跑 `db:seed` 并让用户重新登录**（动态路由与权限码均为登录时快照）；权限码新增 `dict:read` 授予普通角色后，已有角色的授权记录不会被自动补齐，需在角色页保存一次或在种子中确认。② **BUG-16~21 这一段（含 §8.1 真机实测的交付内容）只改了前端与前端 mock**，不需要重跑种子、不需要重新登录 —— 只需重新构建 `apps/admin-web` 并把 `dist/` 同步到站点目录（本轮做法：从 `git archive` 打包 → `/opt/fw/web-fix/<ts>` 建依赖与构建 → `rsync -a --delete` 到 `/opt/1panel/www/fw-web`；后端进程、`/opt/fw/current` 软链与数据库均未触碰）。
 3. **产品待决策**：`GET /dict/:code` 是「登录即可读」还是「必须 `dict:read`」——本轮的折中是「授权 + 前端降级」；若后续放宽端点权限，请同步 `docs/40-api-spec.md` §3.6 与 `PERM.DICT_READ` 的说明。
-4. **体验债**：E-06 菜单图标/权限码选择器、死信列表无分页（后端 `listDeadLetters` 全量返回，规模大时需加窗口）。~~E-05 工作台统计三态~~ —— **本轮已实现**（BUG-22：按权限取数 + 加载/有值/失败三态 + 入口过滤），剩余仅「统计口径本身」（当前一律取 `total` 或全量 `length`，与数据权限 `self` 的口径关系未细化）。
+4. **体验债**：E-06 菜单图标/权限码选择器。~~死信列表无分页（后端 `listDeadLetters` 全量返回，规模大时需加窗口）~~ —— **已完成（2026-10-15）**：`pageDeadLetters()` 窗口切片 + 控制器返回 `page/pageSize`，前端 `views/system/queue/index.vue` 分页消费，`packages/queue` 新增 4 条单测、`smoke-mock` 补分页断言。~~E-05 工作台统计三态~~ —— **本轮已实现**（BUG-22：按权限取数 + 加载/有值/失败三态 + 入口过滤），剩余仅「统计口径本身」（当前一律取 `total` 或全量 `length`，与数据权限 `self` 的口径关系未细化）。
 5. **标签页迁移说明（BUG-20 的副作用，可接受）**：标签存储键由 `fw_admin_tags` 改为 `fw_admin_tags:<用户 id>`，**不做旧键迁移**
    —— 升级后各账号的标签集合会从空开始重建一次（旧键数据被弃用）。不迁移是刻意的：无法判断旧键里的标签属于哪个账号，
    迁移等于把上一个账号的标签泄露给新账号。如需保留可加一次性提示，属产品待决策。

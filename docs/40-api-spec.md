@@ -7,6 +7,10 @@
 > 变更记录：2026-10-14 donttemo 管理后台可达性修复：§3.2 新增 `GET` / `PUT /auth/profile`（`auth:me`，本人资料自助；
 > 原实现让个人中心借 `PUT /users/:id` 保存，普通角色必 `3002`）；§3.6 更正 `GET /dict/:code` 的权限点标注为 `dict:read`（原标「登录后」，与实现不符）。
 >
+> 变更记录：2026-10-15 donttemo N-01/N-02 收口：§3.7 `GET /audit-logs/export` 由 Backlog 转为已实现（异步任务，返回 `jobId`）；
+> 新增 §3.11 异步任务中心（`/jobs/:id/progress|retry|download`，登录即可 + 归属人隔离）；§3.9 补注跨租户维护面的
+> `@IgnoreTenant()` + `system:tenant:ignore` 双重要求与 legacy 守卫语义；§4 导出/批量行的「M7 未实现通用进度端点」标注作废。
+>
 > 约定：接口由代码装饰器自动生成 OpenAPI 3.1 文档（`GET /docs`），本文件定义**规范与清单**，实现必须与本文件一致（CI 校验 spec 与路由一致）。
 
 ## 1. 通用约定
@@ -191,14 +195,15 @@
 |---|---|---|---|
 | GET | `/audit-logs` | `audit:read` | 分页查询，支持 `user_id / module / action / target / 时间区间` |
 | GET | `/audit-logs/:id` | `audit:read` | 详情，含变更前后值（脱敏） |
-| GET | `/audit-logs/export` | `audit:export` | 导出（异步任务，返回 `jobId`）—— **未实现（Backlog）**，前端未消费 |
+| GET | `/audit-logs/export` | `audit:export` | 异步导出：派发到任务中心并**立即返回 `jobId`**（不等导出完成），进度 / 下载 / 重跑走 §3.11 的 `/jobs/:id/*`；同样受 `dataScope` 收敛（`self` 范围只导自己的记录）。CSV 产物与 mock 逐字节同构（UTF-8 BOM + CRLF + 引号转义） |
 
 ### 3.8 任务与队列（PRD-007）
 
 > M7 实现定稿（2026-10-13）：路径前缀冻结为 `/api/v1/admin/queue`（C-08 `QUEUE_ADMIN_PATHS`），
 > 权限码为 `system:queue:list`（查看）/ `system:queue:manage`（变更），与原规划的 `/jobs` + `job:*` 方案不同——
 > 队列运维是系统级能力而非业务资源，与既有系统管理域（`system:*`）对齐。类型契约见 `docs/contracts/queue.ts` 与 `api-web.ts` §3.8。
-> 异步业务进度（如审计导出）沿用「业务表存 jobId + 自查进度」模式，不入本组端点。
+> 异步业务任务（如审计导出、租户迁移）走 §3.11 的通用任务中心（`/jobs/:id/*`），不入本组端点；
+> 派发侧仍由业务权限码把关（`audit:export` / `tenant:manage`），任务面本身只验登录 + 归属人。
 
 | 方法 | 路径 | 权限点 | 说明 |
 |---|---|---|---|
@@ -216,15 +221,19 @@
 > 运维侧另有两个免认证只读端点：`GET /metrics/queue`（Prometheus 文本，含积压 gauge，命中 `/metrics` 前缀豁免）与
 > `/ready` 的 `queue` 检查项（驱动可用性）。业务侧派发 API 不走 HTTP——业务代码直接注入 `QueueService.dispatch()`（见 PRD-007 §6）。
 
-### 3.9 租户（PRD-008，M8）
+### 3.9 租户（PRD-008，M8 + N-01 收口）
+
+> **跨租户维护面**：平台管理员视角的五个端点整类标 `@IgnoreTenant()`（否则 `TENANT_ENABLED=true` 时调用方自身先 4001）。
+> 框架要求调用方**同时**持有 `system:tenant:ignore`（守卫额外校验并写豁免审计），与各端点自身的 `tenant:*` 权限码是「与」关系。
+> **语义守卫**：legacy 存量单租户（id `0`）停用 / 迁移一律 `1004`；`DELETE` 是停用（不写 `deletedAt`，解析路径仍按 code 命中并给 `4001`「租户已停用」）。
 
 | 方法 | 路径 | 权限点 | 说明 |
 |---|---|---|---|
-| GET | `/tenants` | `tenant:read` | 租户列表（平台管理员） |
-| POST | `/tenants` | `tenant:create` | 开租户，指定 `isolation` |
-| PUT | `/tenants/:id` | `tenant:update` | 更新（套餐、状态） |
-| DELETE | `/tenants/:id` | `tenant:delete` | 停用（不物理删） |
-| POST | `/tenants/:id/migrate` | `tenant:manage` | shared ↔ dedicated 隔离级别迁移 |
+| GET | `/tenants` | `tenant:read` | 租户列表（平台管理员）：分页 + 关键字 / 隔离级别 / 状态过滤，`sort` 白名单同 §1.5（`id` / `code` / `name` / `isolation` / `status` / `created_at` / `updated_at` / `expire_at`） |
+| POST | `/tenants` | `tenant:create` | 开租户，指定 `isolation`；`dedicated` 必须带 `dbUrl`（落库前加密） |
+| PUT | `/tenants/:id` | `tenant:update` | 更新（名称、套餐、状态、到期时间；隔离级别不走这里，走 migrate） |
+| DELETE | `/tenants/:id` | `tenant:delete` | 停用（不物理删），审计记录含 `affectedUsers` |
+| POST | `/tenants/:id/migrate` | `tenant:manage` | shared ↔ dedicated 隔离级别迁移：**长任务**，返回 `jobId`，进度走 §3.11。迁移内容 = 控制面切换（isolation 元数据 + 连接串密文 + 缓存失效），**数据物理搬迁由运维按手册执行**，接口与前端文案均已明示 |
 
 ### 3.10 业务模块标准 CRUD（PRD-006 生成器产出）
 
@@ -238,6 +247,19 @@
 | PUT | `/orders/:id` | `order:update` | 更新 |
 | DELETE | `/orders/:id` | `order:delete` | 软删除 |
 
+### 3.11 异步任务中心（N-02）
+
+> 任务面（`/jobs/:id/*`）**只验登录 + 归属人**，不额外要求业务权限码——语义是「我自己的任务」。
+> 派发侧（`/audit-logs/export`、`/tenants/:id/migrate`）才由业务权限码把关。
+> **不存在的任务 / 非归属人一律 `404`**（不泄露存在性）。登记表为**进程内存**（重启即失效，`404` 语义一致），
+> 产物上限 20MB，超出即失败终态。`download` 返回裸文本流（非统一信封），前端按 Blob 下载。
+
+| 方法 | 路径 | 权限点 | 说明 |
+|---|---|---|---|
+| GET | `/jobs/:id/progress` | 登录即可 | 任务快照 `JobView`：`status`（pending/running/succeeded/failed/cancelled）、`progress`（0–100）、`message`、`timeline[]`、`error` + `traceId`、产物元信息 |
+| POST | `/jobs/:id/retry` | 登录即可 | 失败任务原地重跑；仅 `failed` 可重跑（其余 `1004`），重新派发同一 runner |
+| GET | `/jobs/:id/download` | 登录即可 | 取回产物（如审计导出 CSV）。`Content-Disposition` 走 RFC 5987 `filename*`，中文名不乱码 |
+
 ## 4. 限流与幂等
 
 | 场景 | 策略 |
@@ -245,7 +267,7 @@
 | 登录 / 短信 / 改密 | 按 IP + 账号限流，超限返回 `9003` |
 | 列表查询 | 默认 120 次/分钟/用户 |
 | 写操作 | 支持 `Idempotency-Key`，24h 内重复返回首次结果 |
-| 导出 / 批量 | 可通过 `QueueService.dispatch()` 派发异步任务；业务侧自行持久化 `jobId` 并提供进度查询接口，M7 未实现通用 `/jobs/:id/progress` |
+| 导出 / 批量 | 业务侧派发到异步任务中心（§3.11）并立即返回 `jobId`；派发入口本身仍需 `audit:export` 等业务权限码，进度查询与下载只验归属人 |
 
 ## 5. 版本与兼容
 

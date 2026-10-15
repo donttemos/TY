@@ -24,6 +24,7 @@
 | 后端框架 | NestJS 11（Express 5；模块化 + 依赖注入，单体与微服务同构） |
 | ORM | Prisma 6（ADR-0002 定稿：多 provider 切换 = 改 datasource 两行 + generate + migrate） |
 | 缓存 | 自研 `CacheStore` 端口 + memory / ioredis 驱动（ADR-0012） |
+| 异步任务 | 进程内存任务中心 `JobCenterService` + `/jobs/:id/*` 任务面（ADR-0013） |
 | 鉴权 | Passport + JWT + RBAC |
 | 前端（后台模板） | Vue3 + Vite + Element Plus |
 | 工程 | pnpm workspace + Turborepo |
@@ -85,7 +86,7 @@ framework/
     90-release-v0.3.0.md      # v0.3.0 发布验收报告（真机可用性收口）
     95-doc-audit.md           # 文档一致性核对报告
     99-admin-web-enhancement-and-fixes.md # 管理后台前端功能补充与缺陷修复方案
-    adr/                      # 架构决策记录 0001–0010
+    adr/                      # 架构决策记录 0001–0013
     prd/                      # 按功能 / 迭代拆分的 PRD
 ```
 
@@ -137,7 +138,7 @@ fw gen crud order
 | [1Panel 真机部署手册](./docs/62-1panel-real-deploy.md) | 已有 1Panel 面板的服务器落地：OpenResty host 网络反代、容器化数据库的宿主端口接入、PostgreSQL schema 变体与迁移重建、2C2G 内存约束（V8 堆 + cgroup MemoryMax）、站点目录与 HTTPS |
 | [1Panel 真机部署验证报告](./docs/63-1panel-real-deploy-verification.md) | 上述手册在腾讯云 2C2G4M 上的**完整实测记录**：逐项耗时与内存数据、三条约束的实测结论、端到端冒烟结果、**5 个只有真机才会暴露的缺陷**（队列权限缺失、dedicated 租户连接串、pnpm bin 时序、迁移计数、镜像配置）与结清后的遗留清单 |
 | [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.3.0 已发布：真机可用性收口） |
-| [ADR 架构决策记录](./docs/adr/README.md) | 12 条决策：NestJS / Prisma（已定稿）/ monorepo / 缓存 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 |
+| [ADR 架构决策记录](./docs/adr/README.md) | 13 条决策：NestJS / Prisma（已定稿）/ monorepo / 缓存 / 异步任务 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 |
 | [编码 Git PR 规范](./docs/70-engineering-standards.md) | 编码规范、**中文注释规范（文件头含作者与日期）**、反模式清单、分支与提交约定、PR 与评审规则 |
 | [项目计划与任务板](./docs/80-project-plan.md) | 15 周甘特、M1–M8 WBS（40+ 任务）、任务板列与标签、当前快照 |
 | [并行开发工作线划分](./docs/85-parallel-workstreams.md) | 多线并行：7 条工作线与负责人、8 份先行契约、目录所有权矩阵、W0–W10 时间轴与 I1/I2/I3 集成点 |

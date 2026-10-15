@@ -24,6 +24,7 @@
 | [0010](./0010-observability-otel.md) | 可观测：先统一 traceId，M8 再引入 OpenTelemetry | 已采纳 | 可观测 |
 | [0011](./0011-auth-strategy-registry.md) | 鉴权策略自实现注册表，不引入 passport 包 | 已采纳 | 鉴权 |
 | [0012](./0012-cache-own-port-over-cache-manager.md) | 缓存存储抽象自研 `CacheStore` 端口，不引入 cache-manager | 已采纳 | 缓存 |
+| [0013](./0013-async-job-center-in-memory-registry.md) | 异步任务中心用进程内存登记表，任务面只验归属人 | 已采纳 | 任务/导出 |
 
 ## 模板
 
