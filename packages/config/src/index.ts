@@ -6,7 +6,7 @@
  * @module config
  * @since v0.1.0
  */
-export { envSchema, ENUM_OPTIONS } from './env-schema.js';
+export { envSchema, ENUM_OPTIONS, ENV_KEY_PATHS, ENV_HOT_KEYS } from './env-schema.js';
 export type { Env } from './env-schema.js';
 export {
   APP_ENV_VALUES,
@@ -17,6 +17,7 @@ export {
   MQ_DRIVER_VALUES,
   TRANSPORT_DRIVER_VALUES,
   TRANSPORT_ROLE_VALUES,
+  CONFIG_CENTER_DRIVER_VALUES,
 } from './env-schema.js';
 export { ConfigValidationError, translateIssues } from './config-error.js';
 export type { ConfigIssue } from './config-error.js';

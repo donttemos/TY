@@ -31,6 +31,12 @@ export const ErrorCode = {
   ACCOUNT_LOCKED: 3004,
   /** 租户无效或已过期（403，M8） */
   TENANT_INVALID: 4001,
+  /** 该配置键不可热更新（400，M9/PRD-009：boot 键或不在白名单） */
+  CONFIG_NOT_HOT: 5001,
+  /** 配置新值非法（400，M9/PRD-009：zod 校验失败，details 带原因） */
+  CONFIG_INVALID_VALUE: 5002,
+  /** 配置键不存在（404，M9/PRD-009） */
+  CONFIG_NOT_FOUND: 5003,
   /** 系统内部错误（500） */
   INTERNAL: 9001,
   /** 依赖不可用，已进入降级（503） */
@@ -62,6 +68,9 @@ export const ERROR_CODE_META: Record<BizErrorCode, ErrorCodeMeta> = {
   [ErrorCode.TOKEN_EXPIRED]: { http: 401, message: '令牌已过期' },
   [ErrorCode.ACCOUNT_LOCKED]: { http: 403, message: '账号已锁定' },
   [ErrorCode.TENANT_INVALID]: { http: 403, message: '租户无效或已过期' },
+  [ErrorCode.CONFIG_NOT_HOT]: { http: 400, message: '该配置键不可热更新' },
+  [ErrorCode.CONFIG_INVALID_VALUE]: { http: 400, message: '配置新值非法' },
+  [ErrorCode.CONFIG_NOT_FOUND]: { http: 404, message: '配置键不存在' },
   [ErrorCode.INTERNAL]: { http: 500, message: '系统内部错误' },
   [ErrorCode.DEPENDENCY_UNAVAILABLE]: { http: 503, message: '依赖不可用' },
   [ErrorCode.RATE_LIMITED]: { http: 429, message: '请求过于频繁' },

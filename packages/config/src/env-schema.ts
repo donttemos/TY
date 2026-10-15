@@ -11,6 +11,9 @@
  * @modified 2026-10-14 donttemo M8 T-M8-05 新增 7 个 TRANSPORT_* 键（驱动/连接/前缀/超时/角色/实例标识/停机等待）
  * @modified 2026-10-14 donttemo M8 T-M8-06 新增 5 个 OTEL_* 键（总开关/服务名/导出端点/采样比例/错误全采）
  * @modified 2026-10-13 donttemo 新增 MQ_STALLED_MS（bullmq 失速检测间隔，TC-JOB-008 演练可调）
+ * @modified 2026-10-15 donttemo M9/PRD-009 新增 4 个 CONFIG_CENTER_* 键（总开关/驱动/文件/轮询间隔）；
+ *   新增 ENV_KEY_PATHS（全部 Env 键 → 点路径注册表）与 ENV_HOT_KEYS（热更新白名单，FR-03）——
+ *   两者都以类型与单测强制与 envSchema.shape 对齐：新增配置键未登记映射时单测即失败（防键集漂移）
  * @module config
  * @since v0.1.0
  */
@@ -36,6 +39,8 @@ export const TRANSPORT_DRIVER_VALUES = ['in-process', 'redis'] as const;
 export const TRANSPORT_ROLE_VALUES = ['caller', 'handler', 'both'] as const;
 /** 租户识别来源可选值（M8 起生效，PRD-008 FR-01 三级回退） */
 export const TENANT_SOURCE_VALUES = ['subdomain', 'header', 'jwt'] as const;
+/** 配置中心驱动可选值（M9/PRD-009 FR-01 起生效；`nacos` 仅预留 adapter 注册位，暂不入枚举——非法取值启动即失败） */
+export const CONFIG_CENTER_DRIVER_VALUES = ['file'] as const;
 
 /** 空字符串视为未设置（.env 里 `DB_URL=` 留空等价于注释掉） */
 const emptyToUndefined = (value: unknown): unknown =>
@@ -192,6 +197,14 @@ export const envSchema = z.object({
   OTEL_SAMPLE_RATIO: z.coerce.number().min(0).max(1).default(0.1).describe('链路追踪采样比例（0~1）'),
   /** 错误 span 全采（status=ERROR 或记录过异常的 span 忽略比例导出，保证错误链路不丢） */
   OTEL_SAMPLE_ERRORS: boolString(true).describe('错误 span 全采开关（OTEL_SAMPLE_ERRORS）'),
+  /** 配置中心总开关（M9/PRD-009）：false 时零开销（不读文件不起轮询），全部运行时参数按 env 快照 */
+  CONFIG_CENTER_ENABLED: boolString(false).describe('是否启用配置中心（CONFIG_CENTER_ENABLED）'),
+  /** 配置中心适配器（M9/PRD-009 FR-01）：首版枚举仅 file（本地文件 + mtime 轮询）；nacos 预留不入枚举 */
+  CONFIG_CENTER_DRIVER: z.enum(CONFIG_CENTER_DRIVER_VALUES).default('file').describe('配置中心适配器（CONFIG_CENTER_DRIVER）'),
+  /** 运行时配置文件路径（M9/PRD-009 FR-02）：单一事实源，管理端点写入与轮询读取共用 */
+  CONFIG_CENTER_FILE: z.string().min(1).default('./config/runtime.json').describe('运行时配置文件路径（CONFIG_CENTER_FILE）'),
+  /** mtime 轮询间隔（秒，M9/PRD-009 FR-02）：热更生效延迟上界 = 轮询间隔 + 1s */
+  CONFIG_CENTER_POLL_SECONDS: z.coerce.number().int().min(1).max(300).default(5).describe('配置中心轮询间隔（秒，CONFIG_CENTER_POLL_SECONDS）'),
 });
 
 /** 校验后的环境变量类型 */
@@ -209,4 +222,104 @@ export const ENUM_OPTIONS: Record<string, readonly string[]> = {
   TRANSPORT_DRIVER: TRANSPORT_DRIVER_VALUES,
   TRANSPORT_ROLE: TRANSPORT_ROLE_VALUES,
   TENANT_ORDER: TENANT_SOURCE_VALUES,
+  CONFIG_CENTER_DRIVER: CONFIG_CENTER_DRIVER_VALUES,
 };
+
+/**
+ * 全部 Env 键 → 点路径注册表（M9/PRD-009，配置中心键空间的唯一事实源）。
+ *
+ * 规则：AppConfig 视图已有的域沿用其路径（app/log/db/cache/auth/mq/shutdown）；
+ * 未入视图的键按「小写前缀.小写驼峰键名」派生（jwt/tenant/transport/otel/configCenter）。
+ * **新增配置键必须在此登记**——`env-schema.test.ts` 断言本表键集与 envSchema.shape 完全一致，
+ * 漏登记即单测失败（防键集漂移，PRD-009 §8 风险缓解）。
+ */
+export const ENV_KEY_PATHS = {
+  APP_ENV: 'app.env',
+  APP_PORT: 'app.port',
+  LOG_LEVEL: 'log.level',
+  LOG_MAX_BYTES: 'log.maxBytes',
+  DB_DRIVER: 'db.driver',
+  DB_URL: 'db.url',
+  DB_SLOW_MS: 'db.slowMs',
+  CACHE_DRIVER: 'cache.driver',
+  CACHE_URL: 'cache.url',
+  CACHE_PREFIX: 'cache.prefix',
+  CACHE_TTL: 'cache.ttl',
+  CACHE_MAX_ITEMS: 'cache.maxItems',
+  CACHE_FAIL_OPEN: 'cache.failOpen',
+  CACHE_NULL_TTL: 'cache.nullTtl',
+  CACHE_TTL_JITTER: 'cache.ttlJitter',
+  CACHE_LOCK_TTL: 'cache.lockTtl',
+  CACHE_TAG_TTL: 'cache.tagTtl',
+  CACHE_SLOW_MS: 'cache.slowMs',
+  CACHE_MAX_VALUE_BYTES: 'cache.maxValueBytes',
+  AUTH_STRATEGY: 'auth.strategy',
+  AUTH_ACCESS_TTL: 'auth.accessTtl',
+  AUTH_REFRESH_TTL: 'auth.refreshTtl',
+  AUTH_MAX_FAILED: 'auth.maxFailed',
+  AUTH_LOCK_MINUTES: 'auth.lockMinutes',
+  AUTH_REFRESH_GRACE_SECONDS: 'auth.refreshGraceSeconds',
+  AUTH_PASSWORD_POLICY: 'auth.passwordPolicy',
+  AUTH_ALLOW_REGISTER: 'auth.allowRegister',
+  AUTH_API_KEYS: 'auth.apiKeys',
+  JWT_SECRET: 'jwt.secret',
+  JWT_SECRET_PREV: 'jwt.secretPrev',
+  MQ_DRIVER: 'mq.driver',
+  MQ_URL: 'mq.url',
+  MQ_PREFIX: 'mq.prefix',
+  MQ_CONCURRENCY: 'mq.concurrency',
+  MQ_MAX_ATTEMPTS: 'mq.maxAttempts',
+  MQ_BACKOFF: 'mq.backoff',
+  MQ_JOB_TIMEOUT: 'mq.jobTimeout',
+  MQ_CRON_ENABLED: 'mq.cronEnabled',
+  MQ_RATE_LIMIT: 'mq.rateLimit',
+  MQ_DEAD_LETTER_MAX: 'mq.deadLetterMax',
+  MQ_SHUTDOWN_TIMEOUT: 'mq.shutdownTimeout',
+  MQ_STALLED_MS: 'mq.stalledMs',
+  SHUTDOWN_TIMEOUT: 'shutdown.timeoutSeconds',
+  TENANT_ENABLED: 'tenant.enabled',
+  TENANT_ORDER: 'tenant.order',
+  TENANT_HEADER_NAME: 'tenant.headerName',
+  TENANT_BASE_DOMAIN: 'tenant.baseDomain',
+  TENANT_JWT_CLAIM: 'tenant.jwtClaim',
+  TENANT_CACHE_TTL: 'tenant.cacheTtl',
+  TENANT_DB_KEY: 'tenant.dbKey',
+  TRANSPORT_DRIVER: 'transport.driver',
+  TRANSPORT_URL: 'transport.url',
+  TRANSPORT_PREFIX: 'transport.prefix',
+  TRANSPORT_TIMEOUT_MS: 'transport.timeoutMs',
+  TRANSPORT_ROLE: 'transport.role',
+  TRANSPORT_INSTANCE_ID: 'transport.instanceId',
+  TRANSPORT_SHUTDOWN_TIMEOUT: 'transport.shutdownTimeout',
+  OTEL_ENABLED: 'otel.enabled',
+  OTEL_SERVICE_NAME: 'otel.serviceName',
+  OTEL_EXPORTER_URL: 'otel.exporterUrl',
+  OTEL_SAMPLE_RATIO: 'otel.sampleRatio',
+  OTEL_SAMPLE_ERRORS: 'otel.sampleErrors',
+  CONFIG_CENTER_ENABLED: 'configCenter.enabled',
+  CONFIG_CENTER_DRIVER: 'configCenter.driver',
+  CONFIG_CENTER_FILE: 'configCenter.file',
+  CONFIG_CENTER_POLL_SECONDS: 'configCenter.pollSeconds',
+} as const satisfies Record<keyof Env, string>;
+
+/**
+ * 热更新白名单（M9/PRD-009 FR-03）：键为点路径，值为对应 Env 键名。
+ *
+ * 首版范围 = PRD-009 FR-03 定稿清单（log / cache / mq / otel / tenant 五个运行时可调域）；
+ * **boot 键（端口 / 驱动 / 连接串 / 密钥 / 开关）一律禁改**——改动属进程形态变更，必须走重启；
+ * 登录策略（auth.maxFailed / auth.lockMinutes）属安全基线，按 PRD-009 §9 决议不纳入。
+ * 新键是否可热更在 ENV_KEY_PATHS 之外**显式**登记于此：不登记即不可热更（fail-safe 方向）。
+ */
+export const ENV_HOT_KEYS = {
+  'log.level': 'LOG_LEVEL',
+  'log.maxBytes': 'LOG_MAX_BYTES',
+  'cache.ttl': 'CACHE_TTL',
+  'cache.nullTtl': 'CACHE_NULL_TTL',
+  'cache.ttlJitter': 'CACHE_TTL_JITTER',
+  'cache.slowMs': 'CACHE_SLOW_MS',
+  'cache.lockTtl': 'CACHE_LOCK_TTL',
+  'mq.rateLimit': 'MQ_RATE_LIMIT',
+  'mq.concurrency': 'MQ_CONCURRENCY',
+  'otel.sampleRatio': 'OTEL_SAMPLE_RATIO',
+  'tenant.cacheTtl': 'TENANT_CACHE_TTL',
+} as const satisfies Record<string, keyof Env>;
