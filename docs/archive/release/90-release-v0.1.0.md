@@ -1,7 +1,7 @@
 # v0.1.0 发布验收报告
 
 > 版本：**v0.1.0** ｜ 发布范围：**M1–M4** ｜ 验收日期：2026-10-13 ｜ 验收人：donttemo（L0 编排）
-> 依据：[验收标准](./10-acceptance-criteria.md) §2 完成定义、§3 里程碑门禁、§4 非功能与安全基线、§5 可观测基线、§6 三大关键演练、§7 验收流程
+> 依据：[验收标准](../../10-acceptance-criteria.md) §2 完成定义、§3 里程碑门禁、§4 非功能与安全基线、§5 可观测基线、§6 三大关键演练、§7 验收流程
 > 证据目录：`.workbuddy/release-0.1.0/`（构建、单测、冒烟、依赖扫描原始输出）
 
 ## 1. 发布物与范围
@@ -121,7 +121,7 @@
 
 | 编号 | 描述 | 等级 | 责任人 | 闭环时间 |
 |---|---|---|---|---|
-| R-01 | MySQL / PostgreSQL 三库集成矩阵与「数据库切换演练」~~**未在真实环境执行**（本地无容器；CI 配置已就位但未触发过 Actions）~~ → **✅ 已闭环（2026-10-13，提交 `fbce3b9`）**：远程 MySQL 8.4.11 / PostgreSQL 18.6 实跑，sqlite / mysql / postgres 三库共用同一套 11 项断言全绿，业务代码 diff = 0。CI 侧仍未触发（留 R-02 同类环境项），详见 [数据库联通性与切换实测](./93-db-connectivity-switch-test.md) | P1 | donttemo | 已闭环 |
+| R-01 | MySQL / PostgreSQL 三库集成矩阵与「数据库切换演练」~~**未在真实环境执行**（本地无容器；CI 配置已就位但未触发过 Actions）~~ → **✅ 已闭环（2026-10-13，提交 `fbce3b9`）**：远程 MySQL 8.4.11 / PostgreSQL 18.6 实跑，sqlite / mysql / postgres 三库共用同一套 11 项断言全绿，业务代码 diff = 0。CI 侧仍未触发（留 R-02 同类环境项），详见 [数据库联通性与切换实测](../database/93-db-connectivity-switch-test.md) | P1 | donttemo | 已闭环 |
 | R-02 | 根 `turbo run lint/test` 在本机 Windows 沙箱因「管道范例耗尽」(os error 231) 失败，属环境限制（逐包直调 vitest 可替代） | P2 | donttemo | 引入容器化本地环境后 |
 | R-03 | 性能基线（冷启动 / 接口 P95 / 缓存 get 延迟）未做专项压测 | P1 | donttemo | M6 前 |
 | R-04 | 专项注入用例（SQL 注入 / XSS / 命令注入）未单列到测试用例集 | P1 | donttemo | M6 前 |
@@ -145,7 +145,7 @@
 > **发布后闭环（2026-10-13，提交 `fbce3b9`）**：上述判定的核心成因已消除 ——
 > **R-01 已闭环**（远程 MySQL 8.4.11 / PostgreSQL 18.6 实跑，三库同套断言全绿，业务代码 diff = 0）、
 > **R-07 部分闭环**（真实 Redis 8.10.2 standalone 已实跑；Cluster 留待 M8）。
-> 记录见 [数据库联通性与切换实测](./93-db-connectivity-switch-test.md)。`v0.1.0` 判定本身维持「条件通过」不变（历史结论不追溯改写）。
+> 记录见 [数据库联通性与切换实测](../database/93-db-connectivity-switch-test.md)。`v0.1.0` 判定本身维持「条件通过」不变（历史结论不追溯改写）。
 
 > **发布后闭环之二（2026-10-13，NestJS 10 → 11 升级专项）**：**R-06 已闭环** ——
 > 全仓 `@nestjs/*` 由 10.4.22 升至 **11.2.7**（随之 Express 4 → **5.2.1**、`@types/express` → 5.0.6、
@@ -153,8 +153,8 @@
 > **No known vulnerabilities**（全量 16 → 13 项，剩余全部位于 dev 工具链，见 R-05）。
 > 门禁实测：框架包单测 **358/358** 且覆盖率门禁全过（config 10 / logger 13 / core 12 / db 45 / cache 73 / auth 89 / cli 116）、
 > example-api 三组冒烟 **50/50**（M1+M2 13、M3 25、M4 12）、admin-web 单测 29/29 + mock 冒烟 40/40、
-> 文件头门禁 221 文件通过。破坏性适配要点见 [CHANGELOG](../CHANGELOG.md)，遗留项状态见
-> [项目计划](./80-project-plan.md) 的「v0.1.0 遗留项」。
+> 文件头门禁 221 文件通过。破坏性适配要点见 [CHANGELOG](../../../CHANGELOG.md)，遗留项状态见
+> [项目计划](../../80-project-plan.md) 的「v0.1.0 遗留项」。
 
 > **发布后闭环之三（2026-10-13，dev 工具链大版本升级专项）**：**R-05 已闭环** ——
 > 前端与测试工具链升到当前稳定大版本：**vitest 2.1.9 → 4.1.11**（`@vitest/coverage-v8` 同步）、
@@ -166,6 +166,6 @@
 > 门禁实测：框架包 **366/366**（config 10 / logger 16 / core 17 / db 45+11 跳过 / cache 73 / auth 89 / cli 116）、
 > example-api 三组冒烟 **50/50**、admin-web 单测 29/29 + mock 冒烟 **40/40**（bundle gzip 307.8 kB）、
 > `vue-tsc` 3 与 `vite build`（rolldown）通过、文件头门禁 222 文件通过。
-> 破坏性适配与两处顺带修复的既有缺陷见 [CHANGELOG](../CHANGELOG.md)。
+> 破坏性适配与两处顺带修复的既有缺陷见 [CHANGELOG](../../../CHANGELOG.md)。
 
-**发布动作**：打附注标签 `v0.1.0`（与 [CHANGELOG](../CHANGELOG.md) 的 `[0.1.0] - 2026-10-13` 条目一一对应）。首次推送后须立即触发 CI，用真实 Actions 结果闭环 R-01。
+**发布动作**：打附注标签 `v0.1.0`（与 [CHANGELOG](../../../CHANGELOG.md) 的 `[0.1.0] - 2026-10-13` 条目一一对应）。首次推送后须立即触发 CI，用真实 Actions 结果闭环 R-01。

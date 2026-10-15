@@ -65,7 +65,7 @@ node scripts/bench.mjs --requests=500 --concurrency=20 --scenario=list
 | 项 | 原因 | 建议 |
 |---|---|---|
 | 登录 50 并发 × 5 分钟长压 | 登录限流 60s/10 次（按 IP）会直接拦下长压；且单机 SQLite 不代表线上形态 | 在压测环境临时放宽 `loginRateLimit`（`AuthModule.forRoot` 可注入）并指向 PostgreSQL/MySQL，再跑长压 |
-| 百万行分页查询 | 需造 100 万行数据集（本地 SQLite 造数耗时、远程库为共享测试实例不宜污染） | 用 `createMany` 批量造数（见 `docs/92-test-databases.md` 注意事项）后复跑 |
+| 百万行分页查询 | 需造 100 万行数据集（本地 SQLite 造数耗时、远程库为共享测试实例不宜污染） | 用 `createMany` 批量造数（见 `docs/archive/database/92-test-databases.md` 注意事项）后复跑 |
 | 多实例横向扩展基线 | 单实例脚本未覆盖 | 以 Helm 部署多副本后用 k6 / Locust 做分布式压测 |
 
 ## 5. 结论

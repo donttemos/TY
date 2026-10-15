@@ -362,7 +362,7 @@ journalctl -u fw-api -n 50 --no-pager
 - PostgreSQL 容器：`shared_buffers=128MB`、`work_mem=4MB`、`max_connections=50`
 - MySQL 容器：`innodb_buffer_pool_size=128M`、`max_connections=50`
 
-**实测数据**：本文的 2C2G 适配参数（内存上限、V8 堆、swap 大小）基于构建峰值 1.2~1.6G 的估算与 framework 既有压测基线（`docs/97-bench-baseline.md`）推导，**真机实测值待补充**（见 §12）。
+**实测数据**：本文的 2C2G 适配参数（内存上限、V8 堆、swap 大小）基于构建峰值 1.2~1.6G 的估算与 framework 既有压测基线（`docs/archive/m8/97-bench-baseline.md`）推导，**真机实测值待补充**（见 §12）。
 
 ---
 

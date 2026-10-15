@@ -277,4 +277,4 @@
 - [云服务器裸机部署手册](./61-bare-metal-deploy.md) —— 宿主 nginx 档位
 - [部署与运维手册](./60-deployment-ops.md) —— Docker / 大档部署
 - [文档一致性核对报告](./95-doc-audit.md) —— L-05（`LOG_FORMAT` 未实现）
-- [v0.2.0 发布报告](./90-release-v0.2.0.md)
+- [v0.2.0 发布报告](./archive/release/90-release-v0.2.0.md)

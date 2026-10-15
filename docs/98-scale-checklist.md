@@ -9,7 +9,7 @@
 # 规模化上线自检清单（CheckList）
 
 > 适用：基于本框架构建的项目，从「能跑」升到「扛得住」时的上线前自检。
-> 配套：[部署与运维手册](./60-deployment-ops.md) ｜ [压测基线](./97-bench-baseline.md) ｜ [验收标准](./10-acceptance-criteria.md)
+> 配套：[部署与运维手册](./60-deployment-ops.md) ｜ [压测基线](./archive/m8/97-bench-baseline.md) ｜ [验收标准](./10-acceptance-criteria.md)
 
 ## 1. 数据库与连接池
 

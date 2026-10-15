@@ -132,8 +132,8 @@ gantt
 > T-M8-03（越权防护地基）、T-M8-04（组织架构与数据权限四档）、T-M8-05（transport 切换）、T-M8-06（OpenTelemetry 链路追踪）、
 > T-M8-07（Helm Chart 与部署模板）与 T-M8-08（三大演练与终验）全部完成。
 > 多租户冒烟 **48/48**、传输冒烟 **17/17**、链路追踪冒烟 **14/14**、**三大关键演练 25/25（0 跳过）**、Helm Chart 清单校验 **63/63**，
-> 压测基线已建立（`docs/97-bench-baseline.md`）；框架包单测：`@fw/auth` 108 / `@fw/transport` 78 / `@fw/telemetry` 50 / `@fw/db` 70 / `@fw/cache` 77 / `@fw/queue` 138 / `@fw/tenant` 19 / `@fw/logger` 17 / `@fw/config` 10。
-> 终验与遗留见 `docs/96-m8-drills.md`（条件通过：真实 K8s 集群部署未执行、FR-08 配置中心占位未实现）。
+> 压测基线已建立（`docs/archive/m8/97-bench-baseline.md`）；框架包单测：`@fw/auth` 108 / `@fw/transport` 78 / `@fw/telemetry` 50 / `@fw/db` 70 / `@fw/cache` 77 / `@fw/queue` 138 / `@fw/tenant` 19 / `@fw/logger` 17 / `@fw/config` 10。
+> 终验与遗留见 `docs/archive/m8/96-m8-drills.md`（条件通过：真实 K8s 集群部署未执行、FR-08 配置中心占位未实现）。
 
 | 任务 ID | 任务 | 产出 | 人日 | 依赖 | 验收 | 状态 |
 |---|---|---|---|---|---|---|
@@ -285,13 +285,13 @@ gantt
 - [x] T-M8-05 传输层双驱动（`@fw/transport`：in-process/redis + redis RPC 协议 + `@TransportHandler` + 客户端代理，冒烟 17/17）
 - [x] T-M8-06 OpenTelemetry 链路追踪（`@fw/telemetry`：尾采样 + HTTP 中间件三级父解析 + 日志 span 桥接 + DB/缓存/队列/传输插桩，冒烟 14/14）
 - [x] T-M8-07 Helm Chart 与部署模板（`deploy/helm/fw-app/` 14 模板 + `values-prod.yaml` + `docker-compose.prod.yml` + `nginx/fw.conf`；`scripts/check-helm-chart.mjs` **63/63**）
-- [x] T-M8-08 三大演练与终验（`apps/example-api/scripts/drill-m8.mjs` **25/25**；`bench.mjs` 压测基线；`docs/96-m8-drills.md` / `97-bench-baseline.md` / `98-scale-checklist.md`）
+- [x] T-M8-08 三大演练与终验（`apps/example-api/scripts/drill-m8.mjs` **25/25**；`bench.mjs` 压测基线；`docs/archive/m8/96-m8-drills.md` / `./archive/m8/97-bench-baseline.md` / `98-scale-checklist.md`）
 
 **Backlog**：~~M8 进行中~~ → M8 已完成（2026-10-14）；~~M3 遗留项④（refresh 过期记录定时清理）~~——**已完成（2026-10-13）**：example-api `auth.refresh-cleanup` 定时任务（`@Cron('0 3 * * *')` 加分布式锁，过期 30 天清理，`/api/v1/auth/refresh-cleanup` 快照端点），冒烟阶段 A 覆盖注册与手动触发。~~M8 遗留 L-02（FR-08 配置中心占位与热更新审计）~~——**已完成（2026-10-15，M9 / PRD-009）**：`@fw/config-center` + 白名单 11 键热更 + `/configs` 管理端点 + 参数配置页 + `smoke-config.mjs` 27/27，见 PRD-009。当前剩余可跟进项：M8 遗留 L-01（真实 K8s 集群部署冒烟）、L-04（Redis Cluster 实跑）、M9 后续 Backlog（tenant-scoped config、一键回滚 API、Nacos adapter 示例实现）。
 
 > **v0.3.0 已发布（2026-10-14，「真机可用性收口」）**：在 M1–M8 全交付的基础上，把管理后台从「文档标注已交付」拉到「真机可用的同源状态」——修复前端 15 项缺陷、路由与登录态生命周期 4 项、工作台权限取数（BUG-16~22），纳入 C-06 契约收口与 1Panel/裸机真机部署路径。本机门禁全量实跑：单测 **782**、端到端冒烟 **203** + mock **65**、静态门禁 4 项（文件头 376 / 裸 SQL 248 / 接口对撞 / Helm 63）。判定与遗留见 **[v0.3.0 发布验收报告](./90-release-v0.3.0.md)**（R3-01 租户管理页、R3-02 异步导出、R3-03 整页 403、R3-04 菜单选择器、R3-07 死信分页、R3-08 沿用 L-01/L-02/L-04/L-05）。
 
-**M7 验收待补（TC-JOB-008）——已完成（2026-10-13）**：真实 Redis 失速恢复演练通过并固化进 `smoke-queue.mjs` 阶段 F（31/31），恢复窗口 ≈ lockDuration 30s + `MQ_STALLED_MS` 检测间隔；演练暴露并修复「register 未建消费器」「ensureWorker 自递归死锁与重复建」两个框架缺陷，记录见 `docs/94-queue-stall-drill.md`。memory 驱动不承诺跨进程持久化。
+**M7 验收待补（TC-JOB-008）——已完成（2026-10-13）**：真实 Redis 失速恢复演练通过并固化进 `smoke-queue.mjs` 阶段 F（31/31），恢复窗口 ≈ lockDuration 30s + `MQ_STALLED_MS` 检测间隔；演练暴露并修复「register 未建消费器」「ensureWorker 自递归死锁与重复建」两个框架缺陷，记录见 `docs/archive/queue/94-queue-stall-drill.md`。memory 驱动不承诺跨进程持久化。
 
 > **v0.1.0 遗留项（不阻塞发布）**：① ~~`@nestjs/core <=11.1.17` 与 `file-type` 的 3 项 moderate 依赖漏洞需随 NestJS 10 → 11 升级解决~~ → **✅ 已闭环（2026-10-13）**：全仓升 NestJS **11.2.7**（Express 5.2.1 / `@types/express` 5 / file-type 21.3.4 / multer 2.4.0），`pnpm audit --prod` **零漏洞**；② ~~dev 工具链大版本升级（vitest 2→3、tinypool 1→2、happy-dom 15→20、vite 5→6）~~ → **✅ 已闭环（2026-10-13）**：vitest **4.1.11** / vite **8.3.4**（rolldown + oxc）/ happy-dom **21.0.1** / plugin-vue 6 / vue-tsc 3 / unplugin-vue-components 32，`tinypool` 随 vitest 4 整条链路消失；**全仓 `pnpm audit`（含 dev）零漏洞**，全套门禁复跑通过（框架包 366/366、example-api 50/50、admin-web 29+40）；③ ~~`braces` 暂无可用补丁版本~~ → **✅ 已消除（2026-10-13）**：`braces` 随 vite 8 不再进入依赖树，无需补丁。
 

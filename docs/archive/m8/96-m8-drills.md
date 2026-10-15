@@ -12,7 +12,7 @@
 > 日期：2026-10-14 ｜ 结论：**通过（条件通过，见 §6 遗留）** ｜ 负责人：donttemo
 >
 > 演练脚本：`apps/example-api/scripts/drill-m8.mjs`（可随时复跑）
-> 关联：[验收标准 §6 三大关键演练](./10-acceptance-criteria.md) ｜ [PRD-008](./prd/prd-008-multitenancy-scale.md) ｜ [部署与运维手册](./60-deployment-ops.md)
+> 关联：[验收标准 §6 三大关键演练](../../10-acceptance-criteria.md) ｜ [PRD-008](../../prd/prd-008-multitenancy-scale.md) ｜ [部署与运维手册](../../60-deployment-ops.md)
 
 ## 1. 演练环境
 
@@ -25,7 +25,7 @@
 | 追踪 | 本地 mock OTLP 收集器（`http.createServer`，随机端口，断言只看导出载荷） |
 | 编排校验 | `scripts/check-helm-chart.mjs`（离线 Helm 子集渲染 + K8s 清单语义断言，63/63） |
 
-远程实例登记见 [`docs/92-test-databases.md`](./92-test-databases.md)；本轮不做任何生产环境操作。
+远程实例登记见 [`docs/archive/database/92-test-databases.md`](../database/92-test-databases.md)；本轮不做任何生产环境操作。
 
 ## 2. 复跑命令
 
@@ -57,7 +57,7 @@ node scripts/drill-m8.mjs
 
 **切库动作**：改写 `prisma/schema.prisma` 的 `datasource db.provider`（`sqlite` / `postgresql` / `mysql`）→ `prisma generate` → `prisma db push --force-reset` + `tsx prisma/seed.ts` → 启动 → 四点断言（`/health`、`/ready` 的 db 探针、`/api/v1/demo/ok`、`/api/v1/demo/items` 的写后读）。脚本 `finally` 恢复 schema 与 sqlite client，工作区无残留。
 
-> 与 [v0.1.0 数据库切换实测](./93-db-connectivity-switch-test.md) 的区别：前者在 `@fw/db` 层用三份方言 schema 跑同一套 Repository 断言；本轮在**应用层**（example-api 真实迁移 + 种子 + HTTP 端点）复现同一结论，覆盖从配置到接口的完整链路。
+> 与 [v0.1.0 数据库切换实测](../database/93-db-connectivity-switch-test.md) 的区别：前者在 `@fw/db` 层用三份方言 schema 跑同一套 Repository 断言；本轮在**应用层**（example-api 真实迁移 + 种子 + HTTP 端点）复现同一结论，覆盖从配置到接口的完整链路。
 
 ## 4. 演练二 · 规模演进（L3-2）
 
@@ -114,7 +114,7 @@ node scripts/drill-m8.mjs
 | 4 | 数据权限四种范围在列表与详情接口上均生效 | ✅ | `smoke-tenant.mjs` 阶段 D 19 项（四档精确集合 + 越权拦截 + 审计收敛）；`@fw/auth` 四档单测 14 项 |
 | 5 | 一个请求跨 2 个服务时，可用同一 traceId 查到完整链路 | ✅ | 演练二 4.1（跨进程 3 span / 2 服务同 traceId）；`smoke-telemetry.mjs` 14/14（TC-TNT-006） |
 | 6 | Helm 模板一键部署后，健康检查、滚动更新、HPA 均生效 | ✅（清单语义层） | `scripts/check-helm-chart.mjs` 63/63：探针分指 `/ready` `/health`、`maxUnavailable=0/maxSurge=1`、HPA min/max/CPU 目标、PDB、resources、非 root、Secret 外部注入、迁移 Job pre-upgrade 钩子 |
-| 7 | 压测基线报告可复现，登录/列表/写入三类场景有明确 QPS 与 P95 | ✅ | [`docs/97-bench-baseline.md`](./97-bench-baseline.md)；`apps/example-api/scripts/bench.mjs` |
+| 7 | 压测基线报告可复现，登录/列表/写入三类场景有明确 QPS 与 P95 | ✅ | [`docs/archive/m8/97-bench-baseline.md`](./97-bench-baseline.md)；`apps/example-api/scripts/bench.mjs` |
 
 ### 6.2 L3 全局门禁
 
@@ -170,7 +170,7 @@ node scripts/drill-m8.mjs
 | FR-07 | 链路追踪（OpenTelemetry） | ✅ 已完成 |
 | FR-08 | 配置增强（配置中心占位 + 热更新审计） | ⚠️ 未实现（L-02） |
 | FR-09 | 部署模板（compose + Helm） | ✅ 已完成（T-M8-07） |
-| FR-10 | 规模化清单（CheckList） | ✅ 已完成 → [`98-scale-checklist.md`](./98-scale-checklist.md) |
+| FR-10 | 规模化清单（CheckList） | ✅ 已完成 → [`98-scale-checklist.md`](../../98-scale-checklist.md) |
 | FR-11 | 压测基线（脚本 + 报告模板） | ✅ 已完成 → [`97-bench-baseline.md`](./97-bench-baseline.md) |
 
 **结论**：§7 七条 AC 全部通过，L3 三大演练全绿（25/25）。FR-08 未实现（不在 §7 AC 内，登记为 P2 遗留），故判定为**条件通过**，闭环条件见 L-01/L-02。

@@ -4,7 +4,7 @@
 >
 > **当前状态：v0.3.0 已发布（2026-10-14）** —— v0.1.0 交付 M1–M4，v0.2.0 一次性纳入 **M5 管理后台前端（PRD-005）、M6 CRUD 代码生成器（PRD-006）、M7 队列与定时任务（PRD-007）、M8 多租户与规模化演进（PRD-008）**，**M1–M8 全部交付**；本次 **v0.3.0 做「真机可用性收口」**：修复管理后台 15 项前端缺陷（操作列整列消失、字典按钮不渲染、生成器页面菜单不可达、个人中心保存必失败、越权按钮可点、死链菜单等）、路由与登录态生命周期 4 项（「点进功能页侧边栏消失」、403 判定死代码、换号后仍是上一账号菜单、mock 与后端漂移）与工作台对低权限账号刷 403 并显示误导性 `0`，并纳入 **C-06 契约收口**（补齐 25 个后端未注册端点 + 前后端接口对撞门禁）、分派入参写库前校验、以及 **1Panel / 裸机真机部署路径**（PostgreSQL schema 变体、HTTPS 上线）。真机验收：数据面 24/24 + 27/27、真实 Chromium 端到端 **26/26 且全程 0 条 4xx**。发布验收记录见 [v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md)。
 >
-> **仓库与流水线**：[`donttemos/TY`](https://github.com/donttemos/TY)（private）。CI（GitHub Actions）在 v0.2.0 推送后**首次真实运行**；经修复 6 处「只在干净环境复现」的流水线/环境适配缺陷后，**四大作业全绿**（基础门禁 24 步 + sqlite/postgres/mysql 三库集成矩阵），见 [发布报告 §5.1 / §8](./docs/90-release-v0.2.0.md)。
+> **仓库与流水线**：[`donttemos/TY`](https://github.com/donttemos/TY)（private）。CI（GitHub Actions）在 v0.2.0 推送后**首次真实运行**；经修复 6 处「只在干净环境复现」的流水线/环境适配缺陷后，**四大作业全绿**（基础门禁 24 步 + sqlite/postgres/mysql 三库集成矩阵），见 [发布报告 §5.1 / §8](docs/archive/release/90-release-v0.2.0.md)。
 
 ## 设计原则
 
@@ -82,13 +82,16 @@ framework/
     70-engineering-standards.md # 编码 / Git / PR 规范
     80-project-plan.md        # 项目计划与任务板
     85-parallel-workstreams.md # 并行开发工作线划分（契约 / 所有权 / 集成点）
-    90-release-v0.1.0.md      # v0.1.0 发布验收报告
-    90-release-v0.2.0.md      # v0.2.0 发布验收报告（M5–M8，M1–M8 全部交付）
     90-release-v0.3.0.md      # v0.3.0 发布验收报告（真机可用性收口）
     95-doc-audit.md           # 文档一致性核对报告
     99-admin-web-enhancement-and-fixes.md # 管理后台前端功能补充与缺陷修复方案
     adr/                      # 架构决策记录 0001–0013
     prd/                      # 按功能 / 迭代拆分的 PRD
+    archive/                  # 已完结的历史记录归档（2026-10-15 起，避免与活动文档混排）
+      release/                #   发布验收报告：90-release-v0.1.0.md、90-release-v0.2.0.md
+      database/               #   数据库实测记录：92-test-databases.md、93-db-connectivity-switch-test.md
+      queue/                  #   队列演练记录：94-queue-stall-drill.md
+      m8/                     #   M8 演练与基线：96-m8-drills.md、97-bench-baseline.md
 ```
 
 ## 快速开始（目标体验，实现中）
@@ -150,15 +153,15 @@ fw gen crud order
 | [PRD 索引](./docs/prd/README.md) | 迭代清单与 PRD 模板约定 |
 | PRD-001 ~ PRD-009 | 见 `docs/prd/`，每个功能 / 迭代一份 |
 | [v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md) | 「真机可用性收口」发布门禁逐条判定、升级影响（种子语义与标签键变更）、验证证据清单（单测 782 + 冒烟 203 + 静态 4 项 + 真机）、遗留问题与发布结论（通过） |
-| [v0.2.0 发布验收报告](./docs/90-release-v0.2.0.md) | M5–M8 发布门禁逐条判定、验证证据清单、遗留问题与发布结论（条件通过） |
-| [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md) | M1–M4 发布门禁逐条判定、验证证据清单、遗留问题与发布结论（条件通过） |
-| [测试数据库环境](./docs/92-test-databases.md) | 远程共用测试实例（MySQL / PostgreSQL / Redis）连接登记与测试切换方式（含明文凭证，仅测试用） |
-| [数据库联通性与切换实测](./docs/93-db-connectivity-switch-test.md) | v0.1.0 三库连通/鉴权实测、T-M2-07 三库一致性矩阵、业务代码零改动证明、Redis 真实实例联调与遗留项 |
-| [TC-JOB-008 失速恢复演练](./docs/94-queue-stall-drill.md) | 真实 Redis 上 BullMQ 失速恢复演练记录：设计、排障（register 未建消费器 / ensureWorker 自递归死锁与竞态）、MQ_STALLED_MS 与证据 |
+| [v0.2.0 发布验收报告](docs/archive/release/90-release-v0.2.0.md) | M5–M8 发布门禁逐条判定、验证证据清单、遗留问题与发布结论（条件通过） |
+| [v0.1.0 发布验收报告](docs/archive/release/90-release-v0.1.0.md) | M1–M4 发布门禁逐条判定、验证证据清单、遗留问题与发布结论（条件通过） |
+| [测试数据库环境](docs/archive/database/92-test-databases.md) | 远程共用测试实例（MySQL / PostgreSQL / Redis）连接登记与测试切换方式（含明文凭证，仅测试用） |
+| [数据库联通性与切换实测](docs/archive/database/93-db-connectivity-switch-test.md) | v0.1.0 三库连通/鉴权实测、T-M2-07 三库一致性矩阵、业务代码零改动证明、Redis 真实实例联调与遗留项 |
+| [TC-JOB-008 失速恢复演练](docs/archive/queue/94-queue-stall-drill.md) | 真实 Redis 上 BullMQ 失速恢复演练记录：设计、排障（register 未建消费器 / ensureWorker 自递归死锁与竞态）、MQ_STALLED_MS 与证据 |
 | [代码生成模板定制](./templates/codegen/README.md) | `fw gen crud` 模板目录结构、标签语法、可用变量清单、项目级同名覆盖与 `codegen.config.json`（vars / typeOverrides） |
 | [文档一致性核对报告](./docs/95-doc-audit.md) | 全量文档交叉核对结果、冲突修复记录与遗留项 |
-| [M8 三大关键演练与终验](./docs/96-m8-drills.md) | 数据库切换 / 规模演进 / 依赖故障降级三大演练的可复现结果（25/25）、PRD-008 §7 AC 逐条判定与遗留项 |
-| [压测基线报告](./docs/97-bench-baseline.md) | 登录 / 列表 / 写入三类场景的 QPS 与 P50/P95/P99 实测值、复现命令与性能基线对照 |
+| [M8 三大关键演练与终验](docs/archive/m8/96-m8-drills.md) | 数据库切换 / 规模演进 / 依赖故障降级三大演练的可复现结果（25/25）、PRD-008 §7 AC 逐条判定与遗留项 |
+| [压测基线报告](docs/archive/m8/97-bench-baseline.md) | 登录 / 列表 / 写入三类场景的 QPS 与 P50/P95/P99 实测值、复现命令与性能基线对照 |
 | [规模化上线自检清单](./docs/98-scale-checklist.md) | 上线前 CheckList：连接池 / 缓存三防护 / 队列积压 / 慢 SQL / N+1 / 日志采样 / 容量与降级 |
 | [管理后台功能补充与缺陷修复方案](./docs/99-admin-web-enhancement-and-fixes.md) | 后台前端「文档已交付 vs 真机可用」逐页核对、待新增/完善模块、15 项缺陷（现象/触发条件/根因/修复后预期行为）、交互流程与数据展示规范、兼容性要求与验证证据 |
 | [Helm Chart 使用说明](./deploy/helm/fw-app/README.md) | Chart 目录结构、安装升级回滚、关键 values、探针与迁移 Job 语义、离线校验方式 |

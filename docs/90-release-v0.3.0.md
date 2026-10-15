@@ -2,7 +2,7 @@
 
 > 版本：**v0.3.0** ｜ 发布范围：**真机可用性收口**（管理后台前端缺陷修复 + 路由与登录态生命周期 + C-06 契约收口 + 1Panel/裸机部署路径） ｜ 验收日期：2026-10-14 ｜ 验收人：donttemo（L0 编排）
 > 依据：[验收标准](./10-acceptance-criteria.md) §2 完成定义、§3 里程碑门禁、§4 非功能与安全基线、§5 可观测基线、§7 验收流程
-> 关联：[v0.2.0 发布验收报告](./90-release-v0.2.0.md) ｜ [管理后台功能补充与缺陷修复方案](./99-admin-web-enhancement-and-fixes.md) ｜ [1Panel 真机部署验证报告](./63-1panel-real-deploy-verification.md) ｜ [文档一致性核对报告](./95-doc-audit.md)
+> 关联：[v0.2.0 发布验收报告](./archive/release/90-release-v0.2.0.md) ｜ [管理后台功能补充与缺陷修复方案](./99-admin-web-enhancement-and-fixes.md) ｜ [1Panel 真机部署验证报告](./63-1panel-real-deploy-verification.md) ｜ [文档一致性核对报告](./95-doc-audit.md)
 
 ## 1. 发布物与范围
 

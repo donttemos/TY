@@ -2,7 +2,7 @@
 
 本仓库已发布 **v0.1.0**（M1 核心骨架 / M2 数据库抽象层 / M3 鉴权与权限 / M4 缓存层，代码与测试均已就绪）。参与开发请按下列流程。
 
-> 发布验收记录见 [`docs/90-release-v0.1.0.md`](./docs/90-release-v0.1.0.md)。
+> 发布验收记录见 [`docs/archive/release/90-release-v0.1.0.md`](docs/archive/release/90-release-v0.1.0.md)。
 
 ## 快速开始（M1 起）
 

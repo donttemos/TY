@@ -1,6 +1,6 @@
 # 通用应用框架 · 部署与运维手册
 
-> 版本 v0.1 ｜ 状态：已随 M8 更新 ｜ 关联：[架构设计](./20-architecture.md) 第 6 节 ｜ [验收标准](./10-acceptance-criteria.md) ｜ [三大演练](./96-m8-drills.md) ｜ [规模化自检清单](./98-scale-checklist.md) ｜ 更新：2026-10-14
+> 版本 v0.1 ｜ 状态：已随 M8 更新 ｜ 关联：[架构设计](./20-architecture.md) 第 6 节 ｜ [验收标准](./10-acceptance-criteria.md) ｜ [三大演练](./archive/m8/96-m8-drills.md) ｜ [规模化自检清单](./98-scale-checklist.md) ｜ 更新：2026-10-14
 >
 > 适用：基于本框架构建的所有项目。档位选择决定操作复杂度——**小档不要求运维懂 K8s，大档不要求开发改代码**。
 
@@ -230,7 +230,7 @@ pnpm check:helm        # 等价 node scripts/check-helm-chart.mjs，离线渲染
 
 **变更触发滚动**：Deployment 带 `checksum/config: {{ include "fw-app.configData" . | sha256sum }}` 注解，ConfigMap 内容变化即触发 Pod 滚动，保证配置与进程同步生效。
 
-> **验收现状（M8 T-M8-07）**：Chart 与 compose 资产已交付、离线校验 63/63 通过；**真实 K8s 集群部署冒烟未执行**（本机沙箱无 kubectl/集群，遗留 L-01，见 `docs/96-m8-drills.md` §6.4）。上生产前请在目标集群补一次 `helm template` + `--dry-run=server` + 灰度发布验证。
+> **验收现状（M8 T-M8-07）**：Chart 与 compose 资产已交付、离线校验 63/63 通过；**真实 K8s 集群部署冒烟未执行**（本机沙箱无 kubectl/集群，遗留 L-01，见 `docs/archive/m8/96-m8-drills.md` §6.4）。上生产前请在目标集群补一次 `helm template` + `--dry-run=server` + 灰度发布验证。
 
 ## 7. 启动、停止与优雅停机
 

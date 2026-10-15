@@ -96,7 +96,7 @@ helm rollback myapp 1 -n fw
 node scripts/check-helm-chart.mjs
 ```
 
-该脚本实现 Helm 模板子集渲染（`include` / `if` / `range` / `with` / 内置函数），对 `values.yaml`、`values-prod.yaml`、最小档三套渲染结果做 **K8s 清单语义断言**（探针路径、`maxUnavailable=0`、`resources` 齐备、非 root、HPA/PDB 参数、Secret 不落明文、迁移 Job 钩子、组件开关生效），共 63 项。**它是离线兜底，不替代真实集群的 `helm install` + `kubectl rollout` 冒烟**（见 `docs/96-m8-drills.md` L-01）。
+该脚本实现 Helm 模板子集渲染（`include` / `if` / `range` / `with` / 内置函数），对 `values.yaml`、`values-prod.yaml`、最小档三套渲染结果做 **K8s 清单语义断言**（探针路径、`maxUnavailable=0`、`resources` 齐备、非 root、HPA/PDB 参数、Secret 不落明文、迁移 Job 钩子、组件开关生效），共 63 项。**它是离线兜底，不替代真实集群的 `helm install` + `kubectl rollout` 冒烟**（见 `docs/archive/m8/96-m8-drills.md` L-01）。
 
 ## 6. 安装后自检
 

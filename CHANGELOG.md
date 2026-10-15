@@ -2,7 +2,7 @@
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
-> **当前状态：v0.3.0 已发布（2026-10-14）** —— 在 v0.2.0（M1–M8 全部交付）之上，本次发布把管理后台从「文档标注已交付」拉到「**真机可用的同源状态**」：逐页核对 PRD-005 修复 **15 项前端缺陷**（操作列整列消失、字典项维护按钮不渲染、生成器页面菜单不可达、队列管理无入口、个人中心保存必失败、越权按钮可点、死链菜单、批量删除假成功等），并修复**路由与登录态生命周期 4 项**（动态路由未挂布局导致「点进功能页侧边栏消失」、403 判定死代码、换号后仍是上一账号的菜单与路由、mock 与后端契约漂移）与**工作台对低权限账号刷 403 并把无权指标显示成误导性 `0`**；同时纳入 **C-06 契约收口**（补齐 25 个后端未注册端点 + 前后端接口对撞门禁）、**角色/权限分派写库前校验**（`roleIds:[""]` 曾致权限归零）、软删唯一键释放、生产前端构建缺 API 基址导致的登录 405 根治、以及 **1Panel / 裸机真机部署路径**（PostgreSQL schema 变体、HTTPS 上线、部署资产与实测报告）。真机验收：`106.55.32.251` 数据面 **24/24 + 27/27**、真实 Chromium 端到端 **26/26 且全程 0 条 4xx**。发布记录见 [v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md)，M1–M8 里程碑证据见 [v0.2.0 发布验收报告](./docs/90-release-v0.2.0.md) 与 [M8 三大关键演练与终验](./docs/96-m8-drills.md)。
+> **当前状态：v0.3.0 已发布（2026-10-14）** —— 在 v0.2.0（M1–M8 全部交付）之上，本次发布把管理后台从「文档标注已交付」拉到「**真机可用的同源状态**」：逐页核对 PRD-005 修复 **15 项前端缺陷**（操作列整列消失、字典项维护按钮不渲染、生成器页面菜单不可达、队列管理无入口、个人中心保存必失败、越权按钮可点、死链菜单、批量删除假成功等），并修复**路由与登录态生命周期 4 项**（动态路由未挂布局导致「点进功能页侧边栏消失」、403 判定死代码、换号后仍是上一账号的菜单与路由、mock 与后端契约漂移）与**工作台对低权限账号刷 403 并把无权指标显示成误导性 `0`**；同时纳入 **C-06 契约收口**（补齐 25 个后端未注册端点 + 前后端接口对撞门禁）、**角色/权限分派写库前校验**（`roleIds:[""]` 曾致权限归零）、软删唯一键释放、生产前端构建缺 API 基址导致的登录 405 根治、以及 **1Panel / 裸机真机部署路径**（PostgreSQL schema 变体、HTTPS 上线、部署资产与实测报告）。真机验收：`106.55.32.251` 数据面 **24/24 + 27/27**、真实 Chromium 端到端 **26/26 且全程 0 条 4xx**。发布记录见 [v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md)，M1–M8 里程碑证据见 [v0.2.0 发布验收报告](docs/archive/release/90-release-v0.2.0.md) 与 [M8 三大关键演练与终验](docs/archive/m8/96-m8-drills.md)。
 
 ## 版本与变更规则
 
@@ -13,6 +13,11 @@
 - **频率**：每个发布版本一条记录；`Unreleased` 区间持续累积，发布时转为版本条目并清空。
 
 ## [Unreleased]
+
+### Changed（文档归档与状态订正，2026-10-15）
+
+- **历史记录归档**：7 份已完结的点时性记录移入 `docs/archive/<模块>/`（避免与活动文档混排导致版本误引）——发布验收报告 `90-release-v0.1.0.md`、`90-release-v0.2.0.md` → `archive/release/`；数据库实测 `92-test-databases.md`、`93-db-connectivity-switch-test.md` → `archive/database/`；队列演练 `94-queue-stall-drill.md` → `archive/queue/`；M8 演练与压测基线 `96-m8-drills.md`、`97-bench-baseline.md` → `archive/m8/`。全部入仓引用（README / CHANGELOG / 60 / 62 / 63 / 80 / 95 / 98 / 99 / PRD-008 / PRD-009 / Helm README / 归档内部互引）已同步改写为新相对路径，经脚本校验**全仓 markdown 链接 0 坏链**；v0.3.0 发布报告作为当前版保留在 `docs/` 根。清单与核对矩阵见 [文档一致性核对报告 §11](./docs/95-doc-audit.md)。
+- **文档状态订正（与实现对齐）**：PRD-001 索引与文件头「草案」→「已发布 v0.1.0」（M1 早已交付，初稿状态遗留）；PRD 索引中 PRD-009「草案」→「已实现（2026-10-15，未发版）」（M9 已落地并全量验证，与 PRD 文件头及 CHANGELOG 上文对齐）。v0.3.0 报告 §6 中 R3-01/02/03/04/07 已被本 Unreleased 轮实现或经 `docs/99` §9 订正，报告按「历史结论不追溯改写」原则保留原文。
 
 ### Added
 
@@ -395,7 +400,7 @@
 - **部署模板（T-M8-07，PRD-008 FR-09）**：新增 `deploy/` 部署资产——`deploy/helm/fw-app/` 标准 Helm Chart（`Chart.yaml` + `values.yaml` + `values-prod.yaml` + 14 个模板：Deployment / Service / HPA / PDB / Ingress / ConfigMap / Secret / ServiceAccount / NetworkPolicy / 迁移 Job / Worker / admin-web / `_helpers.tpl` / `NOTES.txt`），`deploy/docker-compose.prod.yml`（中档：app + worker + postgres + redis + nginx + migrate 六服务，应用无状态、迁移为一次性服务），`deploy/nginx/fw.conf`（SPA history 回退 + `/api` 反代 + traceparent 透传 + 登录限流 + 运维端点内网白名单）。
   - **Chart 语义要点**：三档探针分指（`startupProbe`→`/health`、`readinessProbe`→`/ready`、`livenessProbe`→`/health`）；滚动更新 `maxUnavailable=0` / `maxSurge=1`；`resources` requests+limits 必填；`runAsNonRoot` + 禁提权 + `drop: ALL` + `readOnlyRootFilesystem`；HPA（默认 3~12 / CPU 60%）、PDB（`minAvailable=2`）；**密钥默认不渲染 Secret 对象**，容器经 `secretRef` 取用，生产用 `secrets.existingSecret` 外部注入；迁移以 `helm.sh/hook: pre-install,pre-upgrade` 独立 Job 执行（失败即阻断发布）；Worker 与 API 同镜像不同角色（`TRANSPORT_ROLE=handler`）且选择器按 `component` 区分；Pod 模板带 `checksum/config` 注解，配置变更自动触发滚动。
   - **离线校验**：新增 `scripts/check-helm-chart.mjs`（+ `scripts/lib/mini-yaml.mjs` 零依赖极简 YAML 解析器）——实现 Helm 模板子集渲染（`include` / `if` / `range` / `with` / `default` / `toYaml` / `nindent` / `sha256sum` 等），对默认档 / 生产档 / 最小档三套 values 渲染结果做 K8s 清单语义断言，共 **63/63** 通过；本机与 CI 无 helm 时的门禁兜底（不替代真实集群 `helm install`）。
-- **三大关键演练与终验（T-M8-08）**：新增 `apps/example-api/scripts/drill-m8.mjs`（可复跑，远程段落门控）与 `apps/example-api/scripts/bench.mjs`（压测基线）；产出 `docs/96-m8-drills.md`（演练记录 + PRD-008 §7 七条 AC 判定 + 遗留）、`docs/97-bench-baseline.md`（登录/列表/写入三类场景 QPS 与 P95）、`docs/98-scale-checklist.md`（规模化上线自检清单，FR-10）。
+- **三大关键演练与终验（T-M8-08）**：新增 `apps/example-api/scripts/drill-m8.mjs`（可复跑，远程段落门控）与 `apps/example-api/scripts/bench.mjs`（压测基线）；产出 `docs/archive/m8/96-m8-drills.md`（演练记录 + PRD-008 §7 七条 AC 判定 + 遗留）、`docs/archive/m8/97-bench-baseline.md`（登录/列表/写入三类场景 QPS 与 P95）、`docs/98-scale-checklist.md`（规模化上线自检清单，FR-10）。
 
 ### M8 验证（2026-10-14，全量实跑）
 
@@ -412,7 +417,7 @@
   - **演练一 · 数据库切换**：sqlite / postgresql / mysql 三库均 `ready.db=ok` + 写后读全通（`listCount=4`），三库结果一致；`git diff --stat -- apps/example-api/src packages` 为空（**业务代码零改动**）；耗时 47s ≤ 3600s。
   - **演练二 · 规模演进**：单体 in-process（`handledBy === callerId`）→ redis 双进程（`handledBy ≠ callerId`、caller `handled=0`）**同一端点同一请求体，仅环境变量不同**；链路追踪跨进程贯通（固定 `traceparent` → 同一 traceId 下 3 span / 2 服务）；compose → Helm 演进路径与 Chart 校验 63/63。
   - **演练三 · 依赖故障降级**：Redis 不可达时业务接口仍返回 200（降级直查 DB）且 `/ready` 503 + `checks.cache=fail` + `degradations=5` + `/metrics` 暴露降级指标；真实 Redis 恢复后读写一致（`healed`）且 `cache=ok`、`degradations=0`；远程库注入 `DB_SLOW_MS=10` 产生「慢查询告警」（`durationMs=40`、带 `traceId`）；队列限速下派发 12 个任务积压 `waiting=10` 且 `/metrics/queue` 暴露 `fw_queue_backlog`，等待后**消化归零**。
-- **压测基线（T-M8-08，FR-11）**：`node scripts/bench.mjs` 三类场景——登录 `QPS 10.2 / P50 191.62ms / P95 255.65ms`（第 11 次返回 429，登录限流 60s/10 次生效）、列表查询 `QPS 561.8 / P50 16.17ms / P95 27.69ms`、写入 `QPS 37.5 / P50 26.46ms / P95 434.09ms`（SQLite 写锁串行长尾）；报告见 `docs/97-bench-baseline.md`，原始数据 `docs/bench/bench-latest.json`。
+- **压测基线（T-M8-08，FR-11）**：`node scripts/bench.mjs` 三类场景——登录 `QPS 10.2 / P50 191.62ms / P95 255.65ms`（第 11 次返回 429，登录限流 60s/10 次生效）、列表查询 `QPS 561.8 / P50 16.17ms / P95 27.69ms`、写入 `QPS 37.5 / P50 26.46ms / P95 434.09ms`（SQLite 写锁串行长尾）；报告见 `docs/archive/m8/97-bench-baseline.md`，原始数据 `docs/bench/bench-latest.json`。
 - 文件头门禁 **345** 文件通过。
 
 
@@ -441,7 +446,7 @@
 - `apps/example-api` 队列冒烟 **31/31**：memory 20（含 refresh 清理 cron 注册与手动触发 2 项）+ 并发 1 + 限速 1 + **bullmq 真实 Redis 7** + **失速恢复演练 2（TC-JOB-008）** + 配置守卫 1；未设置 `SMOKE_REDIS_URL` 时 bullmq 阶段按设计跳过。
 - `apps/admin-web`：vue-tsc 通过、单测 **29/29**、mock 全链路冒烟 **57/57**（新增队列管理 17 项断言，含 `system:queue:*` 双向越权拦截）、bundle gzip **311.5 kB**（门禁 ≤ 600 kB）。
 - CI 已纳入 M7：构建与覆盖率循环新增 `@fw/queue`，新增「M7 队列端到端冒烟（SQLite）」步骤。
-- **TC-JOB-008 已通过（2026-10-13）**：真实 Redis 失速恢复演练通过并固化进冒烟阶段 F；演练暴露并修复两个 `@fw/queue` 缺陷（`register` 未建消费器导致新进程无失速检查器、`ensureWorker` 自递归死锁与同队列重复建），记录见 `docs/94-queue-stall-drill.md`。
+- **TC-JOB-008 已通过（2026-10-13）**：真实 Redis 失速恢复演练通过并固化进冒烟阶段 F；演练暴露并修复两个 `@fw/queue` 缺陷（`register` 未建消费器导致新进程无失速检查器、`ensureWorker` 自递归死锁与同队列重复建），记录见 `docs/archive/queue/94-queue-stall-drill.md`。
 
 ### Changed（dev 工具链大版本升级，2026-10-13）
 
@@ -545,8 +550,8 @@
 
 **文档**
 
-- 新增 [`docs/93-db-connectivity-switch-test.md`](./docs/93-db-connectivity-switch-test.md)：连通/鉴权实测（含 PG SCRAM-SHA-256 完整握手）、三库矩阵结果、键空间独立核验、发现与修复、遗留 T-01~T-05。
-- [`docs/92-test-databases.md`](./docs/92-test-databases.md) 增补 §5 执行记录（实测服务端版本、`framework_test` 创建、大小写归一与批量造数注意事项）。
+- 新增 [`docs/archive/database/93-db-connectivity-switch-test.md`](docs/archive/database/93-db-connectivity-switch-test.md)：连通/鉴权实测（含 PG SCRAM-SHA-256 完整握手）、三库矩阵结果、键空间独立核验、发现与修复、遗留 T-01~T-05。
+- [`docs/archive/database/92-test-databases.md`](docs/archive/database/92-test-databases.md) 增补 §5 执行记录（实测服务端版本、`framework_test` 创建、大小写归一与批量造数注意事项）。
 - 验收总纲遗留 **R-01（三库矩阵与数据库切换演练）** 完成实测闭环、**R-07（真实 Redis）** 完成 standalone 部分闭环（Cluster 留待 M8）。
 
 ### Fixed
@@ -556,14 +561,14 @@
 
 ### Fixed（v0.2.0 发布前验收修复，2026-10-14）
 
-- **CI 纳入 `@fw/tenant`**：M8 T-M8-01 新增该包时漏加构建与覆盖率循环（`@fw/transport` / `@fw/telemetry` 已纳入），干净环境下 `example-api` 取不到其 `dist` 会构建失败；同时补入「M8 多租户端到端冒烟」步骤（`smoke-tenant.mjs`）。详见 [v0.2.0 发布验收报告](./docs/90-release-v0.2.0.md) §5 F2-01/F2-03。
+- **CI 纳入 `@fw/tenant`**：M8 T-M8-01 新增该包时漏加构建与覆盖率循环（`@fw/transport` / `@fw/telemetry` 已纳入），干净环境下 `example-api` 取不到其 `dist` 会构建失败；同时补入「M8 多租户端到端冒烟」步骤（`smoke-tenant.mjs`）。详见 [v0.2.0 发布验收报告](docs/archive/release/90-release-v0.2.0.md) §5 F2-01/F2-03。
 - **`@fw/tenant` 覆盖率补齐**：`tenant.middleware.ts`（9.52%）与 `tenant.module.ts`（46.15%）原仅由端到端冒烟覆盖，包整体 lines 71.42% / functions 56% 低于 85% 门禁；补中间件 9 项 + 模块装配 5 项单测后达 **99% statements / 98.9% lines**（用例 19 → 33）。
 - **应用自报版本**：`apps/example-api` 的 `/api/v1/demo/ok` 返回值由 `framework: 'v0.1.0'` 更新为 `'v0.2.0'`。
 
 ## [0.1.0] - 2026-10-13
 
 > 首个可运行版本。含 M1 核心骨架、M2 数据库抽象层、M3 鉴权与权限、M4 缓存层。
-> 门禁与验证证据见 [v0.1.0 发布验收报告](./docs/90-release-v0.1.0.md)。
+> 门禁与验证证据见 [v0.1.0 发布验收报告](docs/archive/release/90-release-v0.1.0.md)。
 
 ### Added（M4 缓存层，2026-10-13）
 

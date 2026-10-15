@@ -1,9 +1,9 @@
 # v0.2.0 发布验收报告
 
 > 版本：**v0.2.0** ｜ 发布范围：**M5–M8** ｜ 验收日期：2026-10-14 ｜ 验收人：donttemo（L0 编排）
-> 依据：[验收标准](./10-acceptance-criteria.md) §2 完成定义、§3 里程碑门禁、§4 非功能与安全基线、§5 可观测基线、§6 三大关键演练、§7 验收流程
+> 依据：[验收标准](../../10-acceptance-criteria.md) §2 完成定义、§3 里程碑门禁、§4 非功能与安全基线、§5 可观测基线、§6 三大关键演练、§7 验收流程
 > 证据目录：`.workbuddy/release-0.2.0/`（构建、单测、覆盖率、冒烟、演练、依赖扫描原始输出）
-> 关联：[v0.1.0 发布验收报告](./90-release-v0.1.0.md) ｜ [M8 三大关键演练与终验](./96-m8-drills.md) ｜ [压测基线](./97-bench-baseline.md) ｜ [规模化上线自检清单](./98-scale-checklist.md)
+> 关联：[v0.1.0 发布验收报告](./90-release-v0.1.0.md) ｜ [M8 三大关键演练与终验](../m8/96-m8-drills.md) ｜ [压测基线](../m8/97-bench-baseline.md) ｜ [规模化上线自检清单](../../98-scale-checklist.md)
 
 ## 1. 发布物与范围
 
@@ -28,8 +28,8 @@
 |---|---|---|---|
 | M5 管理后台模板 | 动态路由与按钮权限生效；mock 全链路可独立运行；bundle ≤ 600 kB | ✅ 通过 | `admin-web` 单测 **29/29** + mock 冒烟 **57/57**（含队列页 17 项与 `system:queue:*` 双向越权拦截）；bundle gzip **311.5 kB**（门禁 600 kB） |
 | M6 CRUD 代码生成器 | `fw gen crud` 产物零手改即通过 `tsc` / `vue-tsc`；默认不覆盖、失败回滚；模板可定制 | ✅ 通过 | `@fw/cli` 单测 **116/116**（覆盖率 89.69/82.2/89.05/90.16，门禁 ≥80%）；CI `gen crud demo-item --dry` 冒烟 |
-| M7 队列与定时任务 | 双驱动语义一致；cron 集群单跑；死信重放；幂等与限速；失速恢复 | ✅ 通过 | `@fw/queue` 单测 **138/138**（94.54% lines）；冒烟 **31/31**（含真实 Redis **TC-JOB-008 失速恢复演练**，见 [94-queue-stall-drill.md](./94-queue-stall-drill.md)） |
-| M8 多租户与规模化 | transport 切换不改调用方代码；跨租户越权用例全绿；缺上下文 fail-closed；traceId 跨服务贯通；Helm 探针/滚动更新/HPA 生效 | ✅ 条件通过 | 租户冒烟 **48/48**、传输 **17/17**、追踪 **14/14**；三大演练 **25/25**；Chart 校验 **63/63**；§7 七条 AC 全绿（见 [96-m8-drills.md](./96-m8-drills.md) §6.1） |
+| M7 队列与定时任务 | 双驱动语义一致；cron 集群单跑；死信重放；幂等与限速；失速恢复 | ✅ 通过 | `@fw/queue` 单测 **138/138**（94.54% lines）；冒烟 **31/31**（含真实 Redis **TC-JOB-008 失速恢复演练**，见 [../queue/94-queue-stall-drill.md](../queue/94-queue-stall-drill.md)） |
+| M8 多租户与规模化 | transport 切换不改调用方代码；跨租户越权用例全绿；缺上下文 fail-closed；traceId 跨服务贯通；Helm 探针/滚动更新/HPA 生效 | ✅ 条件通过 | 租户冒烟 **48/48**、传输 **17/17**、追踪 **14/14**；三大演练 **25/25**；Chart 校验 **63/63**；§7 七条 AC 全绿（见 [../m8/96-m8-drills.md](../m8/96-m8-drills.md) §6.1） |
 
 ## 3. 全局发布门禁
 
@@ -37,14 +37,14 @@
 
 | 条目 | 结果 | 说明 |
 |---|---|---|
-| 功能与 PRD 行为一致 | ✅ | PRD-005~008 的 AC 逐条勾选（PRD-008 §7 七条见 [96](./96-m8-drills.md) §6.1） |
+| 功能与 PRD 行为一致 | ✅ | PRD-005~008 的 AC 逐条勾选（PRD-008 §7 七条见 [96](../m8/96-m8-drills.md) §6.1） |
 | 新增单测 / 集成 / 端到端 | ✅ | 单测 **748 项**；端到端冒烟 **223 项**（7 套 example-api + admin-web mock） |
 | 构建零错误 | ✅ | 11 框架包 + example-api + admin-web **13/13 通过** |
 | 无 TODO 遗留（或已建 issue） | ✅ | 现存 TODO 均带责任人与日期 |
 | 注释中文 + 文件头完整 | ✅ | `check:headers` **347** 文件通过 |
 | 日志带 traceId、新能力接指标 | ✅ | traceId 贯通；`/metrics`（含缓存/队列降级与积压）、`/metrics/queue` 暴露 |
 | 无硬编码密钥、输入校验完备 | ✅ | 密钥模式扫描未命中；参数统一走 zod / Prisma 绑定；Helm 默认不渲染明文 Secret |
-| 文档同步 | ✅ | README / CHANGELOG / PRD 索引 / 部署手册 / 96-98 / 本报告已同步（见 [95-doc-audit.md](./95-doc-audit.md) §8） |
+| 文档同步 | ✅ | README / CHANGELOG / PRD 索引 / 部署手册 / 96-98 / 本报告已同步（见 [95-doc-audit.md](../../95-doc-audit.md) §8） |
 | CI 门禁覆盖全部包 | ✅ | **本轮修复**：补入 `@fw/tenant`（构建 + 覆盖率循环）与多租户冒烟步骤（见 §5 F2-01/02/03） |
 
 ### 3.2 非功能基线
@@ -57,7 +57,7 @@
 | `cli`（生成器）≥ 80% | ≥ 80% | 90.16% | ✅ |
 | 其余 M7/M8 包 ≥ 85% | ≥ 85% | queue 94.54% / tenant 98.9% / transport 95.22% / telemetry 93.43% | ✅ |
 | 后台打包体积 | gzip ≤ 500 KB | 311.5 kB | ✅ |
-| 登录接口 P95 | ≤ 300ms | 255.65ms（见 [97-bench-baseline.md](./97-bench-baseline.md)） | ⚠️ 数值达标但未做 50 并发长压（R2-03） |
+| 登录接口 P95 | ≤ 300ms | 255.65ms（见 [../m8/97-bench-baseline.md](../m8/97-bench-baseline.md)） | ⚠️ 数值达标但未做 50 并发长压（R2-03） |
 | 百万行分页 P95 | ≤ 200ms | 未覆盖（数据集远小于 100 万行） | ⏳ R2-03 |
 
 ### 3.3 安全基线（缺一即不予验收）
@@ -85,7 +85,7 @@
 
 ### 3.5 三大关键演练
 
-> 脚本：`apps/example-api/scripts/drill-m8.mjs`（可复跑）；本轮**全量实跑 25/25，0 跳过，总耗时 84s**，含远程 MySQL 8.4.11 / PostgreSQL 18.6 / Redis 8.10.2。详见 [96-m8-drills.md](./96-m8-drills.md)。
+> 脚本：`apps/example-api/scripts/drill-m8.mjs`（可复跑）；本轮**全量实跑 25/25，0 跳过，总耗时 84s**，含远程 MySQL 8.4.11 / PostgreSQL 18.6 / Redis 8.10.2。详见 [../m8/96-m8-drills.md](../m8/96-m8-drills.md)。
 
 | 演练 | 结果 | 关键实测 |
 |---|---|---|
@@ -169,7 +169,7 @@
 | 项 | 命令 | 结果 |
 |---|---|---|
 | 三大关键演练 | `SMOKE_DB_SWITCH=1 SMOKE_REDIS_URL=... node scripts/drill-m8.mjs` | **25/25**，0 跳过，84s |
-| 压测基线 | `node scripts/bench.mjs` | 登录 QPS 10.2 / P95 255.65ms；列表 QPS 561.8 / P95 27.69ms；写入 QPS 37.5 / P95 434.09ms（见 [97](./97-bench-baseline.md)） |
+| 压测基线 | `node scripts/bench.mjs` | 登录 QPS 10.2 / P95 255.65ms；列表 QPS 561.8 / P95 27.69ms；写入 QPS 37.5 / P95 434.09ms（见 [97](../m8/97-bench-baseline.md)） |
 
 ## 5. 本次验收中发现并修复的缺陷
 
@@ -225,7 +225,7 @@
 **发布动作**：
 
 1. 版本号：根与 11 个框架包 + 2 个应用统一 **`0.2.0`**。
-2. 打附注标签 **`v0.2.0`**，与 [CHANGELOG](../CHANGELOG.md) 的 `[0.2.0] - 2026-10-14` 条目一一对应。
+2. 打附注标签 **`v0.2.0`**，与 [CHANGELOG](../../../CHANGELOG.md) 的 `[0.2.0] - 2026-10-14` 条目一一对应。
 3. 推送 GitHub（`donttemos/TY`）触发 CI，用真实 Actions 结果复核（此前 CI 从未在真实 Actions 上执行过三库矩阵与 M8 步骤）——见 §8。
 
 ## 8. 真实 Actions 复核（2026-10-14 完成）

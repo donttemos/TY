@@ -1,5 +1,5 @@
 <!--
-@file docs/92-test-databases.md
+@file docs/archive/database/92-test-databases.md
 @description 远程共用测试数据库（MySQL / PostgreSQL / Redis）连接信息登记，供本地调试与 CI 矩阵复用
 @author donttemo
 @created 2026-10-13

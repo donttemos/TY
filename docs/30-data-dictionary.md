@@ -42,7 +42,7 @@
 | `text` / `longtext` | `string` | 文本域 | — |
 | `int` | `number` | 数字框 / 步进器 | 整数范围（仅非 ID 的计数、数量、排序值） |
 | `bigint`（主键 `id` 或外键 `*_id`） | **`string`** | 只读 / 关联选择器 | 存在性校验；**禁止用 `number`**（雪花 ID 超出安全整数范围） |
-| `decimal(p,s)` | `string`（金额禁止用浮点） | 金额框 | 精度校验，字符串传输（见 [API 1.1](../40-api-spec.md)） |
+| `decimal(p,s)` | `string`（金额禁止用浮点） | 金额框 | 精度校验，字符串传输（见 [API 1.1](./40-api-spec.md)） |
 | `tinyint(1)` / `boolean` | `boolean` | 开关 | — |
 | `enum(...)` | 联合字面量 | 下拉 | 枚举值白名单 |
 | `datetime(3)` / `date` | `string`（ISO 8601） | 日期时间选择器 | 时间格式 |

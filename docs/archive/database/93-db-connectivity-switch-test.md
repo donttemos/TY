@@ -1,5 +1,5 @@
 <!--
-@file docs/93-db-connectivity-switch-test.md
+@file docs/archive/database/93-db-connectivity-switch-test.md
 @description v0.1.0 数据库联通性与「数据库可切换」实测报告：MySQL / PostgreSQL / Redis 真实实例连接、
   T-M2-07 三库一致性矩阵（sqlite / mysql / postgres 同一套断言）、业务代码零改动证明与遗留项
 @author donttemo
@@ -19,7 +19,7 @@
 | 项 | 值 |
 |---|---|
 | 被测版本 | v0.1.0（tag `v0.1.0` → `5f35895`） |
-| 实例来源 | `docs/92-test-databases.md` 登记的远程共用测试实例 |
+| 实例来源 | `docs/archive/database/92-test-databases.md` 登记的远程共用测试实例 |
 | 主机 | `106.55.32.251`（3306 / 5432 / 6379 三口均可达） |
 | 验证日期 | 2026-10-13 |
 

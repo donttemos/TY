@@ -8,7 +8,7 @@
 
 # TC-JOB-008 · BullMQ 失速恢复演练记录
 
-> 日期：2026-10-13 ｜ 结论：**通过** ｜ 环境：远程共享 Redis 8（`docs/92-test-databases.md`）+ bullmq 6.3.14 + example-api
+> 日期：2026-10-13 ｜ 结论：**通过** ｜ 环境：远程共享 Redis 8（`docs/archive/database/92-test-databases.md`）+ bullmq 6.3.14 + example-api
 
 ## 1. 演练设计
 
