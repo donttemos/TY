@@ -4,6 +4,8 @@
  *   宽度监听用 matchMedia，断点变化只改 app store，不直接操作 DOM。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo N-02：内容区底部挂载常驻任务条（JobBar），
+ *   长任务（导出 / 租户迁移）派发后不阻塞页面，进度与下载入口全局可见
  * @module admin-web/layout
 -->
 
@@ -12,6 +14,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue';
 import Sidebar from './Sidebar.vue';
 import Navbar from './Navbar.vue';
 import AppMain from './AppMain.vue';
+import JobBar from './JobBar.vue';
 import { useAppStore } from '@/store/app';
 
 const app = useAppStore();
@@ -58,6 +61,8 @@ onBeforeUnmount(() => {
     <div class="fw-layout-body">
       <Navbar />
       <AppMain />
+      <!-- 后台任务条：常驻内容区底部，长任务派发后仍可继续操作其他页面 -->
+      <JobBar />
     </div>
   </div>
 </template>

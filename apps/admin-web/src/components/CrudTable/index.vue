@@ -17,6 +17,8 @@
  * @modified 2026-10-14 donttemo BUG-15：排序参数对齐 api-spec §1.5 —— 原先直接发 `${prop}:${order}`
  *   （camelCase，如 `createdAt:asc`），与后端约定的 snake_case 不符；改为经 resolveSortField()
  *   转 snake_case（列配置可用 sortField 显式覆盖，用于展示字段 ≠ 排序字段的场景）
+ * @modified 2026-10-15 donttemo 新增 hideDelete：端点语义不是「物理删除」的页面（如租户的
+ *   DELETE 实为「停用」）需要自定义确认文案与提示，内置删除按钮的「删除后不可恢复」会造成误导
  * @module admin-web/components
 -->
 
@@ -67,6 +69,11 @@ const props = withDefaults(
     actions?: boolean;
     /** 导出按钮（emit export 事件，页面自行实现导出） */
     exportable?: boolean;
+    /**
+     * 隐藏内置删除按钮：端点语义并非物理删除时必开（如租户 DELETE = 停用），
+     * 页面改用 actions-extra 插槽自定义按钮与确认文案
+     */
+    hideDelete?: boolean;
     /** 弹窗宽度 */
     dialogWidth?: string | number;
     /** 新建时预置到表单的固定值（如从属 id：字典项的 categoryId），不出现在表单配置中 */
@@ -82,6 +89,7 @@ const props = withDefaults(
     index: false,
     actions: true,
     exportable: false,
+    hideDelete: false,
   },
 );
 
@@ -575,7 +583,7 @@ onMounted(() => {
         <template #default="{ row }">
           <div class="fw-table-actions">
             <el-button v-if="formFields?.length && canUpdate()" link type="primary" @click="handleEdit(row)">编辑</el-button>
-            <el-button v-if="canDelete()" link type="danger" @click="handleDelete([row])">删除</el-button>
+            <el-button v-if="canDelete() && !hideDelete" link type="danger" @click="handleDelete([row])">删除</el-button>
             <slot name="actions-extra" :row="row" />
           </div>
         </template>

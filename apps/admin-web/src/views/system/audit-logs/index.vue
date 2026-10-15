@@ -6,6 +6,8 @@
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo 移除 exportable：后端 /audit-logs/export 尚未实现
  *   （docs/40-api-spec.md §3.7 标注 Backlog），按钮点了无任何反应属死 UI
+ * @modified 2026-10-15 donttemo N-02：恢复导出入口并改为**异步任务**——点击只派发任务拿到 jobId，
+ *   进度与下载由全局任务条（layout/JobBar.vue）承载，页面不阻塞；失败可在任务条上重试并看到 traceId
  * @module admin-web/views
 -->
 
@@ -16,9 +18,10 @@ import CrudTable from '@/components/CrudTable/index.vue';
 import DiffViewer from '@/components/DiffViewer/index.vue';
 import * as auditApi from '@/api/audit';
 import * as userApi from '@/api/user';
+import { useJobCenterStore } from '@/composables/useJobCenter';
 import { BizError, describeBizError } from '@/utils/biz-error';
-import type { CrudColumn, SearchField } from '@/components/CrudTable/types';
-import type { AuditLogRecord, UserListItem } from '@/api/types';
+import type { CrudColumn, SearchField, SearchModel } from '@/components/CrudTable/types';
+import type { AuditLogRecord, AuditQuery, UserListItem } from '@/api/types';
 
 const columns: CrudColumn[] = [
   { prop: 'userId', label: '操作人', width: 120, slot: 'user' },
@@ -89,11 +92,45 @@ function userName(userId: string | null): string {
 function copyTraceId(traceId: string): void {
   void navigator.clipboard.writeText(traceId).then(() => ElMessage.success('traceId 已复制'));
 }
+
+/** 任务中心（导出进度 / 下载入口在全局任务条上） */
+const jobCenter = useJobCenterStore();
+const exporting = ref(false);
+
+/**
+ * 导出当前筛选条件下的审计日志（N-02 异步任务）
+ *
+ * 只派发、不等结果：后端立即返回 jobId，进度与产物由任务条接管。
+ * 这样即使筛选结果上万条，页面也不会被卡住，用户可以直接跳去别的页面。
+ */
+async function handleExport(payload: { search: SearchModel; sort: string | null }): Promise<void> {
+  if (exporting.value) return;
+  exporting.value = true;
+  try {
+    const query: AuditQuery = { ...(payload.search as AuditQuery) };
+    if (payload.sort) query.sort = payload.sort;
+    const job = await auditApi.exportAuditLogs(query);
+    jobCenter.track(job);
+    ElMessage.success('导出任务已派发，可在底部任务条查看进度');
+  } catch (err) {
+    ElMessage.error(err instanceof BizError ? describeBizError(err) : '导出任务派发失败，请稍后重试');
+  } finally {
+    exporting.value = false;
+  }
+}
 </script>
 
 <template>
   <div class="fw-page">
-    <CrudTable api="/audit-logs" :columns="columns" :search-form="searchForm" permission="audit">
+    <!-- permission="audit" → 导出按钮自动按 audit:export 判权（与后端 PERM.AUDIT_EXPORT 同码） -->
+    <CrudTable
+      api="/audit-logs"
+      :columns="columns"
+      :search-form="searchForm"
+      permission="audit"
+      exportable
+      @export="handleExport"
+    >
       <template #cell-user="{ row }">
         {{ userName(row.userId) }}
       </template>

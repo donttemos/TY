@@ -234,6 +234,8 @@ export interface AuditQuery {
   target_id?: ID;
   from?: string;
   to?: string;
+  /** 排序（api-spec §1.5：`<snake_case 字段>:asc|desc`） */
+  sort?: string;
 }
 
 /** 登录设备 / 会话 */
@@ -317,10 +319,12 @@ export interface DeadLetterRecord {
   enqueuedAt: string;
 }
 
-/** 死信列表结果 */
+/** 死信列表结果（分页；`page`/`pageSize` 为死信分页改造后追加的字段） */
 export interface DeadLetterListResult {
   total: number;
   items: DeadLetterRecord[];
+  page: number;
+  pageSize: number;
 }
 
 /** 定时任务快照 */
@@ -355,4 +359,71 @@ export interface CronTickResult {
 export interface DeadLetterRequeueResult {
   id: ID;
   requeued: boolean;
+}
+
+// ---------- N-01 租户管理（C-06 契约 §3.9） ----------
+
+/** 租户隔离级别 */
+export type TenantIsolation = 'shared' | 'dedicated';
+
+/** 租户视图（不包含任何连接串信息；独立库只用布尔位表达「是否已配置」） */
+export interface TenantView {
+  id: ID;
+  code: string;
+  name: string;
+  isolation: TenantIsolation;
+  plan: string | null;
+  status: 0 | 1;
+  expireAt: string | null;
+  dedicatedDbConfigured: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 租户查询参数 */
+export interface TenantQuery {
+  page?: number;
+  pageSize?: number;
+  keyword?: string;
+  isolation?: TenantIsolation;
+  status?: 0 | 1;
+  sort?: string;
+}
+
+/** 开租户 / 更新租户入参 */
+export interface TenantUpsertInput {
+  code?: string;
+  name?: string;
+  isolation?: TenantIsolation;
+  plan?: string | null;
+  expireAt?: string | null;
+  status?: 0 | 1;
+  /** 迁移到 dedicated 时必填：独立库连接串（明文，服务端加密落库） */
+  dbUrl?: string;
+}
+
+/** 隔离级别迁移入参 */
+export interface TenantMigrateInput {
+  isolation: TenantIsolation;
+  dbUrl?: string;
+}
+
+// ---------- N-02 异步任务中心（通用任务面 /jobs） ----------
+
+/** 任务状态 */
+export type JobStatus = 'pending' | 'running' | 'succeeded' | 'failed';
+
+/** 任务视图（轮询进度 / 任务条渲染的数据源） */
+export interface JobView {
+  id: string;
+  type: string;
+  title: string;
+  status: JobStatus;
+  progress: number;
+  message: string | null;
+  error: string | null;
+  traceId: string;
+  fileName: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
