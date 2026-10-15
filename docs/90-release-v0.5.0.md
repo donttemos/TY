@@ -77,11 +77,15 @@
 
 ### 4.4 CI 远端复核（GitHub Actions，推送后实跑）
 
-见 §8 仓库状态（run 记录在发布提交流程中回填）。
+发布链（`4030e2a` / `2ec5d19` / `68063e7`）对应 run [38753586347](https://github.com/donttemos/TY/actions/runs/38753586347)（结论见 §8）。
 
 ### 4.5 真机验收（`106.55.32.251` / `https://cs.donttemo.top`，2026-10-15 实跑）
 
-见 §8 真机发布段（release10 三件套 + 冒烟数据在发布执行时回填）。
+- **备份**：`pg_dump -U fw -d fw | gzip` → `/opt/fw/pre-v0.5.0-20261015224341.sql.gz`（13 256 B；gzip -t 完整、17 张表、尾部字节完整——三重校验过）。
+- **release10 九步全过**（64s）：解包断言（E-07 八个关键文件 + 六项源码断言）→ 依赖安装 → prisma generate（PG）→ 后端拓扑构建（产物含 `oauth2-flow.js` / OAuth2 路由 / apikey 验签）→ 前端构建（产物含 `/api/v1` 与 `oauth2/providers` 调用）→ bin 重链 → **迁移 No pending（零新迁移，预期）+ 免 seed**（E-07 无 seed 语义变更，用户会话保持）→ 原子切换 `20261015204143` → `20261015224417` + fw-api active → 站点同步 48 文件。
+- **verify-release10：13/13**——探针双项、`/demo/ok` 自报 `v0.5.0`（升版实证）、admin 登录、E-07 四项（`providers` 公开可访问且真机默认空列表 = 登录页不渲染入口、未注册 provider 401、伪造 state 401/3001、`/open/ping` 无凭证 401）、回归四项（E-04 树 / auth:me / dict / users）。
+- **verify-c06：27/27**（管理面端点与字典探针零残留）。
+- **HTTPS 站点端到端**：`https://cs.donttemo.top/` 200、`/api/v1/auth/oauth2/providers` 同形、admin 登录 → `/auth/me` 会话成立。
 
 ## 5. 本次验收中发现并处理的问题
 
@@ -108,8 +112,8 @@
 
 ## 8. 发布后的仓库与真机状态
 
-- 仓库：`origin/main` = 本版发布提交（版本 0.5.0），CI 全绿；tag 按需追加。
-- 真机：`106.55.32.251`（1Panel）经 release10 三件套发布 v0.5.0（无新迁移 / 无 seed 变更，四探针 + 冒烟见发布执行记录）。
+- 仓库：`origin/main` = `68063e7`（chore(release): v0.5.0），发布链三提交（E-07 功能 `4030e2a` / E-07 文档 `2ec5d19` / 发版 `68063e7`），CI run 38753586347 结论以 Actions 页为准（推送时执行中）。
+- 真机：**v0.5.0 已上真机**——current = `/opt/fw/releases/20261015224417`，fw-api active，四探针 ok；verify-release10 **13/13** + verify-c06 **27/27** + HTTPS 站点端到端全通。回滚路径：`current` 指回 `20261015204143` + 重启（本版零迁移零 seed，回滚无数据风险）。
 
 ## 9. 真机升级指引
 
