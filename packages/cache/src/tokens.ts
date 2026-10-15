@@ -18,3 +18,6 @@ export const CACHE_METRICS = Symbol('fw.cache.metrics');
 
 /** 缓存服务（与 CacheService 类 token 指向同一实例） */
 export const CACHE_SERVICE = Symbol('fw.cache.service');
+
+/** 全局限流器（M10 E-03）：AppModule 按 RATE_LIMIT_* env 构造，中间件与 /metrics 消费 */
+export const RATE_LIMIT_LIMITER = Symbol('fw.cache.rate-limiter');

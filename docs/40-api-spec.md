@@ -10,6 +10,10 @@
 > 变更记录：2026-10-15 donttemo M10 E-02/E-04：§3.12 补注配置中心多实例语义（快照历史下沉 `config_snapshots`，版本基线跨实例对齐，nacos 驱动转正）；
 > §3.4 `GET /permissions/tree` 由 Backlog 转为已实现（三层树，前端授权弹窗与权限码选择器换接）。
 >
+> 变更记录：2026-10-15 donttemo M10 E-03：业务 API 框架级限流默认开启（令牌桶按 IP，G5 兑现）——未豁免路由超限返回
+> `429/9003`（RATE_LIMITED，既有错误码段）+ `Retry-After` 头；豁免白名单 `RATE_LIMIT_WHITELIST`（默认 health/ready/metrics）；
+> 灰度 `RATE_LIMIT_DRY_RUN` 仅计数不拦截；计数进 `/metrics` 的 `fw_rate_limit_*` 段。redis 驱动下桶跨实例共享（Lua 原子）。
+>
 > 变更记录：2026-10-14 donttemo 管理后台可达性修复：§3.2 新增 `GET` / `PUT /auth/profile`（`auth:me`，本人资料自助；
 > 原实现让个人中心借 `PUT /users/:id` 保存，普通角色必 `3002`）；§3.6 更正 `GET /dict/:code` 的权限点标注为 `dict:read`（原标「登录后」，与实现不符）。
 >

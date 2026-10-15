@@ -8,7 +8,7 @@
  * @module @fw/cache
  */
 
-import type { CacheStorePort } from '../store.port.js';
+import type { CacheStorePort, TokenBucketTakeResult } from '../store.port.js';
 import type { CacheDriverName } from '../types.js';
 import type { RedisClientLike } from './redis-client.js';
 
@@ -18,6 +18,40 @@ const COMPARE_DELETE_LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then return
 /** 条件续期脚本：值匹配才续期（锁续期） */
 const COMPARE_EXPIRE_LUA =
   "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end";
+
+/**
+ * 令牌桶原子取令牌（M10 E-03）：哈希存 tokens/last 两字段，一次 Lua 完成「补充 → 扣减 → 回写 → 续期」。
+ * ARGV: [1]=capacity [2]=refillPerSecond [3]=cost [4]=nowMs [5]=ttlMs
+ * 返回: [allowed(0/1), remaining, retryAfterMs]
+ */
+const TOKEN_BUCKET_LUA = `
+local tokens = tonumber(redis.call('HGET', KEYS[1], 'tokens'))
+local last = tonumber(redis.call('HGET', KEYS[1], 'last'))
+local capacity = tonumber(ARGV[1])
+local refill = tonumber(ARGV[2])
+local cost = tonumber(ARGV[3])
+local now = tonumber(ARGV[4])
+local ttl = tonumber(ARGV[5])
+if tokens == nil or last == nil then
+  tokens = capacity
+  last = now
+end
+if now > last then
+  tokens = math.min(capacity, tokens + (now - last) / 1000.0 * refill)
+  last = now
+end
+local allowed = 0
+local retry = 0
+if tokens >= cost then
+  tokens = tokens - cost
+  allowed = 1
+elseif capacity >= cost and refill > 0 then
+  retry = math.ceil((cost - tokens) / refill * 1000)
+end
+redis.call('HSET', KEYS[1], 'tokens', tostring(tokens), 'last', tostring(last))
+redis.call('PEXPIRE', KEYS[1], ttl)
+return { allowed, tostring(math.floor(tokens)), retry }
+`;
 
 /**
  * Redis 存储驱动（同时服务 `redis` 与 `redis-cluster` 两种模式）
@@ -89,6 +123,23 @@ export class RedisCacheStore implements CacheStorePort {
     this.assertTtl(ttlMs);
     const result = await this.client.eval(COMPARE_EXPIRE_LUA, 1, key, expected, Math.round(ttlMs));
     return Number(result) === 1;
+  }
+
+  async tokenBucketTake(
+    key: string,
+    capacity: number,
+    refillPerSecond: number,
+    cost: number,
+    nowMs: number,
+  ): Promise<TokenBucketTakeResult> {
+    // 桶 TTL = 自然回满时间（含缓冲），冷桶自动回收不永驻
+    const ttlMs = Math.ceil((capacity / Math.max(refillPerSecond, 1)) * 1000) + 60_000;
+    const result = (await this.client.eval(TOKEN_BUCKET_LUA, 1, key, capacity, refillPerSecond, cost, nowMs, ttlMs)) as [
+      number,
+      string,
+      number,
+    ];
+    return { allowed: Number(result[0]) === 1, remaining: Number(result[1]), retryAfterMs: Number(result[2]) };
   }
 
   async ping(): Promise<boolean> {

@@ -11,6 +11,7 @@ import { Controller, Get, Inject, Res } from '@nestjs/common';
 import { CACHE_SERVICE } from './tokens.js';
 import { CacheMetrics } from './metrics.js';
 import type { CacheService } from './cache.service.js';
+import { getGlobalRateLimiter } from './rate-limit.js';
 
 /** 指标暴露路径（免认证、免统一响应包装） */
 export const CACHE_METRICS_PATH = '/metrics';
@@ -35,6 +36,6 @@ export class CacheMetricsController {
   @Get(CACHE_METRICS_PATH)
   render(@Res({ passthrough: true }) res: ResponseLike): string {
     res.type('text/plain; version=0.0.4; charset=utf-8');
-    return CacheMetrics.render(this.cache.metricsSnapshot());
+    return CacheMetrics.render(this.cache.metricsSnapshot(), getGlobalRateLimiter()?.snapshot());
   }
 }

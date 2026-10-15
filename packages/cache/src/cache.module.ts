@@ -175,7 +175,8 @@ export class CacheModule {
       global: true,
       providers,
       controllers: options.exposeMetrics === false ? [] : [CacheMetricsController],
-      exports: [CacheService, CACHE_SERVICE, CACHE_OPTIONS, CACHE_METRICS],
+      // CACHE_STORE 一并导出（M10 E-03：AppModule 的限流器工厂按存储端口构造令牌桶）
+      exports: [CacheService, CACHE_SERVICE, CACHE_OPTIONS, CACHE_METRICS, CACHE_STORE],
     };
   }
 }

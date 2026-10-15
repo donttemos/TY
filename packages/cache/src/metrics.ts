@@ -8,6 +8,7 @@
  */
 
 import type { CacheDriverName, CacheMetricsSnapshot } from './types.js';
+import type { RateLimitSnapshot } from './rate-limit.js';
 
 /** 指标采集器：纯计数 + 耗时累加，线程内单例 */
 export class CacheMetrics {
@@ -114,7 +115,7 @@ export class CacheMetrics {
    * 渲染 Prometheus 文本格式（含命中率派生指标）
    * @param snapshot 指标快照
    */
-  static render(snapshot: CacheMetricsSnapshot): string {
+  static render(snapshot: CacheMetricsSnapshot, rateLimit?: RateLimitSnapshot): string {
     const lines: string[] = [];
     const gauge = (name: string, help: string, value: number): void => {
       lines.push(`# HELP fw_cache_${name} ${help}`);
@@ -135,6 +136,23 @@ export class CacheMetrics {
     gauge('oversized_rejected_total', '大 key 拒绝写入总次数', snapshot.oversizedRejected);
     gauge('hit_rate', '命中率 hits/(hits+misses)', Number(CacheMetrics.hitRate(snapshot).toFixed(6)));
     gauge('avg_latency_ms', '平均操作耗时（毫秒）', snapshot.operations === 0 ? 0 : Number((snapshot.latencyMs / snapshot.operations).toFixed(3)));
+    if (rateLimit) {
+      lines.push('# HELP fw_rate_limit_allowed_total 限流放行总数（令牌桶扣减成功）');
+      lines.push('# TYPE fw_rate_limit_allowed_total counter');
+      lines.push(`fw_rate_limit_allowed_total ${rateLimit.allowed}`);
+      lines.push('# HELP fw_rate_limit_denied_total 限流拒绝总数（429）');
+      lines.push('# TYPE fw_rate_limit_denied_total counter');
+      lines.push(`fw_rate_limit_denied_total ${rateLimit.denied}`);
+      lines.push('# HELP fw_rate_limit_whitelisted_total 白名单豁免总数');
+      lines.push('# TYPE fw_rate_limit_whitelisted_total counter');
+      lines.push(`fw_rate_limit_whitelisted_total ${rateLimit.whitelisted}`);
+      lines.push('# HELP fw_rate_limit_dry_run_passed_total 灰度模式超限放行总数');
+      lines.push('# TYPE fw_rate_limit_dry_run_passed_total counter');
+      lines.push(`fw_rate_limit_dry_run_passed_total ${rateLimit.dryRunPassed}`);
+      lines.push('# HELP fw_rate_limit_fail_open_total 存储故障放行总数（fail-open）');
+      lines.push('# TYPE fw_rate_limit_fail_open_total counter');
+      lines.push(`fw_rate_limit_fail_open_total ${rateLimit.failOpen}`);
+    }
     return `${lines.join('\n')}\n`;
   }
 }

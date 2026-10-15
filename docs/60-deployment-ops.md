@@ -105,6 +105,11 @@
 | | `CONFIG_CENTER_NACOS_NAMESPACE` | 否 | — | Nacos 命名空间（缺省 public） |
 | | `CONFIG_CENTER_NACOS_USERNAME` / `CONFIG_CENTER_NACOS_PASSWORD` | 条件 | — | Nacos 鉴权凭据（服务端开启鉴权时必填；密码属敏感键不入日志） |
 | 任务中心（M10/E-01） | `JOB_CENTER_DRIVER` | 否 | memory | 异步任务中心驱动：`memory` 进程内（N-02 原行为，多副本下任务面跨实例 404）/ `db` `jobs` 表登记 + 派发实例执行 / `bullmq` `jobs` 表登记 + 队列分发（消费 handler `job-center.execute`，执行实例随 `MQ_DRIVER`）。**多副本部署必须 db 或 bullmq**；boot 键不入热更白名单；db/bullmq 要求任务类型登记 `JobRunnerRegistry` 执行体工厂 |
+| 限流（M10/E-03） | `RATE_LIMIT_CAPACITY` | 否 | 600 | 令牌桶容量（每 IP 突发上限），超出即 `429/9003`；**默认开启且不可整体关闭**——豁免走 `RATE_LIMIT_WHITELIST`，灰度观测走 `RATE_LIMIT_DRY_RUN` |
+| | `RATE_LIMIT_REFILL_PER_SECOND` | 否 | 10 | 每秒补充令牌数（稳态吞吐上限）；boot 键不入热更白名单 |
+| | `RATE_LIMIT_WHITELIST` | 否 | `/api/v1/health,/api/v1/ready,/api/v1/metrics` | 豁免路径前缀（逗号分隔，严格路径段匹配）；健康探针与 metrics 必须豁免 |
+| | `RATE_LIMIT_FAIL_OPEN` | 否 | true | 限流存储故障时放行（与 cache 三防护同构）；false = fail-closed 全拒绝 |
+| | `RATE_LIMIT_DRY_RUN` | 否 | false | 灰度模式：true = 超限仅计数告警不拦截（桶与计数照常运转，计数进 `/metrics` 的 `fw_rate_limit_*` 段） |
 | 前端（admin-web） | `VITE_API_BASE_URL` | 是 | — | 管理后台 API 基址（如 `https://api.example.com/api/v1`）；**构建期注入**，改值需重新构建 |
 | | `VITE_APP_TITLE` | 否 | 通用应用框架 | 站点标题 |
 | | `VITE_LOGIN_CAPTCHA` | 否 | false | 登录页验证码开关（true 时需接入验证码服务） |

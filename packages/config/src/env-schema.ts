@@ -17,6 +17,8 @@
  * @modified 2026-10-15 donttemo M10/E-01 新增 JOB_CENTER_DRIVER（任务中心驱动，boot 键不入热更白名单）
  * @modified 2026-10-15 donttemo M10/E-02 CONFIG_CENTER_DRIVER 枚举转正 nacos；新增 6 个
  *   CONFIG_CENTER_NACOS_* 键（服务地址/dataId/分组/命名空间/鉴权用户名密码）——72 键
+ * @modified 2026-10-15 donttemo M10/E-03 新增 5 个 RATE_LIMIT_* 键（容量/每秒补充/豁免前缀/
+ *   故障放行/灰度仅告警）——G5「限流默认开启」的框架级落地，77 键
  * @module config
  * @since v0.1.0
  */
@@ -46,6 +48,8 @@ export const TENANT_SOURCE_VALUES = ['subdomain', 'header', 'jwt'] as const;
 export const CONFIG_CENTER_DRIVER_VALUES = ['file', 'nacos'] as const;
 /** 任务中心驱动可选值（M10/E-01 起生效）：memory 进程内（默认）/ db 落库+派发实例执行 / bullmq 落库+队列分发 */
 export const JOB_CENTER_DRIVER_VALUES = ['memory', 'db', 'bullmq'] as const;
+/** 限流键维度（M10/E-03）：per-ip 固定（中间件位于鉴权守卫之前，拿不到用户身份）；白名单豁免是另一出口 */
+export const RATE_LIMIT_SCOPE_VALUES = ['per-ip'] as const;
 
 /** 空字符串视为未设置（.env 里 `DB_URL=` 留空等价于注释掉） */
 const emptyToUndefined = (value: unknown): unknown =>
@@ -224,6 +228,16 @@ export const envSchema = z.object({
   CONFIG_CENTER_NACOS_USERNAME: optionalString().describe('Nacos 用户名（CONFIG_CENTER_NACOS_USERNAME）'),
   /** Nacos 鉴权密码（M10/E-02，开启鉴权时必填；敏感键不入日志） */
   CONFIG_CENTER_NACOS_PASSWORD: optionalString().describe('Nacos 密码（CONFIG_CENTER_NACOS_PASSWORD）'),
+  /** 限流桶容量（M10/E-03）：每 IP 令牌桶上限；请求超出即 429（dry-run 除外）；boot 键禁热更 */
+  RATE_LIMIT_CAPACITY: z.coerce.number().int().min(1).max(1000000).default(600).describe('限流桶容量（RATE_LIMIT_CAPACITY）'),
+  /** 限流每秒补充令牌数（M10/E-03）：稳态吞吐上限 = 该值；boot 键禁热更 */
+  RATE_LIMIT_REFILL_PER_SECOND: z.coerce.number().int().min(1).max(100000).default(10).describe('限流每秒补充（RATE_LIMIT_REFILL_PER_SECOND）'),
+  /** 限流豁免路径前缀（M10/E-03，逗号分隔）：健康探针与 metrics 等运维面必须豁免 */
+  RATE_LIMIT_WHITELIST: z.string().min(1).default('/api/v1/health,/api/v1/ready,/api/v1/metrics').describe('限流豁免路径前缀（RATE_LIMIT_WHITELIST）'),
+  /** 限流存储故障时放行（M10/E-03，fail-open）：与 cache 三防护同构；false = fail-closed 全拒绝 */
+  RATE_LIMIT_FAIL_OPEN: boolString(true).describe('限流故障放行（RATE_LIMIT_FAIL_OPEN）'),
+  /** 限流灰度模式（M10/E-03）：true = 仅计数告警不拦截（观测先行，切换放开即 false；非「关闭」——桶与计数照常运转） */
+  RATE_LIMIT_DRY_RUN: boolString(false).describe('限流灰度仅告警（RATE_LIMIT_DRY_RUN）'),
 });
 
 /** 校验后的环境变量类型 */
@@ -326,6 +340,11 @@ export const ENV_KEY_PATHS = {
   CONFIG_CENTER_NACOS_USERNAME: 'configCenter.nacos.username',
   CONFIG_CENTER_NACOS_PASSWORD: 'configCenter.nacos.password',
   JOB_CENTER_DRIVER: 'jobCenter.driver',
+  RATE_LIMIT_CAPACITY: 'rateLimit.capacity',
+  RATE_LIMIT_REFILL_PER_SECOND: 'rateLimit.refillPerSecond',
+  RATE_LIMIT_WHITELIST: 'rateLimit.whitelist',
+  RATE_LIMIT_FAIL_OPEN: 'rateLimit.failOpen',
+  RATE_LIMIT_DRY_RUN: 'rateLimit.dryRun',
 } as const satisfies Record<keyof Env, string>;
 
 /**

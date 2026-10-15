@@ -18,10 +18,14 @@
  *   CONFIG_CENTER_ENABLED=false 零开销，开启后 file 适配 + 热更白名单 11 键订阅生效）
  * @modified 2026-10-15 donttemo M10 E-01：JobsModule 改 forRoot() 装配（按 JOB_CENTER_DRIVER
  *   选 memory/db/bullmq 驱动，默认 memory 行为不变）
+ * @modified 2026-10-15 donttemo M10 E-03：接入框架级 API 限流——RATE_LIMIT_LIMITER 按 env 构造
+ *   （令牌桶状态存 CACHE_STORE），RateLimitMiddleware 挂 /api/v1 全路由（豁免白名单在 limiter 内判定）
  * @module example-api
  */
-import { Module } from '@nestjs/common';
-import { CacheModule, createCacheReadinessProbe } from '@fw/cache';
+import { Module, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
+import { CacheModule, createCacheReadinessProbe, RateLimitLimiter, RateLimitMiddleware, setGlobalRateLimiter, CACHE_STORE, RATE_LIMIT_LIMITER } from '@fw/cache';
+import type { CacheStorePort } from '@fw/cache';
+import { loadEnv } from '@fw/config';
 import { DB_CLIENT } from '@fw/db';
 import { FwCoreModule } from '@fw/core';
 import { QueueModule, createQueueReadinessProbe } from '@fw/queue';
@@ -48,10 +52,40 @@ export const queueReadinessProbe = createQueueReadinessProbe();
 /** 传输就绪探针：与 TransportModule.forRoot 共用同一实例（装配后由模块绑定传输服务） */
 export const transportReadinessProbe = createTransportReadinessProbe();
 
+/** 限流豁免前缀（env 逗号分隔 → 数组，供 limiter 前缀匹配） */
+function parseWhitelist(raw: string): string[] {
+  return raw
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item !== '');
+}
+
 /**
  * 应用根模块：新增业务模块在此追加 import
  */
 @Module({
+  providers: [
+    // M10 E-03：框架级限流器（令牌桶状态存 CACHE_STORE——memory 进程内 / redis Lua 原子多实例共享；
+    // RATE_LIMIT_DRY_RUN=true 时仅计数告警不拦截，灰度观测先行）
+    {
+      provide: RATE_LIMIT_LIMITER,
+      useFactory: (store: CacheStorePort): RateLimitLimiter => {
+        const env = loadEnv();
+        const limiter = new RateLimitLimiter({
+          store,
+          capacity: env.RATE_LIMIT_CAPACITY,
+          refillPerSecond: env.RATE_LIMIT_REFILL_PER_SECOND,
+          whitelist: parseWhitelist(env.RATE_LIMIT_WHITELIST),
+          failOpen: env.RATE_LIMIT_FAIL_OPEN,
+          dryRun: env.RATE_LIMIT_DRY_RUN,
+        });
+        // /metrics 渲染经模块级引用取计数（CacheModule 内控制器与根模块 provider 无直接注入关系）
+        setGlobalRateLimiter(limiter);
+        return limiter;
+      },
+      inject: [CACHE_STORE],
+    },
+  ],
   imports: [
     FwCoreModule.forRoot({ readinessProbes: [dbReadinessProbe, cacheReadinessProbe, queueReadinessProbe, transportReadinessProbe] }),
     CacheModule.forRoot({ readinessProbe: cacheReadinessProbe }),
@@ -82,4 +116,11 @@ export const transportReadinessProbe = createTransportReadinessProbe();
     ConfigCenterModule.forRoot(),
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  /**
+   * 全局中间件：限流挂 /api/v1 业务路由组（health/ready/metrics 由 RATE_LIMIT_WHITELIST 默认豁免）
+   */
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(RateLimitMiddleware).forRoutes('/api/v1');
+  }
+}

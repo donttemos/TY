@@ -9,7 +9,7 @@
  * @module @fw/cache
  */
 
-import type { CacheStorePort } from '../store.port.js';
+import type { CacheStorePort, TokenBucketTakeResult } from '../store.port.js';
 import type { CacheDriverName } from '../types.js';
 
 /** 存储条目：字符串值或集合值，带过期时间戳 */
@@ -38,6 +38,9 @@ export class MemoryCacheStore implements CacheStorePort {
 
   /** 因容量超限被淘汰的键数量（观测量，不计入 CacheService 指标） */
   private evicted = 0;
+
+  /** 令牌桶状态表（M10 E-03 限流；独立于条目表——桶有自身回满 TTL，不受 LRU 淘汰影响） */
+  private readonly buckets = new Map<string, { tokens: number; lastMs: number }>();
 
   /**
    * @param maxItems 容量上限，默认 10000
@@ -126,6 +129,31 @@ export class MemoryCacheStore implements CacheStorePort {
     if (!entry || entry.kind !== 'value' || entry.value !== expected) return false;
     this.entries.delete(key);
     return true;
+  }
+
+  /** 令牌桶状态（进程内惰性补充——无序列化与网络开销，P95 ≤ 1ms） */
+  async tokenBucketTake(
+    key: string,
+    capacity: number,
+    refillPerSecond: number,
+    cost: number,
+    nowMs: number,
+  ): Promise<TokenBucketTakeResult> {
+    const bucket = this.buckets.get(key) ?? { tokens: capacity, lastMs: nowMs };
+    // 按流逝时间补充（上限封顶），时间倒流（时钟回拨）按 0 处理
+    const elapsed = Math.max(0, nowMs - bucket.lastMs);
+    bucket.tokens = Math.min(capacity, bucket.tokens + (elapsed / 1000) * refillPerSecond);
+    bucket.lastMs = nowMs;
+    let allowed = false;
+    let retryAfterMs = 0;
+    if (bucket.tokens >= cost) {
+      bucket.tokens -= cost;
+      allowed = true;
+    } else if (capacity >= cost && refillPerSecond > 0) {
+      retryAfterMs = Math.ceil(((cost - bucket.tokens) / refillPerSecond) * 1000);
+    }
+    this.buckets.set(key, bucket);
+    return { allowed, remaining: Math.floor(bucket.tokens), retryAfterMs };
   }
 
   async compareAndExpire(key: string, expected: string, ttlMs: number): Promise<boolean> {

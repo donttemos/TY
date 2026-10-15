@@ -20,6 +20,16 @@ import type { CacheDriverName } from './types.js';
  * - 条件操作（`compareAndDelete` / `compareAndExpire`）用于锁的安全释放与续期，
  *   redis 驱动用 Lua 保证原子，memory 驱动用单线程语义保证。
  */
+/** 令牌桶取令牌结果（M10 E-03） */
+export interface TokenBucketTakeResult {
+  /** 是否取得令牌（桶内余额 ≥ cost） */
+  allowed: boolean;
+  /** 取令牌后的桶内余额（向下取整） */
+  remaining: number;
+  /** 余额不足时建议的等待毫秒数（攒够 cost 个令牌所需时间；allowed=true 时为 0） */
+  retryAfterMs: number;
+}
+
 export interface CacheStorePort {
   /** 驱动名 */
   readonly kind: CacheDriverName;
@@ -45,6 +55,19 @@ export interface CacheStorePort {
   compareAndDelete(key: string, expected: string): Promise<boolean>;
   /** 值等于期望值时才续期（锁续期），返回是否续期 */
   compareAndExpire(key: string, expected: string, ttlMs: number): Promise<boolean>;
+  /**
+   * 令牌桶原子取令牌（M10 E-03 限流原语）：对 key 桶按流逝时间补充令牌并扣减 cost 个。
+   * 跨驱动语义一致——memory 为进程内惰性补充（零序列化开销），redis 为 Lua 原子脚本
+   * （多实例共享同一桶）。桶键 TTL 由实现自管（建议 = 桶自然回满时间，防止冷桶永驻）。
+   */
+  tokenBucketTake(
+    key: string,
+    capacity: number,
+    refillPerSecond: number,
+    cost: number,
+    nowMs: number,
+  ): Promise<TokenBucketTakeResult>;
+
   /** 可用性探测 */
   ping(): Promise<boolean>;
   /** 释放连接（优雅停机） */

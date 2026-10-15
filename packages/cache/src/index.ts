@@ -10,7 +10,7 @@
 // ---------- 模块装配 ----------
 export { CacheModule, CacheLifecycle, buildCacheOptions, createCacheReadinessProbe } from './cache.module.js';
 export type { CacheEnvLike, CacheModuleOptions, CacheReadinessProbe } from './cache.module.js';
-export { CACHE_METRICS, CACHE_OPTIONS, CACHE_SERVICE, CACHE_STORE } from './tokens.js';
+export { CACHE_METRICS, CACHE_OPTIONS, CACHE_SERVICE, CACHE_STORE, RATE_LIMIT_LIMITER } from './tokens.js';
 
 // ---------- 服务 ----------
 export { CacheService } from './cache.service.js';
@@ -29,10 +29,12 @@ export { MemoryCacheStore, DEFAULT_MEMORY_MAX_ITEMS } from './drivers/memory.dri
 export { RedisCacheStore } from './drivers/redis.driver.js';
 export { createRedisClient, parseClusterNodes } from './drivers/redis-client.js';
 export type { RedisClientLike } from './drivers/redis-client.js';
-export type { CacheStorePort } from './store.port.js';
+export type { CacheStorePort, TokenBucketTakeResult } from './store.port.js';
 
 // ---------- 指标与端点 ----------
 export { CacheMetrics } from './metrics.js';
+export { RateLimitLimiter, RateLimitMiddleware, normalizeClientIp, setGlobalRateLimiter, getGlobalRateLimiter } from './rate-limit.js';
+export type { RateLimitLimiterOptions, RateLimitDecision, RateLimitSnapshot } from './rate-limit.js';
 export { CacheMetricsController, CACHE_METRICS_PATH } from './metrics.controller.js';
 
 // ---------- key 与异常 ----------
