@@ -521,6 +521,28 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
    * 幂等性由「清空时 expiresAt 一并置 NULL」自然保证（该行不再满足 lt: now，重复执行 count = 0）；
    * 只置三列 NULL，保留 revokedAt / replacedById 历史链。
    */
+  /**
+   * 各 replacement keyId 的「仍存在可恢复密文」计数（ADR-0024 退役判据）：
+   * 只统计 cipher/keyId/expiresAt 三列齐备且未过期的行——cipher 已清空的历史行不计入。
+   */
+  async countReplacementCiphersByKeyId(now: Date): Promise<Record<string, number>> {
+    const rows = (await this.delegate('refreshToken').findMany({
+      where: {
+        replacementCipher: { not: null },
+        replacementKeyId: { not: null },
+        replacementExpiresAt: { gt: now },
+      },
+      select: { replacementKeyId: true },
+    })) as Array<{ replacementKeyId: string | null }>;
+    const counts: Record<string, number> = {};
+    for (const row of rows) {
+      if (row.replacementKeyId) {
+        counts[row.replacementKeyId] = (counts[row.replacementKeyId] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }
+
   async clearExpiredReplacementCiphers(now: Date): Promise<number> {
     const result = await this.delegate('refreshToken').updateMany({
       where: {
