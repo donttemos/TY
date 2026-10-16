@@ -156,5 +156,9 @@ CI 门禁最低线（合并前必须全绿）：baseline = PASS、100 并发 = P
 [x] 不存在任何「从已轮换的 A 再生成 replacement」的路径（Security Invariant，Case C/E 证明）
 [x] CAS 失败后绝不从原事务快照读状态（Rule 4，事务外重读路径已测）
 [x] replay 副作用留在服务层（Rule 8，AuthStore 无业务副作用）
-[ ] CI green（待推送）
+[x] CI green（run 38862407905：4/4 job 全绿——构建/单测(SQLite)/静态 + 集成 mysql/postgres/sqlite）
 ```
+
+> **CI 收口注记（2026-10-16）**：L3 rotation 集成 spec 目前随单测 job 在 SQLite 上运行；
+> MySQL/PostgreSQL 上的 rotation CAS 验证需把该 spec 挂进 CI 集成矩阵（service DB），与
+> 双实例（106 测试机）验证一并列为 M11.1 收尾的后续项——DoD 对应两条保持未勾。
