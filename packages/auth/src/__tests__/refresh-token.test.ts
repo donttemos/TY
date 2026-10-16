@@ -8,6 +8,7 @@
  * @module @fw/auth
  */
 import { describe, expect, it, vi } from 'vitest';
+import { decodeJwt } from 'jose';
 import { BizError, ErrorCode } from '@fw/core';
 import { createHarness } from './test-helpers.js';
 import { hashToken } from '../refresh-token.service.js';
@@ -33,6 +34,24 @@ describe('RefreshTokenService', () => {
     expect(record?.tokenHash).not.toBe(issued.refreshToken);
     expect(record?.familyId).toBe(issued.familyId);
     expect(record?.revokedAt).toBeNull();
+  });
+
+  it('issue() 返回的 jti 与 JWT 载荷内的 jti 一致（此前本地另生成未传入导致两者背离）', async () => {
+    const h = createHarness();
+    const user = h.store.seedUser({
+      username: 'u1-jti',
+      phone: null,
+      email: null,
+      passwordHash: 'x',
+      nickname: null,
+      avatar: null,
+      status: 1,
+      lastLoginAt: null,
+      lastLoginIp: null,
+    });
+    const issued = await h.refresh.issue(user.id, '1.1.1.1', 'jest');
+    const payload = decodeJwt(issued.refreshToken) as { jti?: string };
+    expect(issued.jti).toBe(payload.jti);
   });
 
   it('TC-AUTH-006：轮换后旧 refresh 立即失效，新 refresh 同族', async () => {

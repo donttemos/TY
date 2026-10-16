@@ -82,7 +82,8 @@ export class RefreshTokenService {
     userAgent: string | null,
   ): Promise<{ refreshToken: string; familyId: string; expireAt: Date; jti: string }> {
     const familyId = randomUUID();
-    const jti = randomUUID();
+    // jti 以 signRefresh 实际签入 JWT 的值为准（此前本地另生成一个未传入，
+    // 返回的 jti 与令牌载荷内 jti 不一致——修复：直接消费签发结果）
     const signed = await this.tokens.signRefresh(userId, familyId);
     await this.store.createRefreshToken({
       userId,
@@ -97,7 +98,7 @@ export class RefreshTokenService {
       replacementKeyId: null,
       replacementExpiresAt: null,
     });
-    return { refreshToken: signed.token, familyId, expireAt: new Date(signed.exp * 1000), jti };
+    return { refreshToken: signed.token, familyId, expireAt: new Date(signed.exp * 1000), jti: signed.jti };
   }
 
   /**
