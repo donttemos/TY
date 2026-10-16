@@ -149,9 +149,8 @@ export interface AuthStore {
   purgeExpiredRefreshTokens(before: Date): Promise<number>;
   /**
    * replacement 密文 grace 级清空（ADR-0021 决策 1）：
-   * `replacement_expires_at < now` 且三列未全 NULL 的行，三列统一置 NULL——
    * `replacement_expires_at` 是唯一判据（部分写入/脏数据同样回收）；
-   * `NOT (cipher IS NULL AND keyId IS NULL)` 仅保证幂等（重复执行 count = 0）；
+   * 幂等性由「清空时 expiresAt 一并置 NULL」自然保证（该行不再满足判据，重复执行 count = 0）；
    * 保留 revokedAt / replacedById（历史链），返回清空条数。
    */
   clearExpiredReplacementCiphers(now: Date): Promise<number>;

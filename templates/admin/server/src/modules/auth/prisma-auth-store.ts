@@ -383,6 +383,11 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
       revokedAt: record.revokedAt,
       loginIp: record.loginIp,
       userAgent: record.userAgent,
+      // replacement 四列透传（ADR-0021：契约字段不得静默丢弃；正常业务均为 NULL）
+      replacedById: record.replacedById ?? null,
+      replacementCipher: record.replacementCipher ?? null,
+      replacementKeyId: record.replacementKeyId ?? null,
+      replacementExpiresAt: record.replacementExpiresAt ?? null,
     } as Partial<RefreshTokenRow>);
     return this.toRefreshToken(row);
   }
@@ -507,14 +512,15 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
 
   /**
    * replacement 密文 grace 级清空（ADR-0021 决策 1/2）：
-   * 判据 = replacementExpiresAt < now（唯一判据）；OR 分支仅保证幂等（三列全 NULL 的行不计入）。
+   * `replacementExpiresAt` 是唯一判据（部分写入/脏数据同样回收——含 cipher/keyId 已为 NULL
+   * 而 expiresAt 残留的形态，清后三列必然全 NULL，满足 metadata invariant）；
+   * 幂等性由「清空时 expiresAt 一并置 NULL」自然保证（该行不再满足 lt: now，重复执行 count = 0）；
    * 只置三列 NULL，保留 revokedAt / replacedById 历史链。
    */
   async clearExpiredReplacementCiphers(now: Date): Promise<number> {
     const result = await this.delegate('refreshToken').updateMany({
       where: {
         replacementExpiresAt: { lt: now },
-        OR: [{ replacementCipher: { not: null } }, { replacementKeyId: { not: null } }],
       },
       data: {
         replacementCipher: null,

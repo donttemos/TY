@@ -252,4 +252,31 @@ describe('M11.2 L5：replacement 密文 grace 级清空（ADR-0021 核心）', (
     }
     void c;
   });
+
+  it('L5-09：脏数据形态（cipher/keyId 已 NULL 而 expiresAt 残留）同样被唯一判据回收，清后满足三列一致性', async () => {
+    const h = createHarness({ refreshGraceSeconds: 10 });
+    const user = seedUser(h, 'dirty');
+    const dirtyHash = `dirty-${Date.now()}`;
+    await h.store.createRefreshToken({
+      userId: user.id,
+      tokenHash: dirtyHash,
+      familyId: 'fam-dirty',
+      expireAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
+      revokedAt: new Date(),
+      loginIp: null,
+      userAgent: null,
+      replacedById: null,
+      replacementCipher: null,
+      replacementKeyId: null,
+      replacementExpiresAt: new Date(Date.now() - 1000), // 残留的过期窗口终点
+    });
+
+    const cleared = await h.refresh.cleanupReplacements(new Date());
+    expect(cleared).toBeGreaterThanOrEqual(1);
+
+    const rec = await h.store.findRefreshTokenByHash(dirtyHash);
+    expect(rec?.replacementExpiresAt).toBeNull();
+    expect(rec?.replacementCipher).toBeNull();
+    expect(rec?.replacementKeyId).toBeNull();
+  });
 });

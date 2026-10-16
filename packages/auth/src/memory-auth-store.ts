@@ -412,14 +412,13 @@ export class MemoryAuthStore implements AuthStore {
 
   /**
    * replacement 密文 grace 级清空（ADR-0021 决策 1/2）。
-   * 判据 = replacementExpiresAt < now（唯一判据，脏数据同样回收）；
-   * 幂等 = 三列已全 NULL 的行不计入；同步临界段遍历（无 await）。
+   * `replacementExpiresAt` 是唯一判据（部分写入/脏数据同样回收）；幂等性由「清空时
+   * expiresAt 一并置 NULL」自然保证（该行不再满足判据，重复执行计 0）。同步临界段遍历。
    */
   async clearExpiredReplacementCiphers(now: Date): Promise<number> {
     let cleared = 0;
     for (const [id, record] of this.refreshTokens) {
-      const hasMaterial = record.replacementCipher !== null || record.replacementKeyId !== null;
-      if (record.replacementExpiresAt !== null && record.replacementExpiresAt < now && hasMaterial) {
+      if (record.replacementExpiresAt !== null && record.replacementExpiresAt < now) {
         this.refreshTokens.set(id, {
           ...record,
           replacementCipher: null,

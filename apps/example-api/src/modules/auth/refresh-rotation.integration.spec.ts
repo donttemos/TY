@@ -214,6 +214,27 @@ describe('M11.1 L3：存储层 CAS 三态（真实 SQLite 事务）', () => {
     ).resolves.toMatchObject({ outcome: 'replay_detected', reason: 'not_found' });
   });
 
+  it('createRefreshToken 透传 replacement 四列——契约字段不得静默丢弃（ADR-0021）', async () => {
+    const expiresAt = new Date(Date.now() + 10_000);
+    const rec = await store.createRefreshToken({
+      userId,
+      tokenHash: `passthrough-${Date.now()}`,
+      familyId: 'fam-passthrough',
+      expireAt: new Date(Date.now() + 7 * 24 * 3600 * 1000),
+      revokedAt: null,
+      loginIp: null,
+      userAgent: null,
+      replacedById: 'replaced-x',
+      replacementCipher: 'v1:replacement-v1:iv:ct:tag',
+      replacementKeyId: 'replacement-v1',
+      replacementExpiresAt: expiresAt,
+    });
+    expect(rec.replacedById).toBe('replaced-x');
+    expect(rec.replacementCipher).toBe('v1:replacement-v1:iv:ct:tag');
+    expect(rec.replacementKeyId).toBe('replacement-v1');
+    expect(rec.replacementExpiresAt).toEqual(expiresAt);
+  });
+
   it('Case A：CAS 成功后 INSERT B 失败（token_hash 唯一约束）⇒ 事务回滚、A 保持 active、可重新轮换', async () => {
     const familyId = `fam-casea-${Date.now()}`;
     const a = await seedToken({ tokenHash: `hash-casea-a-${familyId}`, familyId });
