@@ -80,11 +80,11 @@ A + 指纹缺失/旧数据（NULL）     → 维持现行为放行（向后兼�
 ## Definition of Done（M11.3 封板清单）
 
 ```text
-[ ] ADR-0022 adopted
-[ ] rotated_fingerprint 三方言 + 模板 migration
-[ ] 指纹派生与比对实现（Memory + Prisma 双侧）
-[ ] L6 指纹测试层：同客户端 → B / 异客户端 → replay + 族撤销 / NULL 兼容 / IP 变化无关
-[ ] baseline-009 翻转
-[ ] 三件套回归全绿 + CI 全绿
-[ ] CHANGELOG 登记
+[x] ADR-0022 adopted（4 条评审意见全落实：CAS 同事务写指纹 / NULL 收窄 / normalize 冻结+向量 / 状态机+安全事件全链）
+[x] rotated_fingerprint 三方言 + 模板 migration（20261016193000 同构；mysql 变体重生成 init）
+[x] 指纹派生与比对实现（Memory + Prisma 双侧；比对条件 `?? null` 兼容旧 Store undefined——诊断实证后加固）
+[x] L6 指纹测试层 8 条全绿：同客户端 → B / 异客户端 → replay+族撤销+audit security / NULL 兼容 / off 模式 / IP 变化无关 / 向量冻结
+[x] baseline-009 翻转（异客户端 grace 重试断言拒绝，其余九条零改动）
+[x] 三件套回归全绿（auth 182 / example-api 106 / config 16）+ CI 全绿（run 38901014677，4/4 job——mysql/pg 腿 rotation spec 与双实例均过）
+[x] CHANGELOG 登记（[Unreleased] M11.3 段）
 ```
