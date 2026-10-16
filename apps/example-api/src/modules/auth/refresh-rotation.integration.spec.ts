@@ -51,7 +51,7 @@ async function migrateDeployWithRetry(): Promise<void> {
       await execFileAsync('pnpm exec prisma migrate deploy --schema prisma/schema.prisma', {
         cwd: process.cwd(),
         shell: true,
-        env: { ...process.env, DB_URL },
+        env: { ...process.env, DB_URL: LOCAL_DB_URL },
       });
       return;
     } catch (error) {
