@@ -16,9 +16,9 @@ M11.1（ADR-0020）落地后，rotation 的并发正确性已闭环（N × A ⇒
 
 1. **密文 grace 级清空（本 ADR 核心）**：`AuthStore` 新增 `clearExpiredReplacementCiphers(now: Date): Promise<number>`——
    `UPDATE refresh_tokens SET replacement_cipher = NULL, replacement_key_id = NULL, replacement_expires_at = NULL
-    WHERE replacement_expires_at < :now`，返回受影响条数。
-   - **`replacement_expires_at` 是唯一 cleanup 判据**：部分写入/历史脏数据（如 cipher/keyId 已 NULL 而 expiresAt 残留）同样被回收，清后三列必然全 NULL（满足决策 2 不变量）；
-   - **幂等性由置 NULL 本身保证**：清空后 `expires_at` 为 NULL，不再满足 `expires_at < :now`，重复执行 count = 0——无需额外排除条件；
+    WHERE replacement_expires_at < :now AND NOT (replacement_cipher IS NULL AND replacement_key_id IS NULL)`，返回受影响条数。
+   - **`replacement_expires_at` 是唯一 cleanup 判据**：部分写入/历史脏数据（如 cipher/keyId 已 NULL 而 expiresAt 残留，或反之）同样被回收，清后三列必然全 NULL（满足决策 2 不变量）——**cleanup 兼任 dirty metadata 回收**（2026-10-16 实现语义同步：追加之条件仅用于把「三列已全 NULL」的行排除在受影响计数之外，不缩小清理范围）；
+   - **幂等性由置 NULL 本身保证**：清空后 `expires_at` 为 NULL，不再满足 `expires_at < :now`，重复执行 count = 0；
    - 清理窗口直接复用 `replacement_expires_at`（ADR-0020「时间基准」：CAS 时一次算好的 grace 终点）——**清理永不早于 grace 过期**，无窗口冲突，无需新配置键；
    - 只清三列，**保留 `revoked_at` / `replaced_by_id`**（轮换历史链与排障依据不丢——cleanup 是「敏感材料回收」，不是「rotation history cleanup」）；
    - 无 schema 变更、无迁移。

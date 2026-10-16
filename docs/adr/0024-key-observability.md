@@ -89,6 +89,7 @@ Replacement cipher
    ```
    - **retirable 判据基于「仍存在可恢复密文」**（与 ADR-0021 cipher 清理语义一致）：
      `activeReplacementCipherCount(keyId) = COUNT(replacement_cipher IS NOT NULL AND replacement_key_id = keyId AND replacement_expires_at > now)`——cipher 已清空的历史行**不计入**（否则会把已脱敏的历史行误判为不可退役）；
+   - **retirable 的语义边界（冻结，M11.5-final-02）**：`retirable=true` 仅表示**数据库层面已满足 ADR-0023 的退役判据**（无可恢复 cipher）——它**不代表**该 key 可立即从 runtime Ring 的配置中删除：删除前仍须（a）确认部署中没有仍持旧代际签发/加密职责的实例（轮换重叠期结束），（b）留观察期后由运维显式操作（本体系不做自动轮换/退役，ADR-0023 决策 6 延续）；
    - 端点挂在既有 `MaintenanceController`（框架自检面）；**安全边界（冻结）**：响应不得包含 secret、secret hash、cipher、token、原始配置值——仅非敏感运维元数据；响应头加 `Cache-Control: no-store`；沿 @Public 先例的理由 = 暴露内容为无敏感运维元数据（如实登记攻击面评估）；
    - **source 字段枚举化（冻结）**：`type KeySource = 'explicit' | 'legacy-hkdf' | 'jwt-secret' | 'jwt-secret-prev'`——API 契约不允许自由字符串（防 'env'/'HKDF' 之类的漂移实现）；
    - **JWT kid 与 replacement keyId 是两种语义，响应结构分离**：JWT kid 是 token header 中的公开标识；replacement keyId 是数据库 cipher 的内部路由标签——生命周期、来源、暴露面完全不同，不得混用同一字段命名；
@@ -138,6 +139,11 @@ Replacement cipher
 - [x] fingerprint mismatch → action=security（同上）
 - [x] family revoke 可关联（targetType=refresh_family + targetId）
 - [x] admin audit 查询可以过滤 security
+
+**M11.5-06 HTTP contract test**
+- [x] /auth-maintenance/key-ring 响应契约：形状 + source 枚举 + 计数 + retirable 翻转（清空后）
+- [x] 零敏感材料（序列化扫描无 secret / cipher 密文段 / JWT / tokenHash）
+- [x] 路由映射 key-ring + GET + Cache-Control: no-store（装饰器元数据断言）
 
 **M11.5-05 Regression**
 - [x] M11.0a baseline PASS
