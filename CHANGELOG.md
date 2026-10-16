@@ -16,6 +16,10 @@
 
 ## [Unreleased]
 
+### Added（M11.2 · Refresh Token 生命周期完整性，ADR-0021）
+
+- **ADR-0021 落地**：[docs/adr/0021-refresh-token-lifecycle.md](./docs/adr/0021-refresh-token-lifecycle.md)——replacement 密文可恢复期从「最长 ≈37 天」收缩到 **grace 窗口 + 一个调度周期**。核心：`AuthStore.clearExpiredReplacementCiphers(now)`（判据 = `replacement_expires_at < now` 唯一化，脏数据同样回收；`NOT(三列全 NULL)` 仅保证幂等；只置三列 NULL 保留 `revokedAt/replacedById` 历史链）；`auth.refresh-cleanup` cron 扩展为**两级清理**（密文回收每次跑 + 30 天删行），快照/运维端点加 `lastCiphersCleared`/`lastDurationMs`；`cleanupReplacements()` 为编排门面（清库动作在 Store，Rule 8）。**Replacement metadata invariant**：三列全 NULL 或全 NON-NULL（契约测试锁死，M11.4 Key Ring 数据基础）；清空后 A 复用 → `no_replacement` → 泄漏族撤销（fail closed 与 M11.1 一致）。L5 生命周期回归 8 条：A→B→C→D 全链 / 中途 logout / logout-all / 孤儿 replacement / 清空后语义 / 清理不碰 B / 幂等 / 三列一致性。不新增任何状态枚举（全部派生状态）。回归：auth **173/173**、example-api **104/104**。
+
 ### Added（M11.1 · Refresh Token Rotation CAS，Commit 1）
 
 - **ADR-0020 立项并落地 Commit 1（Memory 侧垂直切片）**：[docs/adr/0020-refresh-token-rotation-cas.md](./docs/adr/0020-refresh-token-rotation-cas.md)——M11.0a baseline（5 failed 实测）钉死的「N × A ⇒ N × replacement」并发 race 修为存储层 CAS 三态裁决（`rotated / already_rotated / replay_detected`）：grace 内重试解密返回**同一个**已持久化 replacement（AES-256-GCM 密文存于 A 行，HKDF 从 JWT_SECRET 域分离派生密钥，明文永不落库），grace 外/族死/B 已失效一律 fail closed（族撤销 + 3001），Security Invariant 禁止从已轮换的 A 再生成第二个 replacement。含 8 条锁死规则 + 时间基准（单次 rotation 单一 `now`）+ DoD 清单（编号 0017–0019 已由 PRD-011 预留故跳号）。`AuthStore` 新增 `rotateRefreshToken?`（Commit 2 定稿必选，Prisma 实现前服务层走 legacy 兼容路径）；`RefreshTokenRecord` 扩 4 列（`replacedById / replacementCipher / replacementKeyId / replacementExpiresAt`，schema/migration 随 Commit 2）。基线测试 `refresh-token.m11-0a-baseline.test.ts` **10/10 全绿**（5 failed → 10 passed，断言零改动）；TC-AUTH-008 断言按新语义翻转（宽限复用返回同 token）；auth 155/155、example-api 97/97。
