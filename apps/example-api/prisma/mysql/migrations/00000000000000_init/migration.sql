@@ -162,7 +162,7 @@ CREATE TABLE `refresh_tokens` (
     `login_ip` VARCHAR(191) NULL,
     `user_agent` VARCHAR(191) NULL,
     `replaced_by_id` VARCHAR(191) NULL,
-    `replacement_cipher` VARCHAR(191) NULL,
+    `replacement_cipher` TEXT NULL,
     `replacement_key_id` VARCHAR(191) NULL,
     `replacement_expires_at` DATETIME(3) NULL,
     `deleted_at` DATETIME(3) NULL,

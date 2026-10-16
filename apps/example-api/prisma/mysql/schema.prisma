@@ -5,6 +5,9 @@
  *   唯一差异 datasource.provider = "mysql"（Prisma provider 是编译期字面量，不能用 env 切换）。
  *   迁移目录随 schema 隔离：prisma/mysql/migrations/（单条 init，由 migrate diff 从空库生成；
  *   模型段变更后须重新生成并核对一致性）。
+ *   与主 schema 的**第二处差异**：replacement_cipher 加 @db.Text——MySQL 的 String 默认
+ *   VARCHAR(191)，装不下真实密文（JWT≈460B → base64url≈620C）；SQLite/PG 的 String
+ *   本就是无限长文本无需标注。模型段一致性校验时须忽略本列的原生类型标注。
  *   切换数据库只改 datasource 两行（provider/url），业务代码零改动（TC-ORM-008）。
  * @author donttemo
  * @created 2026-10-12
@@ -185,7 +188,7 @@ model RefreshToken {
   loginIp              String?   @map("login_ip")
   userAgent            String?   @map("user_agent")
   replacedById         String?   @map("replaced_by_id")
-  replacementCipher    String?   @map("replacement_cipher")
+  replacementCipher    String?   @db.Text @map("replacement_cipher")
   replacementKeyId     String?   @map("replacement_key_id")
   replacementExpiresAt DateTime? @map("replacement_expires_at")
   deletedAt DateTime? @map("deleted_at")
