@@ -14,6 +14,7 @@
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes, randomUUID } from 'node:crypto';
 import { SignJWT, decodeProtectedHeader, errors as joseErrors, jwtVerify, type JWTPayload } from 'jose';
 import {
+  deriveJwtKid,
   JwtKeyRing,
   JWT_CURRENT_KID,
   JWT_PREVIOUS_KID,
@@ -158,13 +159,13 @@ export class TokenService {
       typ: 'access' satisfies TokenType,
       ...(familyId ? { fam: familyId } : {}),
     })
-      .setProtectedHeader({ alg: JWT_ALG, kid: JWT_CURRENT_KID })
+      .setProtectedHeader({ alg: JWT_ALG, kid: this.jwtRing.currentKeyId })
       .setIssuer(JWT_ISSUER)
       .setSubject(user.id)
       .setJti(jti)
       .setIssuedAt()
       .setExpirationTime(exp)
-      .sign(this.jwtRing.keyFor(JWT_CURRENT_KID) as Uint8Array);
+      .sign(this.jwtRing.keyFor(this.jwtRing.currentKeyId) as Uint8Array);
     return { token, jti, expiresIn: this.options.accessTtlSeconds, exp };
   }
 
@@ -178,13 +179,13 @@ export class TokenService {
   async signRefresh(userId: string, familyId: string, jti: string = randomUUID()): Promise<IssuedToken> {
     const exp = Math.floor(Date.now() / 1000) + this.options.refreshTtlSeconds;
     const token = await new SignJWT({ typ: 'refresh' satisfies TokenType, fam: familyId })
-      .setProtectedHeader({ alg: JWT_ALG, kid: JWT_CURRENT_KID })
+      .setProtectedHeader({ alg: JWT_ALG, kid: this.jwtRing.currentKeyId })
       .setIssuer(JWT_ISSUER)
       .setSubject(userId)
       .setJti(jti)
       .setIssuedAt()
       .setExpirationTime(exp)
-      .sign(this.jwtRing.keyFor(JWT_CURRENT_KID) as Uint8Array);
+      .sign(this.jwtRing.keyFor(this.jwtRing.currentKeyId) as Uint8Array);
     return { token, jti, expiresIn: this.options.refreshTtlSeconds, exp };
   }
 
@@ -198,32 +199,59 @@ export class TokenService {
     if (!token || typeof token !== 'string') {
       throw new TokenVerifyError('missing', '令牌缺失');
     }
-    // kid 路由（ADR-0023 决策 4）：kid 指向 previous 时先试 prev；其余（含无 kid 存量）维持 current→prev 双试。
-    // kid 仅是角色路由提示，正确性由双试兜底保证（已知限制见 ADR-0023 决策 4）。
-    const kid = decodeProtectedHeader(token).kid;
-    const preferPrev = kid === JWT_PREVIOUS_KID && this.jwtRing.hasPrevious();
-    const attempts: Array<{ key: Uint8Array; prev: boolean }> = preferPrev
-      ? [
-          { key: this.jwtRing.keyFor(JWT_PREVIOUS_KID) as Uint8Array, prev: true },
-          { key: this.jwtRing.keyFor(JWT_CURRENT_KID) as Uint8Array, prev: false },
-        ]
-      : [
-          { key: this.jwtRing.keyFor(JWT_CURRENT_KID) as Uint8Array, prev: false },
-          ...(this.jwtRing.hasPrevious()
-            ? [{ key: this.jwtRing.keyFor(JWT_PREVIOUS_KID) as Uint8Array, prev: true }]
-            : []),
-        ];
-    let lastError: unknown;
+    // kid 四分支路由（ADR-0024 决策 2，钉死）：
+    //   absent / legacy 角色标识（jwt-current/jwt-prev）→ legacy dual-try 兼容；
+    //   known stable kid → 只验证该 key，失败即失败（不 fallback）；
+    //   unknown kid → 直接拒绝，禁止尝试任何 Ring key（防多代扩展后的 brute-force 面）。
+    const kid = decodeProtectedHeader(token).kid as string | undefined;
+    const isLegacyKid = kid === JWT_CURRENT_KID || kid === JWT_PREVIOUS_KID;
+    const isKnownStableKid = kid !== undefined && !isLegacyKid && this.jwtRing.knowsKid(kid);
+    const isUnknownKid = kid !== undefined && !isLegacyKid && !this.jwtRing.knowsKid(kid);
+
+    if (isUnknownKid) {
+      // unknown kid：直接拒绝——不尝试 current/previous（kid 路由边界，禁止 brute-force 面）
+      throw new TokenVerifyError('invalid', '令牌无效');
+    }
+
+    const attempts: Array<{ key: Uint8Array; prev: boolean }> = isKnownStableKid
+      ? [{ key: this.jwtRing.keyFor(kid as string) as Uint8Array, prev: kid === this.jwtRing.previousKeyId }]
+      : this.jwtRing.hasPrevious()
+        ? [
+            { key: this.jwtRing.keyFor(this.jwtRing.currentKeyId) as Uint8Array, prev: false },
+            { key: this.jwtRing.keyFor(this.jwtRing.previousKeyId as string) as Uint8Array, prev: true },
+          ]
+        : [{ key: this.jwtRing.keyFor(this.jwtRing.currentKeyId) as Uint8Array, prev: false }];
+
     for (const attempt of attempts) {
       try {
         const { payload } = await jwtVerify(token, attempt.key, { algorithms: [JWT_ALG], issuer: JWT_ISSUER });
         return { claims: payload as AccessClaims | RefreshClaims, usedPrevSecret: attempt.prev };
       } catch (error) {
         if (this.isExpired(error)) throw new TokenVerifyError('expired', '令牌已过期');
-        lastError = error;
       }
     }
     throw new TokenVerifyError('invalid', '令牌无效');
+  }
+
+  /** Key Ring 可观测快照（供 /auth-maintenance/key-ring 端点；零敏感材料，ADR-0024） */
+  getKeyRingInfo(): {
+    jwt: { currentKid: string; previousKid: string | null; hasPrevious: boolean };
+    replacement: { mode: 'explicit' | 'legacy-hkdf'; currentKeyId: string; keyIds: string[] };
+  } {
+    return {
+      jwt: {
+        currentKid: this.jwtRing.currentKeyId,
+        previousKid: this.jwtRing.previousKeyId,
+        hasPrevious: this.jwtRing.hasPrevious(),
+      },
+      replacement: this.replacementRing
+        ? {
+            mode: 'explicit' as const,
+            currentKeyId: this.replacementRing.currentKeyId,
+            keyIds: this.replacementRing.keyIds,
+          }
+        : { mode: 'legacy-hkdf' as const, currentKeyId: REPLACEMENT_KEY_ID, keyIds: [REPLACEMENT_KEY_ID] },
+    };
   }
 
   /**

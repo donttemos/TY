@@ -58,6 +58,8 @@ export { parseDurationSeconds } from './duration.js';
 export { MemoryAuthCache } from './auth-cache.js';
 export type { AuthCachePort } from './auth-cache.js';
 export { MemoryAuthStore } from './memory-auth-store.js';
+export type { KeySource, KeyRingEntry } from './key-ring.js';
+export { parseReplacementKeys } from './key-ring.js';
 export type {
   AuthStore,
   NewAuditLog,

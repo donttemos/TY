@@ -12,7 +12,10 @@
  * @module @fw/auth
  */
 
-import { hkdfSync } from 'node:crypto';
+import { createHash, hkdfSync } from 'node:crypto';
+
+/** Key Ring 可观测快照的密钥来源枚举（ADR-0024 决策 3：API 契约冻结，不允许自由字符串） */
+export type KeySource = 'explicit' | 'legacy-hkdf' | 'jwt-secret' | 'jwt-secret-prev';
 
 /** Ring 密钥条目 */
 export interface KeyRingEntry {
@@ -131,36 +134,64 @@ export class ReplacementKeyRing {
   }
 }
 
-/** JWT Ring 的角色路由标识（ADR-0023 决策 4：角色标识，非跨部署稳定密钥身份） */
+/**
+ * JWT Ring 的 legacy 角色路由标识（ADR-0023 过渡期 token 兼容用；ADR-0024 起新签发
+ * token 全部携带稳定 kid，这两个标识只出现在存量 token header 中）。
+ */
 export const JWT_CURRENT_KID = 'jwt-current';
 export const JWT_PREVIOUS_KID = 'jwt-prev';
 
+/** 稳定 kid 派生：'jwt-' + sha256(secret) 前 16 hex（64 bit，ADR-0024 决策 1） */
+export function deriveJwtKid(secret: string): string {
+  return `jwt-${createHash('sha256').update(secret).digest('hex').slice(0, 16)}`;
+}
+
 /**
  * JWT 密钥环：由 JWT_SECRET（current）/ JWT_SECRET_PREV（previous）构造。
- * 行为与 M3 双密钥验签现状等价，仅形式化 Ring 结构；真正稳定的 kid 留 M11.5。
+ * ADR-0024：kid 升级为**稳定指纹标识**（同 secret 跨部署/实例/重启不变；不同 secret
+ * 派生不同 kid）；同 Ring 内 kid collision 启动即失败（keyFor 路由无歧义）。
  */
 export class JwtKeyRing {
   private readonly currentKey: Uint8Array;
   private readonly previousKey: Uint8Array | null;
+  private readonly currentKid: string;
+  private readonly previousKid: string | null;
 
   constructor(currentSecret: string, previousSecret?: string) {
     this.currentKey = new TextEncoder().encode(currentSecret);
     this.previousKey = previousSecret ? new TextEncoder().encode(previousSecret) : null;
+    this.currentKid = deriveJwtKid(currentSecret);
+    this.previousKid = previousSecret ? deriveJwtKid(previousSecret) : null;
+    // 同 Ring 内 kid collision → 启动即失败（不同 secret 派生出相同 kid 会造成 keyFor 路由歧义）
+    if (this.previousKid !== null && this.previousKid === this.currentKid) {
+      throw new Error(`JWT Key Ring kid collision（current 与 previous 派生出相同 kid: ${this.currentKid}）——请更换 JWT_SECRET_PREV`);
+    }
   }
 
+  /** 当前签发用的稳定 kid */
   get currentKeyId(): string {
-    return JWT_CURRENT_KID;
+    return this.currentKid;
   }
 
+  /** 上一代稳定 kid（未配置 PREV 为 null） */
   get previousKeyId(): string | null {
-    return this.previousKey ? JWT_PREVIOUS_KID : null;
+    return this.previousKid;
   }
 
-  /** 按 kid 取验签密钥；未知 kid 返回 null（调用方回退双试） */
+  /**
+   * 按稳定 kid 取验签密钥；未知 kid 返回 null。
+   * 调用方（TokenService.verify）按 ADR-0024 四分支路由：absent / legacy 角色标识 →
+   * dual-try 兼容；known stable kid → 只验证该 key；unknown → 拒绝。
+   */
   keyFor(keyId: string): Uint8Array | null {
-    if (keyId === JWT_CURRENT_KID) return this.currentKey;
-    if (keyId === JWT_PREVIOUS_KID && this.previousKey) return this.previousKey;
+    if (keyId === this.currentKid) return this.currentKey;
+    if (keyId === this.previousKid && this.previousKey) return this.previousKey;
     return null;
+  }
+
+  /** kid 是否为已知稳定 kid */
+  knowsKid(keyId: string): boolean {
+    return keyId === this.currentKid || (this.previousKid !== null && keyId === this.previousKid);
   }
 
   hasPrevious(): boolean {

@@ -167,6 +167,12 @@ export interface AuthStore {
    * 保留 revokedAt / replacedById（历史链），返回清空条数。
    */
   clearExpiredReplacementCiphers(now: Date): Promise<number>;
+  /**
+   * 各 replacement keyId 的「仍存在可恢复密文」计数（ADR-0024 退役判据）：
+   * COUNT(replacement_cipher IS NOT NULL AND replacement_key_id 非空 AND replacement_expires_at > now)，
+   * 按 keyId 聚合——retirable = 该 keyId 计数为 0。
+   */
+  countReplacementCiphersByKeyId(now: Date): Promise<Record<string, number>>;
 
   // ---------- 审计 ----------
 

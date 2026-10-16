@@ -418,6 +418,21 @@ export class MemoryAuthStore implements AuthStore {
    * `replacementExpiresAt` 是唯一判据（部分写入/脏数据同样回收）；幂等性由「清空时
    * expiresAt 一并置 NULL」自然保证（该行不再满足判据，重复执行计 0）。同步临界段遍历。
    */
+  async countReplacementCiphersByKeyId(now: Date): Promise<Record<string, number>> {
+    const counts: Record<string, number> = {};
+    for (const record of this.refreshTokens.values()) {
+      if (
+        record.replacementCipher !== null &&
+        record.replacementKeyId !== null &&
+        record.replacementExpiresAt !== null &&
+        record.replacementExpiresAt > now
+      ) {
+        counts[record.replacementKeyId] = (counts[record.replacementKeyId] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }
+
   async clearExpiredReplacementCiphers(now: Date): Promise<number> {
     let cleared = 0;
     for (const [id, record] of this.refreshTokens) {

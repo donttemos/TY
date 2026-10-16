@@ -16,7 +16,7 @@ import { decodeProtectedHeader, jwtVerify, SignJWT } from 'jose';
 import { describe, expect, it } from 'vitest';
 import { ErrorCode } from '@fw/core';
 import { createHarness } from './test-helpers.js';
-import { JWT_CURRENT_KID, JWT_PREVIOUS_KID, ReplacementKeyRing } from '../key-ring.js';
+import { deriveJwtKid, ReplacementKeyRing } from '../key-ring.js';
 import { TokenService } from '../token.service.js';
 import { RefreshTokenService } from '../refresh-token.service.js';
 
@@ -179,11 +179,11 @@ describe('M11.4 L7：代际回退（prerequisite ③ 验收判据）', () => {
 });
 
 describe('M11.4 L7：JWT kid 路由（ADR-0023 决策 4）', () => {
-  it('sign 带 kid=jwt-current；verify 路由正常', async () => {
+  it('sign 带稳定 kid（ADR-0024：jwt- + sha256(secret)[0:16]）；verify 路由正常', async () => {
     const tokens = makeService(SECRET_NEW, { prev: SECRET_OLD });
     const issued = await tokens.signRefresh('user-1', 'fam-1');
     const header = decodeProtectedHeader(issued.token);
-    expect(header.kid).toBe(JWT_CURRENT_KID);
+    expect(header.kid).toBe(deriveJwtKid(SECRET_NEW));
     const result = await tokens.verify(issued.token);
     expect(result.claims.sub).toBe('user-1');
   });
@@ -216,9 +216,6 @@ describe('M11.4 L7：JWT kid 路由（ADR-0023 决策 4）', () => {
     const noKidResult = await tokens.verify(rawNoKid);
     expect(noKidResult.usedPrevSecret).toBe(true);
 
-    // kid 语义自检：jwt-prev / jwt-current 常量存在（角色路由标识）
-    expect(JWT_PREVIOUS_KID).toBe('jwt-prev');
-    expect(JWT_CURRENT_KID).toBe('jwt-current');
     void jwtVerify;
   });
 });

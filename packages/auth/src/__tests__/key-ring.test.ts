@@ -7,9 +7,8 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  deriveJwtKid,
   JwtKeyRing,
-  JWT_CURRENT_KID,
-  JWT_PREVIOUS_KID,
   KeyRingEntry,
   ReplacementKeyRing,
   parseReplacementKeys,
@@ -86,19 +85,26 @@ describe('M11.4 解析规则冻结（ADR-0023 决策 1，启动即校验）', ()
 });
 
 describe('M11.4 JwtKeyRing（角色路由标识，ADR-0023 决策 4）', () => {
-  it('current/previous 构造与 keyFor 路由', () => {
+  it('current/previous 构造与 keyFor 路由（稳定 kid，ADR-0024）', () => {
     const ring = new JwtKeyRing('current-secret', 'previous-secret');
-    expect(ring.currentKeyId).toBe(JWT_CURRENT_KID);
-    expect(ring.previousKeyId).toBe(JWT_PREVIOUS_KID);
-    expect(ring.keyFor(JWT_CURRENT_KID)).toEqual(new TextEncoder().encode('current-secret'));
-    expect(ring.keyFor(JWT_PREVIOUS_KID)).toEqual(new TextEncoder().encode('previous-secret'));
+    expect(ring.currentKeyId).toBe(deriveJwtKid('current-secret'));
+    expect(ring.previousKeyId).toBe(deriveJwtKid('previous-secret'));
+    expect(ring.keyFor(deriveJwtKid('current-secret'))).toEqual(new TextEncoder().encode('current-secret'));
+    expect(ring.keyFor(deriveJwtKid('previous-secret'))).toEqual(new TextEncoder().encode('previous-secret'));
     expect(ring.keyFor('unknown')).toBeNull();
+    // legacy 角色标识不再是已知 kid（ADR-0024：仅作 verify 兼容分支，不参与 keyFor 路由）
+    expect(ring.knowsKid('jwt-current')).toBe(false);
+    expect(ring.knowsKid('jwt-prev')).toBe(false);
   });
 
-  it('未配置 previous：previousKeyId = null，keyFor(jwt-prev) = null', () => {
+  it('未配置 previous：previousKeyId = null，known previousKid 不存在', () => {
     const ring = new JwtKeyRing('current-secret');
     expect(ring.previousKeyId).toBeNull();
     expect(ring.hasPrevious()).toBe(false);
-    expect(ring.keyFor(JWT_PREVIOUS_KID)).toBeNull();
+    expect(ring.knowsKid('jwt-prev')).toBe(false);
+  });
+
+  it('Ring 内 kid collision（current/previous 派生出相同 kid）→ 启动即失败（ADR-0024 决策 1）', () => {
+    expect(() => new JwtKeyRing('same-secret', 'same-secret')).toThrow(/kid collision/);
   });
 });
