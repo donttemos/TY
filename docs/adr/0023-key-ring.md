@@ -65,15 +65,15 @@ Commit 5  ADR-0023 DoD 收口 + CI 全绿 → 进入 M11.5
 ## Definition of Done（M11.4 封板清单）
 
 ```text
-[ ] ADR-0023 adopted
+[x] ADR-0023 adopted（2026-10-16 评审通过，5 条意见全落实）
 [x] KeyRing 抽象 + Replacement Ring（显式 AUTH_REPLACEMENT_KEYS + legacy HKDF 回退链）
 [x] 代际回退解密：轮换部署下旧密文 grace 内恢复原 B 不触发族撤销（prerequisite ③ 正向；含显式 replacement-v2 + legacy replacement-v1 跨代场景，本地 SQLite + CI mysql/pg）
 [x] Rule 6 路由优先级：显式命中失败不试其它 key（即使另一 key 能解）/ legacy 回退链 / 未知 keyId fail closed / 禁全 Ring brute-force
-[ ] 反向：回退全失败 → fail closed 族撤销（Security Invariant 不松动）
+[x] 反向：回退全失败 → fail closed 族撤销（Security Invariant 不松动）——反向 A（NEW 无 prev）+ 反向 B（NEW+PREV=WRONG 双代解不开，断言族内行集合不变无新 token + audit security）
 [x] JWT kid 路由（sign 带 kid / verify 路由 / 无 kid 兼容 / 双试兜底；kid=角色路由标识，稳定 kid 留 M11.5）
 [x] 退役窗口规则文档化（docs/60 + 运维判据：keyId 名下未过期 cipher 行数为 0）
 [x] L7 测试层全绿 + 三件套回归全绿（auth 199/199 含 L7 17 条、example 108/108、config 16/16；rotation 核心：baseline/L5/L6/集成 spec 零改动全绿——红线验证 ✓）
 [x] 配置键四处登记（env-schema + ENV_KEY_PATHS + .env.example + docs/60）
-[ ] CI 全绿（含 rotation spec 三方言腿 + 双实例）
-[ ] CHANGELOG 登记
+[x] CI 全绿（run 38915330260：4/4 job——含 rotation spec 三方言腿与双实例）
+[x] CHANGELOG 登记（[Unreleased] M11.4 段）
 ```
