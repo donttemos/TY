@@ -198,10 +198,11 @@ export class RefreshTokenService {
     const familyId = result.oldToken.familyId;
 
     // 指纹比对（ADR-0022 决策 5/7）：A 行指纹非 NULL 且与重试方不一致 ⇒ replay（安全事件）。
-    // NULL 仅来自 M11.1 存量行或 off 模式 → 放行（存量迁移兼容，非常态旁路）。
+    // NULL 仅来自 M11.1 存量行或 off 模式 → 放行（存量迁移兼容，非常态旁路）；
+    // undefined（旧 Store 实现未返回该字段）视同 NULL，放行——不得误判 mismatch 误杀合法重试。
     const retryFingerprint = this.fingerprintEnabled ? computeFingerprint(userAgent) : null;
     if (
-      result.fingerprint !== null &&
+      (result.fingerprint ?? null) !== null &&
       retryFingerprint !== null &&
       retryFingerprint !== result.fingerprint
     ) {

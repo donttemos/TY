@@ -42,8 +42,10 @@ async function childMain() {
 
   const childIndex = Number(process.env.DUAL_CHILD_INDEX);
   const oldToken = process.env.DUAL_OLD_TOKEN;
+  // ADR-0022：grace 重试绑定赢家指纹——分布式 CAS 场景是「同一客户端的多实例」，
+  // 各进程必须用同一 UA（异 UA 会被指纹判定 replay，那是 L6-02 的职责）
   const results = await Promise.all(
-    Array.from({ length: CONCURRENCY }, () => refresh.rotate(oldToken, '10.0.0.1', `dual-instance-${childIndex}`)),
+    Array.from({ length: CONCURRENCY }, () => refresh.rotate(oldToken, '10.0.0.1', 'dual-instance')),
   );
   await client.$disconnect();
   process.stdout.write(
