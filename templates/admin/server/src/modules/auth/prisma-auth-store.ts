@@ -505,6 +505,26 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
     return result.count;
   }
 
+  /**
+   * replacement 密文 grace 级清空（ADR-0021 决策 1/2）：
+   * 判据 = replacementExpiresAt < now（唯一判据）；OR 分支仅保证幂等（三列全 NULL 的行不计入）。
+   * 只置三列 NULL，保留 revokedAt / replacedById 历史链。
+   */
+  async clearExpiredReplacementCiphers(now: Date): Promise<number> {
+    const result = await this.delegate('refreshToken').updateMany({
+      where: {
+        replacementExpiresAt: { lt: now },
+        OR: [{ replacementCipher: { not: null } }, { replacementKeyId: { not: null } }],
+      },
+      data: {
+        replacementCipher: null,
+        replacementKeyId: null,
+        replacementExpiresAt: null,
+      },
+    });
+    return result.count;
+  }
+
   // ---------- 审计 ----------
 
   async writeAuditLog(record: NewAuditLog): Promise<void> {
