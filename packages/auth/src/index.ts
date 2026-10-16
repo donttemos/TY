@@ -47,6 +47,8 @@ export { collectDescendantIds } from './org-tree.js';
 export type { OrgTreeNode } from './org-tree.js';
 export { AuditService, sanitizeForAudit } from './audit.service.js';
 export type { AuditEntry } from './audit.service.js';
+export { AuditArchiveService } from './audit-archive.js';
+export type { AuditArchivePort, AuditArchiveRunOptions, AuditArchiveRunResult } from './audit-archive.js';
 export { AuditInterceptor } from './audit.interceptor.js';
 export { LoginSecurity } from './login-security.js';
 export type { FailureOutcome, LockState, LoginSecurityOptions } from './login-security.js';

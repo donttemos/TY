@@ -9,14 +9,18 @@
  *   连接分工：caller 连接（LPUSH + BLPOP）与每地址一条 worker 阻塞连接（BRPOP）分离，
  *   避免阻塞命令相互堵塞。ioredis 懒加载（optional peer），缺失时给出可操作报错。
  *   caller 角色不起消费循环；handler 角色只消费不发起（除非业务主动调用）。
+ *   M10 E-12 事件面：`PUBLISH <prefix>:evt:<topic>` / `SUBSCRIBE` 走**独立订阅连接**
+ *   （Redis 订阅模式连接不能执行常规命令），据此多副本下 SSE 由任意实例可服务。
  * @author donttemo
  * @created 2026-10-14
+ * @modified 2026-10-15 donttemo M10 E-12：新增事件面 publish / subscribe（Redis pub/sub 跨实例扇出）
  * @module @fw/transport
  */
 
 import { Logger } from '@fw/logger';
 import {
   assertAddress,
+  assertTopic,
   deserializeTransportError,
   HandlerNotRegisteredError,
   serializeTransportError,
@@ -29,7 +33,17 @@ import type { TransportRegistry } from '../registry.js';
 import { withTimeout } from '../async.js';
 import { extractTraceparent, injectTraceparent, withServerSpan } from '../trace.js';
 import { createRedisClient, MISSING_REDIS_URL_MESSAGE, type RedisLike } from './redis-client.js';
-import type { CallOptions, TransportContext, TransportEnvelope, TransportHandlerFn, TransportReply } from '../types.js';
+import type {
+  CallOptions,
+  TransportContext,
+  TransportEnvelope,
+  TransportEventHandler,
+  TransportEventMeta,
+  TransportEventUnsubscribe,
+  TransportHandlerFn,
+  TransportReply,
+  TransportTopic,
+} from '../types.js';
 
 const logger = Logger.for('transport');
 
@@ -51,7 +65,7 @@ export interface RedisTransportDriverOptions {
   /** 优雅停机等待在途请求的超时（毫秒） */
   shutdownTimeoutMs: number;
   /** 自定义客户端工厂（测试注入 fake；传入后忽略 url 与 ioredis 懒加载） */
-  createClient?: (purpose: 'caller' | 'worker') => RedisLike | Promise<RedisLike>;
+  createClient?: (purpose: 'caller' | 'worker' | 'subscriber') => RedisLike | Promise<RedisLike>;
 }
 
 /** 消费循环状态 */
@@ -78,6 +92,12 @@ export class RedisTransportDriver implements TransportDriverPort {
   private started = false;
   private closing = false;
   private handled = 0;
+  /** 事件面：独立订阅连接（订阅模式下不能执行常规命令） */
+  private subscriberClient?: RedisLike;
+  /** 事件面：是否已挂 message 监听（挂一次即可） */
+  private subscriberListening = false;
+  /** 事件面：主题 → 订阅方集合 */
+  private readonly eventHandlers = new Map<TransportTopic, Set<TransportEventHandler>>();
 
   /**
    * @param registry 处理器注册表（与服务共享）
@@ -209,6 +229,8 @@ export class RedisTransportDriver implements TransportDriverPort {
     for (const state of states) {
       if (state.client) clients.push(state.client);
     }
+    // 事件面订阅连接一并释放（订阅模式连接 quit 会自动退订）
+    if (this.subscriberClient) clients.push(this.subscriberClient);
     for (const client of clients) {
       try {
         await client.quit();
@@ -217,11 +239,115 @@ export class RedisTransportDriver implements TransportDriverPort {
       }
     }
     this.callerClient = undefined;
+    this.subscriberClient = undefined;
+    this.subscriberListening = false;
+    this.eventHandlers.clear();
+  }
+
+  // ---------------- 事件面（M10 E-12：Redis pub/sub 跨实例扇出） ----------------
+
+  /**
+   * 发布事件：`PUBLISH <prefix>:evt:<topic>`，多副本下所有实例的订阅方都会收到
+   * @param topic 事件主题
+   * @param payload 事件载荷（须可 JSON 序列化）
+   */
+  async publish(topic: TransportTopic, payload: unknown): Promise<void> {
+    assertTopic(topic);
+    let raw: string;
+    try {
+      raw = JSON.stringify(payload);
+    } catch (cause) {
+      throw new TransportError(`事件载荷不可 JSON 序列化：${topic}`, { cause });
+    }
+    const caller = await this.getCallerClient();
+    await caller.publish(this.eventChannel(topic), raw);
+  }
+
+  /**
+   * 订阅事件：复用独立订阅连接，同一主题多订阅方共享一条连接
+   * @param topic 事件主题
+   * @param handler 处理器
+   * @returns 取消订阅函数（最后一个订阅方取消后 UNSUBSCRIBE 该频道）
+   */
+  async subscribe(topic: TransportTopic, handler: TransportEventHandler): Promise<TransportEventUnsubscribe> {
+    assertTopic(topic);
+    const bucket = this.eventHandlers.get(topic) ?? new Set<TransportEventHandler>();
+    const wasEmpty = bucket.size === 0;
+    bucket.add(handler);
+    this.eventHandlers.set(topic, bucket);
+
+    const client = await this.getSubscriberClient();
+    // SUBSCRIBE 幂等：Redis 对已订阅频道重复订阅不会报错，也不会重复投递
+    if (wasEmpty) await client.subscribe(this.eventChannel(topic));
+
+    return () => {
+      const current = this.eventHandlers.get(topic);
+      if (!current) return;
+      current.delete(handler);
+      if (current.size > 0) return;
+      this.eventHandlers.delete(topic);
+      // 退订是「尽力而为」：连接已断开时由 quit 兜底，不影响订阅函数幂等语义
+      void this.subscriberClient?.unsubscribe(this.eventChannel(topic)).catch(() => undefined);
+    };
+  }
+
+  /** 懒创建订阅连接并挂一次 message 监听 */
+  private async getSubscriberClient(): Promise<RedisLike> {
+    if (this.subscriberClient) return this.subscriberClient;
+    const client = await this.resolveClient('subscriber');
+    if (!this.subscriberListening) {
+      client.on('message', (channel, message) => this.dispatchEvent(channel, message));
+      this.subscriberListening = true;
+    }
+    this.subscriberClient = client;
+    return client;
+  }
+
+  /** 按频道路由到订阅方；载荷损坏或处理器异常只记日志，不影响其他订阅方 */
+  private dispatchEvent(channel: unknown, message: unknown): void {
+    const topic = this.topicOfChannel(String(channel));
+    if (!topic) return;
+    const handlers = this.eventHandlers.get(topic);
+    if (!handlers || handlers.size === 0) return;
+    let payload: unknown;
+    try {
+      payload = JSON.parse(String(message));
+    } catch {
+      logger.warn('事件载荷解析失败，已丢弃', { topic });
+      return;
+    }
+    const meta: TransportEventMeta = {
+      topic,
+      driver: 'redis',
+      instanceId: this.options.instanceId,
+      emittedAt: Date.now(),
+    };
+    for (const handler of [...handlers]) {
+      try {
+        handler(payload, meta);
+      } catch (error) {
+        logger.warn('事件订阅方抛出异常（已隔离，不影响其他订阅方）', {
+          topic,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  /** 频道 → 主题（非本驱动频道的消息忽略） */
+  private topicOfChannel(channel: string): string | undefined {
+    const prefix = `${this.options.prefix}:evt:`;
+    return channel.startsWith(prefix) ? channel.slice(prefix.length) : undefined;
   }
 
   /** 请求队列键 */
   private requestKey(address: string): string {
     return `${this.options.prefix}:req:${address}`;
+  }
+
+  /** 事件频道键（M10 E-12；与请求键分属不同命名空间，互不干扰） */
+  private eventChannel(topic: TransportTopic): string {
+    return `${this.options.prefix}:evt:${topic}`;
   }
 
   /** 应答列表键（按关联 ID 唯一） */
@@ -238,7 +364,7 @@ export class RedisTransportDriver implements TransportDriverPort {
   }
 
   /** 解析客户端：测试工厂优先，否则懒加载 ioredis */
-  private async resolveClient(purpose: 'caller' | 'worker'): Promise<RedisLike> {
+  private async resolveClient(purpose: 'caller' | 'worker' | 'subscriber'): Promise<RedisLike> {
     if (this.options.createClient) return await this.options.createClient(purpose);
     return await createRedisClient(this.options.url);
   }

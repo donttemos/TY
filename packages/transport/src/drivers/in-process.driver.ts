@@ -9,12 +9,23 @@
  * @module @fw/transport
  */
 
-import { assertAddress, HandlerNotRegisteredError } from '../errors.js';
+import { Logger } from '@fw/logger';
+import { assertAddress, assertTopic, HandlerNotRegisteredError } from '../errors.js';
 import type { TransportDriverPort } from '../driver.port.js';
 import type { TransportRegistry } from '../registry.js';
 import { withTimeout } from '../async.js';
 import { withServerSpan } from '../trace.js';
-import type { CallOptions, TransportContext, TransportHandlerFn } from '../types.js';
+import type {
+  CallOptions,
+  TransportContext,
+  TransportEventHandler,
+  TransportEventMeta,
+  TransportEventUnsubscribe,
+  TransportHandlerFn,
+  TransportTopic,
+} from '../types.js';
+
+const logger = Logger.for('transport');
 
 /** in-process 驱动构造选项 */
 export interface InProcessDriverOptions {
@@ -88,4 +99,58 @@ export class InProcessTransportDriver implements TransportDriverPort {
 
   /** 优雅停机：无外部资源，无需动作 */
   async close(): Promise<void> {}
+
+  // ---------------- 事件面（M10 E-12：进程内扇出） ----------------
+
+  /** 主题 → 订阅方集合（进程内，单实例形态） */
+  private readonly eventHandlers = new Map<TransportTopic, Set<TransportEventHandler>>();
+
+  /**
+   * 发布事件：同步扇出到本进程订阅方，订阅方异常只记日志不中断其他订阅方
+   *
+   * 单实例形态下 SSE 连接与事件源同进程，因此无需 Redis 即可端到端推送；
+   * 多副本请切 `TRANSPORT_DRIVER=redis`（命中跨实例扇出），业务代码不变。
+   * @param topic 事件主题
+   * @param payload 事件载荷（须可 JSON 序列化）
+   */
+  async publish(topic: TransportTopic, payload: unknown): Promise<void> {
+    assertTopic(topic);
+    const handlers = this.eventHandlers.get(topic);
+    if (!handlers || handlers.size === 0) return;
+    const meta: TransportEventMeta = {
+      topic,
+      driver: 'in-process',
+      instanceId: this.options.instanceId,
+      emittedAt: Date.now(),
+    };
+    for (const handler of [...handlers]) {
+      try {
+        handler(payload, meta);
+      } catch (error) {
+        logger.warn('in-process 事件订阅方抛出异常（已隔离，不影响其他订阅方）', {
+          topic,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  /**
+   * 订阅事件
+   * @param topic 事件主题
+   * @param handler 处理器
+   * @returns 取消订阅函数（幂等）
+   */
+  async subscribe(topic: TransportTopic, handler: TransportEventHandler): Promise<TransportEventUnsubscribe> {
+    assertTopic(topic);
+    const bucket = this.eventHandlers.get(topic) ?? new Set<TransportEventHandler>();
+    bucket.add(handler);
+    this.eventHandlers.set(topic, bucket);
+    return () => {
+      const current = this.eventHandlers.get(topic);
+      if (!current) return;
+      current.delete(handler);
+      if (current.size === 0) this.eventHandlers.delete(topic);
+    };
+  }
 }

@@ -32,6 +32,12 @@
  * @modified 2026-10-15 donttemo M9/PRD-009：① 补配置中心两权限点（system:config:read/write，api-spec §3.10
  *   端点守卫）与「参数配置」菜单（/system/configs，需 system:config:read）——权限点与菜单同批建出；
  *   ② audit_module 字典补 queue / config 值（队列死信重放与配置变更审计分别以两 module 落盘）
+ * @modified 2026-10-15 donttemo M10 E-13：补站内信权限点 notification:read（消息中心六端点守卫，
+ *   按「可授予可回收的能力面」口径成码，无菜单——铃铛是顶栏全局元素）并授予 user 与 M8 三示范角色；
+ *   清场追加 notifications 表
+ * @modified 2026-10-16 donttemo M10 E-09：补附件上传权限点 file:create（POST /api/v1/files 守卫，
+ *   按「可授予可回收的能力面」口径成码，无菜单——上传是表单内嵌能力而非路由页）并授予 user 角色；
+ *   清场追加 upload_files 表
  * @module example-api
  */
 
@@ -117,6 +123,12 @@ const FRAMEWORK_PERMISSIONS: PermissionSeed[] = [
   // 真机部署修复：缺少这两点会让整个队列管理功能面对任何角色都返回 3002，必须随种子建出并授予 admin。
   { code: QUEUE_PERM_LIST, name: '队列查看', type: 'api', module: 'queue' },
   { code: QUEUE_PERM_MANAGE, name: '队列管理', type: 'api', module: 'queue' },
+  // M10 E-13：站内信消息中心（/api/v1/notifications 六个端点的守卫）。
+  // 无对应菜单——铃铛是顶栏全局元素而非路由页；权限点仍显式成码，便于按岗授予 / 回收。
+  { code: PERM.NOTIFICATION_READ, name: '消息中心', type: 'api', module: 'notification' },
+  // M10 E-09：附件上传（POST /api/v1/files 的守卫）。
+  // 无对应菜单——上传是表单内嵌能力（CrudTable 附件字段 / el-upload）而非路由页；元数据与下载登录即可。
+  { code: PERM.FILE_CREATE, name: '附件上传', type: 'api', module: 'file' },
 ];
 
 /** 业务权限点：演示「未授权则菜单不可见 / 接口 3002」（PRD-003 FR-09） */
@@ -142,6 +154,12 @@ const USER_ROLE_CODES: string[] = [
   PERM.AUTH_CHANGE_PASSWORD,
   PERM.USER_READ,
   PERM.DICT_READ,
+  // M10 E-13：消息中心。任务终态通知的收件人就是派发人，而不派发任务不意味着不需要「我的消息」，
+  // 故按「人人可看的收件箱」口径授予普通用户（运维告警类消息仍靠权限码裁剪主题）。
+  PERM.NOTIFICATION_READ,
+  // M10 E-09：附件上传。带附件字段的表单是普通用户的日常操作（头像 / 附件 CRUD），
+  // 按与 NOTIFICATION_READ 同口径授予；存储配额与类型白名单由 @fw/storage 服务端把关。
+  PERM.FILE_CREATE,
 ];
 
 /** 菜单定义：name / path / component / icon / 所需权限码 / 排序 / 子菜单 */
@@ -197,6 +215,10 @@ const MENU_TREE: MenuSeed[] = [
 async function truncate(): Promise<void> {
   await prisma.auditLog.deleteMany();
   await prisma.refreshToken.deleteMany();
+  // M10 E-13：站内信（收件人 ID 逻辑外键指向 users，先于主表清）
+  await prisma.notification.deleteMany();
+  // M10 E-09：附件元数据（owner_id 逻辑外键指向 users，先于主表清）
+  await prisma.uploadFile.deleteMany();
   await prisma.rolePermission.deleteMany();
   await prisma.userRole.deleteMany();
   await prisma.userDepartment.deleteMany();
@@ -469,9 +491,9 @@ async function main(): Promise<void> {
     await prisma.rolePermission.create({ data: { roleId: userRole.id, permissionId: permIdByCode.get(code) as string } });
   }
   const scopeDemoGrants: Array<{ roleId: string; codes: string[] }> = [
-    { roleId: deptLeaderRole.id, codes: [PERM.USER_READ, PERM.USER_UPDATE, PERM.AUDIT_READ] },
-    { roleId: deptMemberRole.id, codes: [PERM.USER_READ, PERM.USER_UPDATE] },
-    { roleId: selfUpdaterRole.id, codes: [PERM.USER_READ, PERM.USER_UPDATE] },
+    { roleId: deptLeaderRole.id, codes: [PERM.USER_READ, PERM.USER_UPDATE, PERM.AUDIT_READ, PERM.NOTIFICATION_READ] },
+    { roleId: deptMemberRole.id, codes: [PERM.USER_READ, PERM.USER_UPDATE, PERM.NOTIFICATION_READ] },
+    { roleId: selfUpdaterRole.id, codes: [PERM.USER_READ, PERM.USER_UPDATE, PERM.NOTIFICATION_READ] },
   ];
   for (const grant of scopeDemoGrants) {
     for (const code of grant.codes) {

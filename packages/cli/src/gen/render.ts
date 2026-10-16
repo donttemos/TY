@@ -322,7 +322,8 @@ function renderFormCode(formFields: FieldMeta[], author: string, created: string
       if (field.required && field.control !== 'switch') {
         rules.push(`{ required: true, message: '请输入${field.label}', trigger: 'blur' }`);
       }
-      if (field.maxLength !== undefined) {
+      // 附件字段：长度校验无意义（值是文件 id），类型/大小白名单由服务端 @fw/storage 把关
+      if (field.maxLength !== undefined && field.control !== 'upload') {
         rules.push(`{ max: ${field.maxLength}, message: '长度不超过 ${field.maxLength}', trigger: 'blur' }`);
       }
       const rulesText = rules.length > 0 ? `, rules: [${rules.join(', ')}]` : '';

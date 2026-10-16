@@ -9,6 +9,7 @@
  *   与 audit:export（§3.7 异步导出）
  * @modified 2026-10-15 donttemo M9/PRD-009 FR-06：新增 system:config:read / system:config:write（配置中心
  *   管理端点守卫；读写分离——只读用户可查当前生效值，写权限独立授予）
+ * @modified 2026-10-15 donttemo M10 E-13：新增 notification:read（站内信消息中心守卫）
  * @module @fw/auth
  */
 
@@ -77,6 +78,20 @@ export const PERM = {
   CONFIG_READ: 'system:config:read',
   /** 配置中心写（M9/PRD-009：PUT /configs/:key 白名单键热更） */
   CONFIG_WRITE: 'system:config:write',
+  /**
+   * 站内信（M10 E-13）：消息中心的查看与已读/删除（`/notifications` 全部端点）。
+   *
+   * 为何不落「登录即可」：任务面（`/jobs/:id/*`）的语义是「我自己的执行产物」，天然人人有；
+   * 而消息中心是可授予、可回收的能力面（例如只给管理岗开通运维告警触达），
+   * 因此显式成码——与审计 / 队列同构的「权限点 + seed」流程。
+   */
+  NOTIFICATION_READ: 'notification:read',
+  /**
+   * 附件上传（M10 E-09）：`POST /api/v1/files`（multipart）的守卫。
+   * 元数据查看（GET /files/:id）与下载（GET /files/:id/download）登录即可——
+   * 与任务产物下载同语义（自己的执行/上传产物）；上传消耗存储面，显式成码便于按岗授予。
+   */
+  FILE_CREATE: 'file:create',
 } as const;
 
 /** 权限码字面量类型 */

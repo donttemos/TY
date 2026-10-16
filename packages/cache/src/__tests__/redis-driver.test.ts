@@ -4,6 +4,8 @@
  *   集合登记、条件操作走 Lua、TTL 校验与 PONG 探测；使 TC-CACHE-001/009 可在无真实 Redis 的沙箱内闭环。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-16 donttemo 驱动审查修复配套：集合登记断言改「单条 Lua 原子」；
+ *   parseClusterNodes 用例覆盖凭据段（密码不进 host）
  * @module @fw/cache
  */
 
@@ -45,11 +47,13 @@ describe('@fw/cache · redis 驱动', () => {
     expect(await store.mget([])).toEqual([]);
   });
 
-  it('集合登记（SADD + PEXPIRE）与读取', async () => {
+  it('集合登记走单条 Lua（SADD + PEXPIRE 原子），TTL 同步生效（防幽灵缓存）', async () => {
     const { store, client } = makeStore();
     await store.sadd('tag', ['k1', 'k2'], 60000);
     expect(await client.smembers('tag')).toEqual(['k1', 'k2']);
     expect(await store.smembers('tag')).toEqual(['k1', 'k2']);
+    // 原子性证明：SADD 与 PEXPIRE 在同一条脚本内完成（非两步命令——中间崩溃集合会失去 TTL 永存）
+    expect(client.evalCalls).toBe(1);
     // TTL 必须被设置（防幽灵缓存）
     expect(await client.pexpire('tag', 1)).toBe(1);
     await store.sadd('empty-set', [], 60000);
@@ -89,11 +93,26 @@ describe('@fw/cache · redis 驱动', () => {
     await store.close();
   });
 
-  it('集群连接串解析支持带协议前缀与默认端口', () => {
-    expect(parseClusterNodes('127.0.0.1:7000,redis://10.0.0.1:7001,host-only')).toEqual([
+  it('集群连接串解析支持协议前缀、默认端口与凭据段（密码不进 host）', () => {
+    const plain = parseClusterNodes('127.0.0.1:7000,redis://10.0.0.1:7001,host-only');
+    expect(plain.nodes).toEqual([
       { host: '127.0.0.1', port: 7000 },
       { host: '10.0.0.1', port: 7001 },
       { host: 'host-only', port: 6379 },
     ]);
+    expect(plain.password).toBeUndefined();
+
+    // redis://:pwd@host:port —— 此前把用户信息段当进 host 解析，得到空 host，集群直接连不上
+    const withPwd = parseClusterNodes('redis://:s3cret@10.0.0.1:7000,redis://10.0.0.2:7001');
+    expect(withPwd.nodes).toEqual([
+      { host: '10.0.0.1', port: 7000 },
+      { host: '10.0.0.2', port: 7001 },
+    ]);
+    expect(withPwd.password).toBe('s3cret');
+
+    // redis://user:pwd@host —— Redis 忽略用户名，密码取冒号后段
+    const withUser = parseClusterNodes('redis://default:pw@10.0.0.1:7000');
+    expect(withUser.nodes).toEqual([{ host: '10.0.0.1', port: 7000 }]);
+    expect(withUser.password).toBe('pw');
   });
 });

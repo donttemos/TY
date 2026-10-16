@@ -33,6 +33,8 @@ model Post {
   views     Int      @default(0)
   rating    Decimal  @db.Decimal(3, 2)
   authorId  String
+  contractFileId String
+  avatarAttachmentId String?
   published Boolean  @default(false)
   status    PostStatus @default(DRAFT)
   createdAt DateTime @default(now())
@@ -85,6 +87,16 @@ describe('resolveFieldMeta', () => {
   it('外键 *_id 为 string + 关联选择，且必填', () => {
     const author = byName('authorId');
     expect(author).toMatchObject({ tsType: 'string', control: 'select', isForeignKey: true, required: true });
+  });
+
+  it('M10 E-09 附件字段：*FileId / *AttachmentId → upload 控件，值存文件 id（不做外键下拉）', () => {
+    const file = byName('contractFileId');
+    expect(file).toMatchObject({ tsType: 'string', control: 'upload', isAttachment: true, isForeignKey: false, required: true });
+    const avatar = byName('avatarAttachmentId');
+    expect(avatar).toMatchObject({ control: 'upload', isAttachment: true, required: false });
+    // 附件字段不进列表列、不作查询条件
+    expect(file.listable).toBe(false);
+    expect(file.searchable).toBe(false);
   });
 
   it('enum 为联合字面量 + 字典下拉', () => {

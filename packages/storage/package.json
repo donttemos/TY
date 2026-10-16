@@ -1,0 +1,43 @@
+{
+  "name": "@fw/storage",
+  "version": "0.5.5",
+  "description": "文件存储端口：统一 StoragePort（local / s3 双驱动）、上传类型/大小白名单校验（默认收紧）、*_DRIVER 枚举装配（PRD-010 E-09）",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@fw/config": "workspace:*",
+    "@fw/core": "workspace:*",
+    "@nestjs/common": "^11.2.7"
+  },
+  "peerDependencies": {
+    "@aws-sdk/client-s3": "^3.500.0"
+  },
+  "peerDependenciesMeta": {
+    "@aws-sdk/client-s3": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^11.2.7",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^4.1.11",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.11"
+  }
+}

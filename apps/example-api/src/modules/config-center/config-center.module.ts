@@ -11,6 +11,8 @@
  *   QUEUE_SERVICE 令牌可选注入（与 QueueModule 消费 CACHE_SERVICE 的先例一致）。
  * @modified 2026-10-15 donttemo M10 E-02：nacos 驱动转正入装配（CONFIG_CENTER_NACOS_* 6 键，
  *   serverAddr 缺失启动即失败）；注入 PrismaConfigHistoryStore（多实例版本/回滚一致）
+ * @modified 2026-10-15 donttemo M10/E-16：快照历史保留版本数经 CONFIG_CENTER_HISTORY_MAX 配置
+ *   （服务 maxHistory 与持久淘汰窗口同源，缺省 20）
  * @author donttemo
  * @created 2026-10-15
  * @module example-api/config-center
@@ -76,15 +78,23 @@ export class ConfigCenterModule {
         },
       },
       // M10 E-02：快照历史持久端口（config_snapshots 表）——多实例版本基线与回滚候选跨实例一致（AC2）
+      // M10/E-16：淘汰窗口经 CONFIG_CENTER_HISTORY_MAX 配置（与 ConfigCenterService.maxHistory 同源）
       {
         provide: CONFIG_HISTORY,
-        useFactory: (client: PrismaClientLike): ConfigHistoryPort => new PrismaConfigHistoryStore(client),
+        useFactory: (client: PrismaClientLike): ConfigHistoryPort =>
+          new PrismaConfigHistoryStore(client, env.CONFIG_CENTER_HISTORY_MAX),
         inject: [DB_CLIENT],
       },
       {
         provide: CONFIG_CENTER,
         useFactory: (driver: ConfigDriverPort, audit: AuditService, history: ConfigHistoryPort): ConfigCenterService =>
-          new ConfigCenterService({ driver, env, audit: new ConfigAuditBridge(audit), history }),
+          new ConfigCenterService({
+            driver,
+            env,
+            audit: new ConfigAuditBridge(audit),
+            history,
+            maxHistory: env.CONFIG_CENTER_HISTORY_MAX,
+          }),
         inject: [CONFIG_CENTER_DRIVER, AuditService, CONFIG_HISTORY],
       },
       // 可订阅框架服务集合：cache / queue / tenant / audit 为全局模块导出；

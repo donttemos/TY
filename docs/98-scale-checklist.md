@@ -18,7 +18,7 @@
 | 1.1 | 连接池上限与实例数匹配 | `DB_POOL_MAX`（默认 10） | `DB_POOL_MAX × 实例数 < 数据库 max_connections`，留 20% 余量 |
 | 1.2 | 慢查询阈值设置合理 | `DB_SLOW_MS`（默认 500，最小 10） | 生产 200–500；低于 100 会产生噪声告警 |
 | 1.3 | 依赖就绪探针接入编排 | `GET /ready` 的 `checks.db` | 编排 readinessProbe 指向 `/ready`；DB 不可用时 503 摘流量 |
-| 1.4 | 分页查询走索引 | Repository `pageItems` | 目标：单表 100 万行 P95 ≤ 200ms（见压测基线 §3） |
+| 1.4 | 分页查询走索引 | Repository `pageItems` | 目标：单表 100 万行 P95 ≤ 200ms（见压测基线 §3）；**大体量表必须配套归档策略保持在线行数有界**——审计日志经 E-10 归档（`AUDIT_ARCHIVE_RETENTION_DAYS` + 定时任务 `audit.archive` 迁入 `audit_log_archives`，先写后删 fail-closed），在线表长期可持续维持该口径，不随运行时长退化 |
 | 1.5 | 无 N+1 查询 | Repository 契约（无裸 SQL，走 `@fw/db`） | 列表接口的 SQL 条数与返回行数无关（一次 `findMany` + 一次 `count`） |
 | 1.6 | 迁移单点执行 | `pnpm db:migrate` + 迁移锁 | 迁移只在一个实例执行；禁止手工改库结构 |
 | 1.7 | 生产禁用 SQLite | `DB_DRIVER` | 生产用 `mysql` / `postgres`；SQLite 仅本地与测试 |

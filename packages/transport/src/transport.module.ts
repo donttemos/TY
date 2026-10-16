@@ -109,8 +109,8 @@ export interface TransportModuleOptions {
   overrides?: Partial<TransportRuntimeOptions>;
   /** 自定义驱动（测试注入 fake；传入后忽略 TRANSPORT_DRIVER） */
   driver?: TransportDriverPort;
-  /** 自定义 Redis 客户端工厂（测试注入 fake；仅 redis 驱动生效） */
-  createClient?: (purpose: 'caller' | 'worker') => RedisLike | Promise<RedisLike>;
+  /** 自定义 Redis 客户端工厂（测试注入 fake；仅 redis 驱动生效。subscriber 供事件面独立订阅连接） */
+  createClient?: (purpose: 'caller' | 'worker' | 'subscriber') => RedisLike | Promise<RedisLike>;
   /** 就绪探针实例（与 FwCoreModule 共用同一对象） */
   readinessProbe?: TransportReadinessProbe;
   /** 是否跳过 @TransportHandler 自动扫描（测试用） */

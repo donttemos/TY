@@ -12,7 +12,7 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import { DB_CLIENT, type PrismaClientLike } from '@fw/db';
-import type { JobStatus } from './job-center.port.js';
+import type { JobStatus, JobView } from './job-center.port.js';
 
 /** 持久层任务行（与 jobs 表列一一对应） */
 export interface JobRecordRow {
@@ -251,4 +251,28 @@ export class PrismaJobStore implements JobStore {
   async count(): Promise<number> {
     return this.delegate.count();
   }
+}
+
+/**
+ * 行 → 视图投影（db / bullmq 驱动与 JobExecutor 共用）
+ *
+ * 放在持久层而非驱动内：JobExecutor 需要它（执行后广播事件视图），而 JobExecutor 被
+ * 驱动导入——投影若留在驱动内会形成 `driver → executor → driver` 的循环导入。
+ * @param row 持久层行
+ * @returns 对外任务视图
+ */
+export function jobRowToView(row: JobRecordRow): JobView {
+  return {
+    id: row.id,
+    type: row.type,
+    title: row.title,
+    status: row.status,
+    progress: row.progress,
+    message: row.message,
+    error: row.error,
+    traceId: row.traceId ?? '',
+    fileName: row.fileName,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
 }

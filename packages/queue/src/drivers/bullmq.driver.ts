@@ -12,6 +12,8 @@
  * @modified 2026-10-15 donttemo rateLimit 热更收口：限速变更时**先建新消费器（新 limiter）再关旧**，
  *   消除「待重启才生效」的固化窗口；重建失败回滚沿用旧消费器，不让热更把消费面打没。
  *   旧消费器优雅关闭（等待在途），短暂并存由 bullmq 同队列多消费器语义兜底。
+ * @modified 2026-10-16 donttemo 驱动审查修复：构造时浅拷贝 options——applyRuntimeOptions 不再
+ *   回写调用方传入对象，多实例共用同一配置字面量时不互相污染
  * @module @fw/queue
  */
 
@@ -84,9 +86,17 @@ export class BullmqQueueDriver implements QueueDriverPort {
   private started = false;
 
   /**
+   * 驱动私有选项副本：构造时浅拷贝，applyRuntimeOptions 就地更新只作用于本实例，
+   * 不回写调用方传入的对象（多实例共用同一 options 字面量时不再互相污染）
+   */
+  private readonly options: BullmqDriverOptions;
+
+  /**
    * @param options 连接串、前缀、并发、限速与死信上限
    */
-  constructor(private readonly options: BullmqDriverOptions) {}
+  constructor(options: BullmqDriverOptions) {
+    this.options = { ...options };
+  }
 
   /** @inheritdoc */
   applyRuntimeOptions(patch: { concurrency?: number; rateLimit?: number }): void {

@@ -14,6 +14,8 @@
  *   四行同构）、异步任务表（jobs，内存任务中心，进度按时间线推进）与对应权限点 / 菜单 / 字典
  * @modified 2026-10-15 donttemo E-07：新增 audit_module 字典（分类 + auth/user/role/tenant 四项，
  *   与 example-api seed 同形——审计页模块筛选项的数据源）
+ * @modified 2026-10-16 donttemo M10 E-09：新增附件元数据（uploadFiles 内存表，镜像后端 upload_files
+ *   表与 @fw/storage 语义：元数据行 + 内存字节，下载逐字节回放）与 file:create 权限点（授予 user 角色）
  * @module admin-web/mock
  */
 
@@ -249,6 +251,35 @@ export interface MockTokenPayload {
 }
 
 /** 内存数据库（dev server 进程级单例，请求间保持） */
+/** M10 E-13 站内信（镜像后端 notifications 表；时间统一 ISO 字符串） */
+export interface MockNotification {
+  id: string;
+  userId: string;
+  kind: 'job.finished' | 'job.failed' | 'queue.dead-letter' | 'queue.backlog' | 'system';
+  level: 'info' | 'success' | 'warning' | 'error';
+  title: string;
+  content: string | null;
+  refType: string | null;
+  refId: string | null;
+  traceId: string | null;
+  readAt: string | null;
+  createdAt: string;
+}
+
+/** M10 E-09 附件元数据（镜像后端 upload_files 表；字节存内存，下载逐字节回放） */
+export interface MockUploadFile {
+  id: string;
+  ownerId: string | null;
+  originalName: string;
+  storedName: string;
+  mimeType: string;
+  size: number;
+  deletedAt: string | null;
+  createdAt: string;
+  /** mock 专用：文件字节（真实后端内容在存储端口，不在元数据表） */
+  content: Buffer;
+}
+
 export interface MockDb {
   permissions: MockPermission[];
   roles: MockRole[];
@@ -263,6 +294,10 @@ export interface MockDb {
   sessions: MockSession[];
   tenants: MockTenant[];
   jobs: MockJob[];
+  /** M10 E-13：站内信（消息中心铃铛数据源；mock 无事件面，故由 seed 预置演示消息） */
+  notifications: MockNotification[];
+  /** M10 E-09：附件元数据（/files 端点数据源；上传即新增，下载逐字节回放） */
+  uploadFiles: MockUploadFile[];
   /** M9 配置中心：运行时覆盖（点路径 → 覆盖值），镜像真实后端 overlay */
   configOverrides: Record<string, unknown>;
   /** M9 配置中心：各键最近生效时间（ISO 串；env 来源且未被覆盖为 null） */
@@ -319,10 +354,14 @@ const PERMISSIONS: MockPermission[] = [
   // M9（PRD-009 FR-06）：配置中心读写分离权限点（api-spec §3.10）
   { id: 'p-config-read', code: 'system:config:read', name: '参数配置查询', type: 'api', module: 'config' },
   { id: 'p-config-write', code: 'system:config:write', name: '参数配置修改', type: 'api', module: 'config' },
+  // M10 E-13：站内信消息中心（api-spec §3.14 六端点守卫；无菜单——铃铛是顶栏全局元素）
+  { id: 'p-notification-read', code: 'notification:read', name: '消息中心', type: 'api', module: 'notification' },
+  // M10 E-09：附件上传（api-spec §3.19 POST /files 守卫；无菜单——上传是表单内嵌能力）
+  { id: 'p-file-create', code: 'file:create', name: '附件上传', type: 'api', module: 'file' },
 ];
 
 /** 普通用户角色默认权限（刻意不含 role:read / audit:read / user:assign-role，用于验证越权拦截） */
-const USER_ROLE_PERMS = ['p-auth-logout', 'p-auth-me', 'p-auth-change-password', 'p-user-read'];
+const USER_ROLE_PERMS = ['p-auth-logout', 'p-auth-me', 'p-auth-change-password', 'p-user-read', 'p-notification-read', 'p-file-create'];
 
 /** 菜单树：镜像 seed 的 MENU_TREE，并按 PRD-005 页面清单补 字典管理 / 菜单管理 */
 const MENUS: MockMenu[] = [
@@ -510,6 +549,42 @@ function seedQueue(): MockQueueState {
   };
 }
 
+/**
+ * M10 E-13 演示站内信：mock 没有事件面（不产事件），若消息面恒为空则铃铛与未读数永远无从验证；
+ * 故预置两条（一未读一已读）覆盖角标、列表与「全部已读」三条路径。
+ */
+function seedNotifications(): MockNotification[] {
+  const base = Date.parse('2026-10-15T02:00:00.000Z');
+  return [
+    {
+      id: 'ntf-demo-0001',
+      userId: 'u-admin',
+      kind: 'job.finished',
+      level: 'success',
+      title: '任务完成：审计日志导出',
+      content: '产物 audit-logs-2026-10-15.csv 已可下载',
+      refType: 'job',
+      refId: 'job-demo-0001',
+      traceId: 'trace-mock-ntf-1',
+      readAt: null,
+      createdAt: new Date(base + 60_000).toISOString(),
+    },
+    {
+      id: 'ntf-demo-0002',
+      userId: 'u-admin',
+      kind: 'queue.backlog',
+      level: 'warning',
+      title: '队列积压告警',
+      content: '等待任务 150 已超过阈值 100',
+      refType: 'queue',
+      refId: 'exports',
+      traceId: null,
+      readAt: new Date(base + 90_000).toISOString(),
+      createdAt: new Date(base).toISOString(),
+    },
+  ];
+}
+
 /** 构建内存数据库（幂等重置，供 mock server 复用） */
 export function createDb(): MockDb {
   return {
@@ -529,6 +604,10 @@ export function createDb(): MockDb {
     queue: seedQueue(),
     tenants: seedTenants(),
     jobs: [],
+    // M10 E-13：演示消息（mock 无 SSE 事件面，铃铛与未读数需要既有数据可看）
+    notifications: seedNotifications(),
+    // M10 E-09：附件（空表起步，上传即新增）
+    uploadFiles: [],
     sessions: [],
     configOverrides: {},
     configUpdatedAt: {},

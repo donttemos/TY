@@ -1,0 +1,38 @@
+/*
+ * @file 管理后台前端 tsconfig
+ * @description 与框架包（tsconfig.base.json 的 NodeNext 基线）不同：前端产物跑在浏览器，模块解析走 bundler、需 DOM 类型；
+ *   严格级别保持一致（strict 全开、禁用 any、大小写敏感）。类型检查覆盖 src 与构建脚本，保证 vue-tsc --noEmit 全量通过。
+ * @author donttemo
+ * @created 2026-10-13
+ * @module __APP_NAME__-web/tsconfig
+ */
+
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "node"],
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "preserve",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.vue",
+    "vite.config.ts",
+    "env.d.ts"
+  ]
+}

@@ -21,7 +21,10 @@ import type {
   JobView,
 } from '../job-center.port.js';
 import { JobExecutor } from '../job-executor.js';
-import type { JobRecordRow, JobStore } from '../jobs.store.js';
+import { emitJobEvent } from '../job-events.js';
+import { jobRowToView, type JobRecordRow, type JobStore } from '../jobs.store.js';
+
+export { jobRowToView };
 
 const logger = Logger.for('jobs');
 
@@ -43,11 +46,17 @@ export class DbJobDriver implements JobCenterPort {
 
   private readonly executor: JobExecutor;
 
+  /**
+   * @param store 任务存储
+   * @param registry 执行体注册表（跨实例重跑的重建依据）
+   * @param options 产物体积上限（M10/E-16，缺省 20MB）
+   */
   constructor(
     private readonly store: JobStore,
     private readonly registry: RunnerRegistryLike,
+    options: { maxArtifactChars?: number } = {},
   ) {
-    this.executor = new JobExecutor(store);
+    this.executor = new JobExecutor(store, { maxArtifactChars: options.maxArtifactChars });
   }
 
   /** 派发：先落库（pending），再在本实例后台执行并把状态写回 */
@@ -98,6 +107,8 @@ export class DbJobDriver implements JobCenterPort {
     const snapshot = { ...view };
     void this.executor.execute(row, runner);
     logger.info('异步任务已派发', { jobId: id, type: view.type, ownerId: options.ownerId, driver: 'db', traceId: view.traceId });
+    // E-12：派发即推（db 驱动跨实例语义下，SSE 由派发实例广播，订阅方可落任意实例）
+    emitJobEvent('created', snapshot, options.ownerId);
     return snapshot;
   }
 
@@ -128,6 +139,7 @@ export class DbJobDriver implements JobCenterPort {
     const snapshot = jobRowToView(reset);
     void this.executor.execute(reset, runner);
     logger.info('异步任务重跑', { jobId: id, type: row.type, driver: 'db' });
+    emitJobEvent('created', snapshot, ownerId);
     return { view: snapshot };
   }
 
@@ -143,23 +155,6 @@ export class DbJobDriver implements JobCenterPort {
   private prune(): void {
     void this.store.prune(JOB_DB_MAX_ENTRIES).catch(() => undefined);
   }
-}
-
-/** 行 → 视图投影（db / bullmq 驱动共用） */
-export function jobRowToView(row: JobRecordRow): JobView {
-  return {
-    id: row.id,
-    type: row.type,
-    title: row.title,
-    status: row.status,
-    progress: row.progress,
-    message: row.message,
-    error: row.error,
-    traceId: row.traceId ?? '',
-    fileName: row.fileName,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
 }
 
 /** 读取当前请求上下文的 traceId（无上下文时用时间戳兜底） */

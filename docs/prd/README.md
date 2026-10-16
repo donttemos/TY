@@ -15,13 +15,14 @@
 | [PRD-007](./prd-007-queue-scheduler.md) | M7 | 队列与定时任务 | M1, M4 | P2 | 已发布 v0.2.0 |
 | [PRD-008](./prd-008-multitenancy-scale.md) | M8 | 多租户与规模化演进 | M2–M4、M7 | P2 | 已发布 v0.2.0（条件通过） |
 | [PRD-009](./prd-009-config-center.md) | M9 | 配置中心与热更新（L-02 / FR-08 收口） | M1、M3、M5 | P2 | 已发布 v0.4.0（2026-10-15） |
-| [PRD-010](./prd-010-next-stage-enhancements.md) | M10 | 下一阶段增强：多实例一致性收口与模板生态 | M7、M4、M9 | P1 | 草案（2026-10-15） |
+| [PRD-010](./prd-010-next-stage-enhancements.md) | M10 | 下一阶段增强：多实例一致性收口与模板生态 | M7、M4、M9 | P1 | 已发布 v0.5.0（P0/P1 已交付，P2 过半，P3 全部落地） |
+| [PRD-011](./prd-011-saas-operations-and-ecosystem.md) | M11 | SaaS 运营能力与生态扩展（多租户运营 / 插件市场 / 更多适配器 / 通知渠道 / 生成器增强 / 微服务拆分 / 可观测告警 / 安全合规 / 开发者体验） | M1–M10（重点 M8、M9、M10） | P1 | 草案（2026-10-17） |
 
 ## 待规划 PRD（尚未排期）
 
 > 原列表中的「文件存储抽象」「消息通知」「国际化」已由 [PRD-010](./prd-010-next-stage-enhancements.md) 收编为 E-09 / E-12~E-13 / E-14，随该 PRD 分阶段排期。
-
-内容 / 门户模板（CMS）、开放平台网关（API Key + 签名 + 配额，E-07 的 apikey 部分仅覆盖签名约定，网关配额另行立项）。
+>
+> **「开放平台网关（API Key + 签名 + 配额）」已由 [PRD-011](./prd-011-saas-operations-and-ecosystem.md) 收编**：API Key 轮换为 S-39、租户配额与用量为 S-01~S-03。**「内容 / 门户模板（CMS）」仍待规划**（NG5 边界内，尚未有立项）。
 
 ## PRD 模板约定
 

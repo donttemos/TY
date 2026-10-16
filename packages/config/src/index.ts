@@ -18,6 +18,7 @@ export {
   TRANSPORT_DRIVER_VALUES,
   TRANSPORT_ROLE_VALUES,
   CONFIG_CENTER_DRIVER_VALUES,
+  STORAGE_DRIVER_VALUES,
 } from './env-schema.js';
 export { ConfigValidationError, translateIssues } from './config-error.js';
 export type { ConfigIssue } from './config-error.js';

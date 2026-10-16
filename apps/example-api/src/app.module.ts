@@ -20,6 +20,11 @@
  *   选 memory/db/bullmq 驱动，默认 memory 行为不变）
  * @modified 2026-10-15 donttemo M10 E-03：接入框架级 API 限流——RATE_LIMIT_LIMITER 按 env 构造
  *   （令牌桶状态存 CACHE_STORE），RateLimitMiddleware 挂 /api/v1 全路由（豁免白名单在 limiter 内判定）
+ * @modified 2026-10-15 donttemo M10 E-12：接入 EventsModule（SSE 实时推送）+ 队列死信告警汇
+ *   （QueueModule.forRoot 的 alert 转事件面）
+ * @modified 2026-10-15 donttemo M10 E-13：接入 NotificationsModule（站内信订阅事件面落库 + 用户面端点）
+ * @modified 2026-10-15 donttemo M10 E-17：接入 ClientErrorsModule（前端 RUM 错误上报接收面
+ *   /api/v1/telemetry/client-errors，@Public + error 级结构化日志 + 进程内计数）
  * @module example-api
  */
 import { Module, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
@@ -34,14 +39,19 @@ import { TenantModule } from '@fw/tenant';
 import { TransportModule, createTransportReadinessProbe } from '@fw/transport';
 import { AppAuthModule } from './modules/auth/app-auth.module.js';
 import { CacheDemoModule } from './modules/cache-demo/cache-demo.module.js';
+import { ClientErrorsModule } from './modules/client-errors/client-errors.module.js';
 import { ConfigCenterModule } from './modules/config-center/config-center.module.js';
 import { DemoModule, dbReadinessProbe } from './modules/demo/demo.module.js';
 import { DemoItemModule } from './modules/demo-item/demo-item.module.js';
 import { DemoQueueModule } from './modules/demo-queue/demo-queue.module.js';
 import { DemoTransportModule } from './modules/demo-transport/demo-transport.module.js';
+import { EventsModule } from './modules/events/events.module.js';
+import { publishQueueAlert } from './modules/events/queue-alerts.js';
 import { JobsModule } from './modules/jobs/jobs.module.js';
+import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { TenantAdminModule } from './modules/tenant/tenant-admin.module.js';
 import { PrismaTenantStore } from './modules/tenant/prisma-tenant-store.js';
+import { UploadModule } from './modules/upload/upload.module.js';
 
 /** 缓存就绪探针：与 CacheModule.forRoot 共用同一实例（装配后由模块绑定缓存服务） */
 export const cacheReadinessProbe = createCacheReadinessProbe();
@@ -91,7 +101,20 @@ function parseWhitelist(raw: string): string[] {
     CacheModule.forRoot({ readinessProbe: cacheReadinessProbe }),
     // 执行守卫复用 @fw/cache 的 CacheService：CACHE_DRIVER=redis 时 cron 天然集群单跑，
     // memory 驱动下退化为进程内锁并在启动期告警（PRD-007 §8）
-    QueueModule.forRoot({ readinessProbe: queueReadinessProbe }),
+    // M10 E-12：死信告警经模块级汇转 SSE 通道（forRoot 是静态装配点，拿不到 DI 容器）
+    QueueModule.forRoot({
+      readinessProbe: queueReadinessProbe,
+      alert: (record, reason) =>
+        publishQueueAlert({
+          kind: 'dead-letter',
+          at: new Date().toISOString(),
+          queue: record.queue,
+          jobId: record.id,
+          jobName: record.name,
+          attemptsMade: record.attemptsMade,
+          reason,
+        }),
+    }),
     // 传输层（M8 T-M8-05）：默认 TRANSPORT_DRIVER=in-process（进程内直调，零依赖）；
     // 跨进程 / 微服务拆分时一改即切 redis，业务代码零改动（PRD-008 FR-06 / TC-TNT-005）
     TransportModule.forRoot({ readinessProbe: transportReadinessProbe }),
@@ -104,16 +127,26 @@ function parseWhitelist(raw: string): string[] {
     AppAuthModule,
     DemoModule,
     CacheDemoModule,
+    // M10 E-17：前端 RUM 错误上报（admin-web 实时用户监控的服务端接收面；@Public——
+    // 登录页与未登录态异常同样上报；观测旁路不写业务库，主观测路径是 error 级结构化日志）
+    ClientErrorsModule,
     DemoItemModule,
     DemoQueueModule,
     DemoTransportModule,
     // N-02/E-01：异步任务中心（@Global，审计导出与租户迁移共用；任务面端点 /api/v1/jobs；
     // JOB_CENTER_DRIVER 默认 memory = N-02 原行为，db/bullmq 驱动多副本语义见 jobs.module）
     JobsModule.forRoot(),
+    // M10 E-12：SSE 实时推送（任务进度 / 队列告警经统一通道下发；前端轮询降级为兜底）
+    EventsModule,
+    // M10 E-13：站内信 / 通知中心（订阅事件面落库 + /notifications 用户面；实时未读走 SSE）
+    NotificationsModule,
     // N-01：租户管理端点（/api/v1/tenants 五端点；跨租户维护面，标 @IgnoreTenant）
     TenantAdminModule,
     // M9：配置中心（/api/v1/configs 查/改两端点；CONFIG_CENTER_ENABLED=false 时零开销仅 env 视图）
     ConfigCenterModule.forRoot(),
+    // M10 E-09：附件上传（/api/v1/files 三端点；文件内容经 @fw/storage 端口，
+    // STORAGE_DRIVER=local/s3 一改即切，业务代码零改动）
+    UploadModule,
   ],
 })
 export class AppModule implements NestModule {

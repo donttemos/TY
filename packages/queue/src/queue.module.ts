@@ -54,6 +54,8 @@ export interface QueueEnvLike {
   MQ_CRON_ENABLED?: boolean;
   MQ_RATE_LIMIT?: number;
   MQ_DEAD_LETTER_MAX?: number;
+  /** 死信分页每页条数上限（M10/E-16：pageDeadLetters 的 pageSize 钳制上界） */
+  MQ_DEAD_LETTER_PAGE_MAX?: number;
   MQ_SHUTDOWN_TIMEOUT?: number;
   /** bullmq 失速检测间隔（毫秒；0 表示用 bullmq 默认 30s） */
   MQ_STALLED_MS?: number;
@@ -71,6 +73,7 @@ const DEFAULTS = {
   cronEnabled: true,
   rateLimit: 0,
   deadLetterMax: 1000,
+  deadLetterPageMax: 200,
   shutdownTimeout: 30,
   stalledInterval: 30_000,
 };
@@ -97,6 +100,7 @@ export function buildQueueOptions(env: QueueEnvLike, overrides: Partial<QueueRun
     cronEnabled: overrides.cronEnabled ?? env.MQ_CRON_ENABLED ?? DEFAULTS.cronEnabled,
     rateLimit: overrides.rateLimit ?? env.MQ_RATE_LIMIT ?? DEFAULTS.rateLimit,
     deadLetterMax: overrides.deadLetterMax ?? env.MQ_DEAD_LETTER_MAX ?? DEFAULTS.deadLetterMax,
+    deadLetterPageSizeMax: overrides.deadLetterPageSizeMax ?? env.MQ_DEAD_LETTER_PAGE_MAX ?? DEFAULTS.deadLetterPageMax,
     shutdownTimeoutMs: overrides.shutdownTimeoutMs ?? Math.round((env.MQ_SHUTDOWN_TIMEOUT ?? DEFAULTS.shutdownTimeout) * 1000),
     stalledIntervalMs:
       overrides.stalledIntervalMs ?? (env.MQ_STALLED_MS !== undefined ? Math.max(0, Math.round(env.MQ_STALLED_MS)) : DEFAULTS.stalledInterval),

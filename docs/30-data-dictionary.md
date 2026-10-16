@@ -153,6 +153,7 @@ erDiagram
     dict_categories ||--o{ dict_items : "包含字典项"
     users ||--o{ audit_logs : "产生操作记录"
     tenants ||--o{ audit_logs : "归属租户"
+    audit_logs ||--o{ audit_log_archives : "按保留天数归档（E-10）"
     users ||--o{ jobs : "派发任务（owner_id）"
 
     tenants {
@@ -393,7 +394,9 @@ erDiagram
 | `trace_id` | varchar(64) | 否 | NULL | 链路 ID，串联日志 | `idx_audit_trace` |
 | `created_at` | datetime(3) | 是 | — | 操作时间（仅创建，不更新不删除） | `idx_audit_created` |
 
-> 保留期默认 180 天可配；量大时按月分区或归档冷存；查询页按 `user_id + created_at` 组合查询。
+> 保留期默认 180 天可配（`AUDIT_ARCHIVE_RETENTION_DAYS`，M10 E-10 起）：早于保留线的记录由定时任务
+> `audit.archive`（每天 02:00，分布式锁多副本单执行）迁入 §3.17 的 `audit_log_archives` 冷存表，在线表行数持续有界；
+> 查询页按 `user_id + created_at` 组合查询。
 
 ### 3.14 `jobs` 任务登记表（M7 规划为 `job_records`；M10 E-01 落地为 `jobs`）
 
@@ -446,6 +449,76 @@ erDiagram
 | `version` | int | 是 | — | 快照版本号（主键；与 meta.snapshotVersion 同口径，append 为 upsert 语义） | PK |
 | `overlay` | text（JSON 字符串） | 是 | — | 该版本生效时刻的运行时覆盖集（点路径 → 覆盖值；不含 env 基线） | — |
 | `applied_at` | datetime(3) | 是 | — | 该版本生效时间 | — |
+
+### 3.17 `audit_log_archives` 审计归档（M10 E-10）
+
+> 在线表 `audit_logs` 按保留天数迁入的冷存副本（PRD-010 AC7：在线表行数回落，大体量审计不拖垮在线查询）。
+> 归档任务先写本表再删在线表：写入按主键 **upsert 幂等**（崩溃重跑覆盖同 id 不产生重复），失败绝不删在线（fail-closed）。
+> 本表只增不改不删（冷数据），字段与 §3.13 逐项同构（`id` 与在线表一致），另加 `archived_at` 登记归档时刻。
+> 冷数据出口：`GET /api/v1/audit-archives`（查询，dataScope 同源收敛）与 `GET /api/v1/audit-archives/export`（异步导出）。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
+|---|---|---|---|---|---|
+| `id` | varchar(36) | 是 | — | 主键（与在线表 `audit_logs.id` 一致，幂等 upsert 依据） | PK |
+| `tenant_id` | bigint | 是 | 0 | 租户 ID（沿在线表） | — |
+| `user_id` | varchar(36) | 否 | NULL | 操作人（沿在线表） | `idx_audit_archive_user` |
+| `module` | varchar(64) | 是 | — | 模块名（沿在线表） | `idx_audit_archive_module` |
+| `action` | varchar(32) | 是 | — | 动作（沿在线表） | — |
+| `target_type` / `target_id` | varchar(64) | 否 | NULL | 对象类型 / ID（沿在线表） | — |
+| `before_value` / `after_value` | json | 否 | NULL | 变更前 / 后（脱敏后，沿在线表） | — |
+| `ip` | varchar(45) | 否 | NULL | 来源 IP（沿在线表） | — |
+| `user_agent` | varchar(255) | 否 | NULL | 客户端标识（沿在线表） | — |
+| `trace_id` | varchar(64) | 否 | NULL | 链路 ID（沿在线表） | — |
+| `created_at` | datetime(3) | 是 | — | 操作时间（沿在线表，迁移查询的排序键） | `idx_audit_archive_created` |
+| `archived_at` | datetime(3) | 是 | now | 归档时刻 | — |
+
+### 3.18 `notifications` 站内信（M10 E-13）
+
+> 通知中心持久层：业务侧经 `@fw/transport` 事件面订阅（任务终态 / 队列告警）落成**收件人可见**的消息，
+> 前端顶栏铃铛消费未读数。`dedupe_key` **唯一**——事件面可能重复投递（多副本各起一条订阅、
+> 任务重试后再次终态），幂等靠唯一约束而非应用层「先查后写」（并发插入只有一个成功）。
+> 归属人（`user_id`）即读 / 标已读 / 删除的权限边界；`tenant_id` 为逻辑外键（沿本仓跨库约定，
+> 不建物理外键）。保留窗口：每人最多 200 条，超出淘汰最旧（提醒不是档案，避免无界增长拖慢未读计数）。
+> 归档与清理：本表随用户保留策略处理，属可物理删的运营数据（与审计类只增不删的表不同）。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
+|---|---|---|---|---|---|
+| `id` | varchar(36) | 是 | uuid | 主键（`ntf-<uuid>`） | PK |
+| `tenant_id` | bigint | 是 | 0 | 租户 ID（逻辑外键 → `tenants.id`） | — |
+| `user_id` | varchar(36) | 是 | — | 收件人（逻辑外键 → `users.id`；读 / 标已读 / 删除的边界） | `idx_notifications_user_created` / `idx_notifications_user_read` |
+| `kind` | varchar(32) | 是 | — | 业务类型：`job.finished` / `job.failed` / `queue.dead-letter` / `queue.backlog` / `system` | — |
+| `level` | varchar(16) | 是 | info | 展示级别：`info` / `success` / `warning` / `error`（前端着色） | — |
+| `title` | varchar(255) | 是 | — | 标题（列表第一行） | — |
+| `content` | text | 否 | NULL | 正文摘要（失败原因 / 产物文件名等） | — |
+| `ref_type` | varchar(32) | 否 | NULL | 关联资源类型：`job` / `queue` / NULL | — |
+| `ref_id` | varchar(64) | 否 | NULL | 关联资源 ID（如 jobId，供溯源） | — |
+| `trace_id` | varchar(64) | 否 | NULL | 链路 ID（与日志 / 审计一致，报障用） | — |
+| `dedupe_key` | varchar(128) | 是 | — | 幂等键（如 `job:<jobId>:<status>:<updatedAt>`；广播消息追加 `:<userId>`） | **UNIQUE** `notifications_dedupe_key_key` |
+| `read_at` | datetime(3) | 否 | NULL | 已读时刻（未读为 NULL；未读计数即本列 IS NULL 的行数） | 见上（组合索引） |
+| `created_at` | datetime(3) | 是 | now | 产生时刻（列表排序键，倒序） | 见上（组合索引） |
+
+### 3.19 `upload_files` 附件元数据（M10 E-09）
+
+> 文件存储端口 `@fw/storage`（PRD-010 E-09）的元数据表：**文件内容不在库**——经 StoragePort
+> 落地（`STORAGE_DRIVER=local` 本地磁盘 / `s3` S3 兼容对象存储，切换只改配置），本表只存元数据与归属。
+> 存储 key 即 `stored_name`（`<yyyyMM>/<uuid><ext>`，服务端生成，不透传用户输入，天然免疫路径穿越）。
+> 上传类型 / 大小白名单默认收紧（20MB + 扩展名白名单，`STORAGE_MAX_MB` / `STORAGE_ALLOWED_EXTS` 可调）；
+> 软删（`deleted_at`）后元数据与下载面均视为不存在（不泄露存在性）。端点契约见 api-spec §3.16。
+> 附件字段约定：业务表的 `*FileId` / `*AttachmentId` String 列存本表 `id`（codegen 识别生成上传控件），
+> 无物理外键（沿本仓跨库约定）。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
+|---|---|---|---|---|---|
+| `id` | varchar(36) | 是 | uuid | 主键 | PK |
+| `owner_id` | varchar(36) | 否 | NULL | 上传人（逻辑外键 → `users.id`；配额与归属追溯用） | `idx_upload_owner` |
+| `original_name` | varchar(255) | 是 | — | 原始文件名（仅展示；不参与存储 key） | — |
+| `stored_name` | varchar(128) | 是 | — | 存储 key（`<yyyyMM>/<uuid><ext>`；StoragePort 读写地址） | — |
+| `mime_type` | varchar(128) | 是 | — | MIME 类型（下载回传 Content-Type） | — |
+| `size` | int | 是 | — | 字节数 | — |
+| `deleted_at` | datetime(3) | 否 | NULL | 软删时刻（非 NULL 即对业务不可见） | — |
+| `created_at` | datetime(3) | 是 | now | 上传时刻 | — |
+| `created_by` | varchar(36) | 是 | system | 创建人（BaseEntity 约定） | — |
+| `updated_by` | varchar(36) | 是 | system | 更新人（BaseEntity 约定） | — |
 
 ## 4. 迁移与数据治理
 

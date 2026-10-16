@@ -3,13 +3,22 @@
  * @description 框架自有的微服务调用语义抽象：地址注册、启动、发起调用、可用性探测与优雅停机。
  *   in-process 与 redis 两种驱动实现同一端口，TransportService 只依赖本端口，因此切换驱动时
  *   业务代码与服务层 diff = 0（PRD-008 FR-06 / TC-TNT-005）。
+ *   M10 E-12 起端口额外承载**事件面**（publish/subscribe，可选能力）——RPC 面是「找谁处理」，
+ *   事件面是「发生了什么」；两者共用同一驱动与生命周期，SSE 实时推送据此多副本免粘滞。
  *   本文件不得出现任何驱动特有类型（ioredis 等）。
  * @author donttemo
  * @created 2026-10-14
  * @module @fw/transport
  */
 
-import type { CallOptions, TransportDriverName, TransportHandlerFn } from './types.js';
+import type {
+  CallOptions,
+  TransportDriverName,
+  TransportEventHandler,
+  TransportEventUnsubscribe,
+  TransportHandlerFn,
+  TransportTopic,
+} from './types.js';
 
 /**
  * 传输驱动端口
@@ -56,4 +65,33 @@ export interface TransportDriverPort {
    * @param timeoutMs 等待上限（毫秒）
    */
   close(timeoutMs?: number): Promise<void>;
+
+  // ---------------- 事件面（可选能力，M10 E-12） ----------------
+
+  /**
+   * 发布事件（扇出，无应答）
+   *
+   * 语义约定：in-process 驱动在本进程内向订阅方扇出（单体形态）；redis 驱动经
+   * `PUBLISH <prefix>:evt:<topic>` 广播，**其他实例的订阅方也能收到**（多副本形态）。
+   * 发布方不关心是否有订阅方，无订阅方时为无害空操作。RPC 面（call）与事件面互不影响。
+   *
+   * 未实现该能力的驱动（如预留的 tcp / kafka 或测试注入的 RPC-only 桩）不提供本方法，
+   * 由 `TransportService.publish` 统一转 `TransportEventsUnsupportedError`。
+   *
+   * @param topic 事件主题（点分，如 job.progress）
+   * @param payload 事件载荷（须可 JSON 序列化）
+   */
+  publish?(topic: TransportTopic, payload: unknown): Promise<void>;
+
+  /**
+   * 订阅事件
+   *
+   * 同一主题可多订阅方；处理器抛出的异常由驱动吞掉并记日志（单个 SSE 连接断开不影响其他）。
+   * 返回取消订阅函数（幂等）。redis 驱动在最后一个订阅方取消后 UNSUBSCRIBE 该频道。
+   *
+   * @param topic 事件主题
+   * @param handler 处理器
+   * @returns 取消订阅函数
+   */
+  subscribe?(topic: TransportTopic, handler: TransportEventHandler): Promise<TransportEventUnsubscribe>;
 }

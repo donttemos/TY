@@ -3,10 +3,16 @@
  * @description 统一响应信封 { code, message, data, traceId } 的失败分支（C-06 契约 / API 规格 §2）：
  *   BizError 承载 code/message/traceId/details；错误码 → 用户可读提示与后续动作（是否静默刷新、是否跳登录）。
  *   与后端错误码表同源，新增码只允许加枚举，不允许改语义。
+ *   E-14 i18n 骨架（PRD-010 / ADR-0014）：用户可读文案改经 src/locales 文案表出（zh-CN 语义零回归）——
+ *   zh-CN 沿用「后端 message 优先」（业务上下文更具体）；非 zh-CN 按 OQ-4 决策由前端表接管（后端 message 是中文）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-15 donttemo E-14：describeBizError 文案表化 + locale 参数化；行为基准不变（zh-CN 分支
+ *   与既有逐分支对照，全部既有断言零改动通过）
  * @module admin-web/utils
  */
+
+import { currentLocale, DEFAULT_LOCALE, interpolate, messages, type Locale } from '@/locales';
 
 /** 业务错误码（docs/40-api-spec.md §2，C-01/C-06 同源） */
 export const BIZ_CODE = {
@@ -31,6 +37,9 @@ export const BIZ_CODE = {
   DEPENDENCY_UNAVAILABLE: 9002,
   RATE_LIMITED: 9003,
 } as const;
+
+/** 错误码数值全集（locale 错误码文案表键集与此编译期同构，见 src/locales/index.ts ErrorMessages） */
+export type BizCodeValue = Exclude<(typeof BIZ_CODE)[keyof typeof BIZ_CODE], 0>;
 
 /** 字段级校验错误（1001 时 data.details） */
 export interface FieldError {
@@ -63,41 +72,38 @@ export class BizError extends Error {
   }
 }
 
-/** 错误码 → 用户可读提示（与 docs/25-ui-prototype.md §7 交互规范一致） */
-export function describeBizError(error: BizError): string {
+/**
+ * 错误码 → 用户可读提示（docs/25-ui-prototype.md §7 交互规范）。
+ * 文案出 src/locales 文案表（E-14，zh-CN 表值与既有字面量逐条一致——零回归基准）：
+ * - zh-CN：既有行为——后端 message 优先（业务上下文文案更具体），缺省回落 zh 表；
+ * - 非 zh-CN：OQ-4 决策前端接管——表优先（后端 message 是中文，直出会串味），未知码再回落后端 message 与 fallback。
+ * 特例语义（两语言一致）：9001 固定文案不直出内部 message（带 traceId 用上报变体）；9002 固定文案；
+ * 5002 有 details 走拼接模板，无 details zh-CN 回落后端 message。
+ */
+export function describeBizError(error: BizError, locale: Locale = currentLocale()): string {
+  const table = messages[locale].errors;
+  const preferBackendMessage = locale === DEFAULT_LOCALE;
   switch (error.code) {
-    case BIZ_CODE.BAD_REQUEST:
-      return error.message || '请求参数有误';
-    case BIZ_CODE.NOT_FOUND:
-      return error.message || '资源不存在或已删除';
-    case BIZ_CODE.CONFLICT:
-      return error.message || '数据冲突，请检查唯一性约束';
-    case BIZ_CODE.STATE_NOT_ALLOWED:
-      return error.message || '当前状态不允许该操作，请刷新后重试';
-    case BIZ_CODE.BUSINESS:
-      return error.message || '业务校验未通过';
-    case BIZ_CODE.UNAUTHORIZED:
-      return error.message || '登录状态已失效，请重新登录';
-    case BIZ_CODE.FORBIDDEN:
-      return error.message || '无操作权限';
-    case BIZ_CODE.TOKEN_EXPIRED:
-      return error.message || '登录状态已过期，请重新登录';
-    case BIZ_CODE.ACCOUNT_LOCKED:
-      return error.message || '账号已锁定或禁用，请联系管理员';
     case BIZ_CODE.INTERNAL:
-      return error.traceId ? `系统开小差了（已上报，traceId：${error.traceId}）` : '系统开小差了，请稍后重试';
+      return error.traceId
+        ? interpolate(table['9001Trace'], { traceId: error.traceId })
+        : table[BIZ_CODE.INTERNAL];
     case BIZ_CODE.DEPENDENCY_UNAVAILABLE:
-      return '依赖服务暂不可用，请稍后重试';
-    case BIZ_CODE.CONFIG_NOT_HOT:
-      return error.message || '该配置键不可热更新（boot 键或不在白名单）';
+      return table[BIZ_CODE.DEPENDENCY_UNAVAILABLE];
     case BIZ_CODE.CONFIG_INVALID_VALUE:
-      return error.details?.length ? `新值非法：${error.details.map((d) => d.message).join('；')}` : error.message || '新值非法，请检查后重试';
-    case BIZ_CODE.CONFIG_NOT_FOUND:
-      return error.message || '配置键不存在';
-    case BIZ_CODE.RATE_LIMITED:
-      return error.message || '操作过于频繁，请稍后重试';
-    default:
-      return error.message || '请求失败，请稍后重试';
+      if (error.details?.length) {
+        return interpolate(table['5002Details'], {
+          details: error.details.map((d) => d.message).join(preferBackendMessage ? '；' : '; '),
+        });
+      }
+      return preferBackendMessage ? error.message || table[BIZ_CODE.CONFIG_INVALID_VALUE] : table[BIZ_CODE.CONFIG_INVALID_VALUE];
+    default: {
+      const text = (table as unknown as Record<string, string>)[error.code] ?? null;
+      if (preferBackendMessage) {
+        return error.message || text || table.fallback;
+      }
+      return text || error.message || table.fallback;
+    }
   }
 }
 

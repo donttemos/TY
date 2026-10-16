@@ -217,6 +217,30 @@ model AuditLog {
   @@map("audit_logs")
 }
 
+/// 审计日志归档（PRD-010 E-10，数据字典 §3.17）：在线表按保留天数迁入的冷存副本，
+/// 主键与在线表一致（幂等 upsert 依据），另有 archivedAt 登记归档时刻；只增不改不删（冷数据）
+model AuditLogArchive {
+  id          String   @id
+  tenantId    BigInt   @default(0) @map("tenant_id")
+  userId      String?  @map("user_id")
+  module      String
+  action      String
+  targetType  String?  @map("target_type")
+  targetId    String?  @map("target_id")
+  beforeValue Json?    @map("before_value")
+  afterValue  Json?    @map("after_value")
+  ip          String?
+  userAgent   String?  @map("user_agent")
+  traceId     String?  @map("trace_id")
+  createdAt   DateTime @map("created_at")
+  archivedAt  DateTime @default(now()) @map("archived_at")
+
+  @@index([userId], map: "idx_audit_archive_user")
+  @@index([module], map: "idx_audit_archive_module")
+  @@index([createdAt], map: "idx_audit_archive_created")
+  @@map("audit_log_archives")
+}
+
 /// 租户（PRD-008 FR-01/FR-02，数据字典 §3.10）
 model Tenant {
   id        String    @id
@@ -304,4 +328,46 @@ model ConfigSnapshot {
   appliedAt DateTime @map("applied_at")
 
   @@map("config_snapshots")
+}
+
+/// 站内信（M10 E-13：通知中心持久层，数据字典 §3.18）
+/// dedupe_key 唯一：事件面可能重复投递（多副本各起一条订阅、任务重试后再次终态），
+/// 幂等靠**唯一约束**而非应用层「先查后写」——并发插入时只有一个成功，其余按命中处理。
+model Notification {
+  id        String    @id @default(uuid())
+  tenantId  BigInt    @default(0) @map("tenant_id")
+  userId    String    @map("user_id")
+  kind      String
+  level     String    @default("info")
+  title     String
+  content   String?
+  refType   String?   @map("ref_type")
+  refId     String?   @map("ref_id")
+  traceId   String?   @map("trace_id")
+  dedupeKey String    @unique @map("dedupe_key")
+  readAt    DateTime? @map("read_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId, createdAt], map: "idx_notifications_user_created")
+  @@index([userId, readAt], map: "idx_notifications_user_read")
+  @@map("notifications")
+}
+
+/// 附件元数据（M10 E-09：@fw/storage 文件存储端口，数据字典 §3.19）
+/// 文件内容经 StoragePort 落盘/落对象存储（key = stored_name，<yyyyMM>/<uuid><ext>，不透传用户输入）；
+/// 本表只存元数据与归属，软删后下载面视为不存在（不泄露存在性）。
+model UploadFile {
+  id           String    @id @default(uuid())
+  ownerId      String?   @map("owner_id")
+  originalName String    @map("original_name")
+  storedName   String    @map("stored_name")
+  mimeType     String    @map("mime_type")
+  size         Int
+  deletedAt    DateTime? @map("deleted_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  createdBy    String    @default("system") @map("created_by")
+  updatedBy    String    @default("system") @map("updated_by")
+
+  @@index([ownerId], map: "idx_upload_owner")
+  @@map("upload_files")
 }

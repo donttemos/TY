@@ -1,26 +1,38 @@
 /*
- * @file 异步任务中心（N-02 前端数据源）
- * @description 承载「派发 → 轮询进度 → 完成下载 / 失败重试」的完整前端生命周期，供全局任务条
+ * @file 异步任务中心（N-02 前端数据源 / M10 E-12 实时推送）
+ * @description 承载「派发 → 进度感知 → 完成下载 / 失败重试」的完整前端生命周期，供全局任务条
  *   （layout/JobBar.vue）消费。设计要点：
- *   - **不阻塞页面**：任务由业务页派发后只登记 id，进度轮询在全局单例里进行，页面可继续操作或跳走；
+ *   - **不阻塞页面**：任务由业务页派发后只登记 id，进度感知在全局单例里进行，页面可继续操作或跳走；
+ *   - **实时优先、轮询兜底（E-12）**：默认接入统一 SSE 事件流（`/events/stream`，连接由
+ *     `store/realtime` 单例持有），事件到达即更新；SSE 不可用（环境无 EventSource / 取票失败 / 断连）
+ *     时自动降级为轮询，退避策略不变；
+ *   - **兜底不是摆设**：SSE 在线时仍保留低频对账（`SSE_RECONCILE_MS` 一轮），
+ *     防止「连接没断但事件丢了」导致的终态永久缺失；
  *   - **失败不丢任务**：单次轮询失败只累计计数，不删除登记项；连续失败超过阈值才标记 `stale`
- *     并停止对该任务打点（避免对已过期任务无限请求），任务仍留在任务条上可手动重试；
+ *     并停止对该任务打点，任务仍留在任务条上可手动重试；
  *   - **轮询退避**：任一轮有进展即回到基准间隔（1s），无进展则按系数放大并封顶 10s，避免空转；
- *   - **刷新不丢**：登记项落 sessionStorage（按用户隔离），页面刷新后重新挂载轮询继续跟踪。
+ *   - **刷新不丢**：登记项落 sessionStorage（按用户隔离），页面刷新后重新挂载感知继续跟踪。
  *
- *   诚实说明：任务本体在**后端进程内存**（见 example-api 的 JobCenterService），后端重启会丢任务；
- *   此时前端轮询会连续 404 → 标记 stale 并提示「已过期」，而不是静默消失。
+ *   诚实说明：任务本体在**后端**（memory 驱动为进程内存，db / bullmq 驱动落库；见 example-api
+ *   的 JobCenterService）。memory 驱动下后端重启会丢任务，此时前端会连续 404 → 标记 stale
+ *   并提示「已过期」，而不是静默消失。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-15 donttemo M10 E-12：SSE 事件流为主路径（秒级完成感知），轮询降级为兜底 +
+ *   低频对账；新增 sseStatus 暴露给任务条展示
+ * @modified 2026-10-15 donttemo M10 E-13：连接所有权移交 `store/realtime`（单连接多消费者）——
+ *   本 store 只注册 job / queue 两个消费者并 watch 连接状态，不再自行建流（消息中心铃铛是第二个消费者）
  * @module admin-web/composables
  */
 
 import { defineStore } from 'pinia';
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import * as jobApi from '@/api/job';
 import { BizError, describeBizError } from '@/utils/biz-error';
-import type { JobView } from '@/api/types';
+import { useRealtimeStore } from '@/store/realtime';
+import type { SseStatus } from '@/utils/sse';
+import type { JobEventPayload, JobView, QueueAlertPayload } from '@/api/types';
 
 /** 基准轮询间隔（毫秒） */
 export const POLL_BASE_MS = 1000;
@@ -33,6 +45,9 @@ export const POLL_BACKOFF = 1.5;
 
 /** 单任务连续轮询失败上限，达到后停止轮询 */
 export const POLL_MAX_FAILURES = 3;
+
+/** SSE 在线时的对账间隔（毫秒）：只做一轮补齐，不构成轮询回路 */
+export const SSE_RECONCILE_MS = 60_000;
 
 /** 持久化键（任务登记表按用户隔离，避免换号后看到上一个账号的任务标题） */
 const STORAGE_KEY = 'fw_job_center';
@@ -73,10 +88,20 @@ export const useJobCenterStore = defineStore('job-center', () => {
   /** 任务条折叠态（默认收起，避免遮挡内容区） */
   const collapsed = ref(true);
 
+  /** 实时通道（单连接多消费者；E-13 起由 store/realtime 统一持有） */
+  const realtime = useRealtimeStore();
+
+  /** SSE 状态（connecting / open / closed；closed 时任务条展示「轮询」） */
+  const sseStatus = computed<SseStatus>(() => realtime.status);
+
   /** 登记表归属人（未登录 / 未初始化时为 null） */
   let ownerId: string | null = null;
   /** 轮询定时器（window.setTimeout 的返回值，非 Node 的 Timeout） */
   let timer: number | null = null;
+  /** SSE 在线时的对账定时器 */
+  let reconcileTimer: number | null = null;
+  /** 实时事件退订句柄（restore 时注册一次） */
+  let unsubscribe: Array<() => void> = [];
   /** 当前轮询间隔（随退避变化） */
   let interval = POLL_BASE_MS;
   /** 终态提示去重（避免重跑后再次提示被抑制、以及重复提示） */
@@ -142,9 +167,10 @@ export const useJobCenterStore = defineStore('job-center', () => {
     }
   }
 
-  /** 调度下一轮（无进行中任务时不排期） */
+  /** 调度下一轮（无进行中任务时不排期；SSE 在线时不排期——由事件流驱动） */
   function schedule(): void {
     if (timer !== null || typeof window === 'undefined') return;
+    if (sseStatus.value === 'open') return;
     if (activeJobs.value.length === 0) return;
     timer = window.setTimeout(() => void tick(), interval);
   }
@@ -202,6 +228,82 @@ export const useJobCenterStore = defineStore('job-center', () => {
     schedule();
   }
 
+  // ---------------- M10 E-12：SSE 实时推送（主路径） ----------------
+
+  /** SSE 在线时的对账：补齐可能漏掉的事件，不进入轮询回路 */
+  async function reconcileOnce(): Promise<void> {
+    if (activeJobs.value.length === 0) return;
+    await pollOnce();
+    persist();
+  }
+
+  /** 启动 / 停止对账定时器 */
+  function startReconcile(): void {
+    if (reconcileTimer !== null || typeof window === 'undefined') return;
+    reconcileTimer = window.setInterval(() => void reconcileOnce(), SSE_RECONCILE_MS);
+  }
+
+  function stopReconcile(): void {
+    if (reconcileTimer === null) return;
+    window.clearInterval(reconcileTimer);
+    reconcileTimer = null;
+  }
+
+  /** SSE 状态变化：open → 停轮询并开对账；closed → 关对账并回到轮询兜底 */
+  function onSseStatus(status: SseStatus): void {
+    if (status === 'open') {
+      stop();
+      startReconcile();
+      void reconcileOnce();
+    } else {
+      stopReconcile();
+      schedule();
+    }
+  }
+
+  // 连接状态由共享实时通道持有（本 store 只关心「能不能靠事件驱动」）
+  watch(() => realtime.status, onSseStatus);
+
+  /** 应用一条任务事件（SSE 为权威来源：直接覆盖本地视图并清掉 stale 标记） */
+  function applyJobEvent(payload: JobEventPayload): void {
+    if (!payload?.job?.id) return;
+    // 事件可能来自本用户的其他标签页/设备，一并接管，避免任务条漏项
+    upsert(payload.job, true);
+    if (isFinished(payload.job.status)) notifyFinished(payload.job);
+    persist();
+  }
+
+  /** 队列告警提示（仅持 system:queue:list 的连接会收到） */
+  function onQueueAlert(payload: QueueAlertPayload): void {
+    if (payload?.kind === 'dead-letter') {
+      ElMessage.error(`队列告警：任务「${payload.jobName ?? payload.jobId ?? '未知'}」进入死信（${payload.reason ?? '未知原因'}）`);
+    } else if (payload?.kind === 'backlog') {
+      ElMessage.warning(`队列积压告警：等待任务 ${payload.waiting ?? '-'} 已超过阈值 ${payload.threshold ?? '-'}`);
+    }
+  }
+
+  /** 建立事件流（幂等；注册消费者后启动共享连接） */
+  function startStream(): void {
+    if (unsubscribe.length === 0) {
+      unsubscribe.push(realtime.on('job', applyJobEvent));
+      unsubscribe.push(realtime.on('queue', onQueueAlert));
+    }
+    realtime.start();
+  }
+
+  /** 注销实时消费者（登出）：连接本身由 realtime.stop() 统一关闭（可能还有其他消费者） */
+  function stopStream(): void {
+    for (const off of unsubscribe) {
+      try {
+        off();
+      } catch {
+        // 退订失败不影响登出流程
+      }
+    }
+    unsubscribe = [];
+    stopReconcile();
+  }
+
   /**
    * 初始化（JobBar 挂载时调用）
    * @param currentUserId 当前登录用户 id（用于隔离持久化数据）
@@ -232,12 +334,16 @@ export const useJobCenterStore = defineStore('job-center', () => {
       }
     }
     interval = POLL_BASE_MS;
+    // E-12：恢复跟踪的同时建立事件流（成功即秒级感知，失败由 onSseStatus 自动回落到轮询）
+    startStream();
     schedule();
   }
 
-  /** 重置（登出）：清空登记表与持久化 */
+  /** 重置（登出）：清空登记表与持久化，并断开实时通道 */
   function reset(): void {
     stop();
+    stopStream();
+    realtime.stop();
     jobs.value = [];
     notified.clear();
     ownerId = null;
@@ -260,6 +366,7 @@ export const useJobCenterStore = defineStore('job-center', () => {
     upsert(view, true);
     interval = POLL_BASE_MS;
     persist();
+    startStream();
     schedule();
   }
 
@@ -332,6 +439,7 @@ export const useJobCenterStore = defineStore('job-center', () => {
   return {
     jobs,
     collapsed,
+    sseStatus,
     visible,
     activeJobs,
     runningCount,

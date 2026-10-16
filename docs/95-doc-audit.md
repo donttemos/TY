@@ -66,7 +66,7 @@
 | O-1 | ORM 选 Prisma 还是 TypeORM（ADR-0002 仍为提案） | 阻塞 M2 全部任务 | M2 开工前（已设 3 人日 spike） |
 | O-2 | 密码算法 Argon2id / bcrypt 最终确认 | PRD-003 | M3 开工前 |
 | O-3 | token 存 localStorage 还是 httpOnly Cookie | PRD-005 + 原型 §7 | M5 评审前 |
-| O-4 | 前端是否需要暗色模式首发 | 原型 §2.1 | M5 评审前 |
+| O-4 | 前端是否需要暗色模式首发 | 原型 §2.1 | **已收口（2026-10-16，PRD-010 E-15）**：暗色首发为设计令牌一等形态，决策见 [ADR-0015](./adr/0015-dark-mode-tokens.md) |
 | O-5 | Kafka 驱动是否 M8 落地 | PRD-007 / 部署大档 | M8 评审时 |
 
 ## 6. 后续保持一致的硬规则

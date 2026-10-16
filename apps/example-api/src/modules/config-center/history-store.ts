@@ -3,7 +3,10 @@
  * @description `ConfigHistoryPort` 的 Prisma 实现（`config_snapshots` 表，数据字典 §3.16）：
  *   快照历史与版本基线下沉持久层——多副本下 A 实例写入的版本对 B 实例可见（回滚跨实例一致，
  *   PRD-010 AC2）。append 语义为 upsert（外部事实源轮询与本地推进可能同号，后写者覆盖）；
- *   淘汰策略：保留最近 20 版（与框架 MAX_HISTORY 同口径），超出淘汰最旧。
+ *   淘汰策略：保留最近 keepVersions 版（M10/E-16 起与框架 maxHistory 同口径，经
+ *   CONFIG_CENTER_HISTORY_MAX 配置），超出淘汰最旧。
+ * @modified 2026-10-15 donttemo M10/E-16：保留版本数改为构造参数（与 ConfigCenterService
+ *   的 maxHistory 同一配置源），不再硬编码 20
  * @author donttemo
  * @created 2026-10-15
  * @module example-api/config-center
@@ -13,8 +16,8 @@ import { Inject, Injectable } from '@nestjs/common';
 import { DB_CLIENT, type PrismaClientLike } from '@fw/db';
 import type { ConfigHistoryPort, ConfigSnapshotEntry } from '@fw/config-center';
 
-/** 保留版本数（与 @fw/config-center 的环形表上限同口径） */
-const KEEP_VERSIONS = 20;
+/** 保留版本数默认值（与 @fw/config-center 的环形表上限同口径） */
+const DEFAULT_KEEP_VERSIONS = 20;
 
 /** config_snapshots 表行投影 */
 interface SnapshotRow {
@@ -45,7 +48,19 @@ function toEntry(row: SnapshotRow): ConfigSnapshotEntry {
  */
 @Injectable()
 export class PrismaConfigHistoryStore implements ConfigHistoryPort {
-  constructor(@Inject(DB_CLIENT) private readonly client: PrismaClientLike) {}
+  /** 保留版本数（M10/E-16：与 ConfigCenterService 的 maxHistory 同配置源） */
+  private readonly keepVersions: number;
+
+  /**
+   * @param client Prisma 客户端
+   * @param keepVersions 保留版本数（CONFIG_CENTER_HISTORY_MAX，缺省 20）
+   */
+  constructor(
+    @Inject(DB_CLIENT) private readonly client: PrismaClientLike,
+    keepVersions: number = DEFAULT_KEEP_VERSIONS,
+  ) {
+    this.keepVersions = keepVersions;
+  }
 
   private get delegate(): SnapshotDelegate {
     return (this.client as unknown as Record<string, SnapshotDelegate>).configSnapshot;
@@ -58,10 +73,10 @@ export class PrismaConfigHistoryStore implements ConfigHistoryPort {
       create: { version: entry.version, overlay, appliedAt: new Date(entry.at) },
       update: { overlay, appliedAt: new Date(entry.at) },
     });
-    // 淘汰：只保留最近 KEEP_VERSIONS 版（version 降序窗口之外的删除）
+    // 淘汰：只保留最近 keepVersions 版（version 降序窗口之外的删除）
     const keep = await this.delegate.findMany({
       orderBy: { version: 'desc' },
-      take: KEEP_VERSIONS,
+      take: this.keepVersions,
     });
     const minKeep = keep.length > 0 ? keep[keep.length - 1].version : entry.version;
     await this.delegate.deleteMany({ where: { version: { lt: minKeep } } });

@@ -482,3 +482,83 @@ export interface ConfigWriteResult {
   newValue: unknown;
   snapshotVersion: number;
 }
+
+// ---------- M10 E-12 SSE 实时推送 ----------
+
+/** 任务事件类型：created（派发/重跑）/ progress（运行中与进度推进）/ finished（终态） */
+export type JobEventKind = 'created' | 'progress' | 'finished';
+
+/** `job` 事件载荷（`GET /events/stream` 的 event: job） */
+export interface JobEventPayload {
+  kind: JobEventKind;
+  /** 任务视图（与 `GET /jobs/:id/progress` 同形，前端零转换消费） */
+  job: JobView;
+  /** 任务归属人（服务端已按此过滤，仅推送本人任务） */
+  ownerId: string;
+}
+
+/** 队列告警类型 */
+export type QueueAlertKind = 'dead-letter' | 'backlog';
+
+/** `queue` 事件载荷（`GET /events/stream` 的 event: queue；仅持 `system:queue:list` 者可见） */
+export interface QueueAlertPayload {
+  kind: QueueAlertKind;
+  at: string;
+  queue?: string;
+  jobId?: string;
+  jobName?: string;
+  attemptsMade?: number;
+  reason?: string;
+  waiting?: number;
+  threshold?: number;
+}
+
+/** `POST /events/ticket` 响应：一次性 SSE 票据 */
+export interface SseTicket {
+  ticket: string;
+  /** 有效期（秒） */
+  expiresIn: number;
+  /** 该用户可订阅的主题 */
+  topics: Array<'job' | 'queue'>;
+}
+
+// ---------- M10 E-13 站内信 / 通知中心 ----------
+
+/** 通知级别（前端按级别着色） */
+export type NotificationLevel = 'info' | 'success' | 'warning' | 'error';
+
+/** 通知业务类型 */
+export type NotificationKind = 'job.finished' | 'job.failed' | 'queue.dead-letter' | 'queue.backlog' | 'system';
+
+/** 站内信列表项（`GET /notifications` 的 items） */
+export interface NotificationView {
+  id: string;
+  kind: NotificationKind;
+  level: NotificationLevel;
+  title: string;
+  content: string | null;
+  /** 关联资源类型（job / queue / null） */
+  refType: string | null;
+  /** 关联资源 ID（如 jobId，可用于跳转任务条） */
+  refId: string | null;
+  traceId: string | null;
+  read: boolean;
+  readAt: string | null;
+  createdAt: string;
+}
+
+/** `GET /notifications` 响应 */
+export interface NotificationListResult {
+  total: number;
+  /** 未读总数（与 unread-count 同源） */
+  unread: number;
+  items: NotificationView[];
+  page: number;
+  pageSize: number;
+}
+
+/** `notification` SSE 事件载荷 */
+export interface NotificationCreatedPayload {
+  ownerId: string;
+  notification: NotificationView;
+}

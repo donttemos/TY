@@ -4,15 +4,18 @@
  *   （以数据字典 1.3 为基准）。约定：bigint（含 id / *_id）与 decimal 一律映射为 string，
  *   禁 number 防精度丢失；未命中类型直接报错，不猜测。项目级覆盖经 codegen.config.json 的
  *   typeOverrides 合并（按 prisma 类型名覆盖整行）。
+ *   PRD-010 E-09：String 字段名以 FileId / AttachmentId 结尾识别为**附件字段**——
+ *   前端控件 upload（FileUpload 组件，上传走 /api/v1/files、值存文件 id），后端照常按 string 接收。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-16 donttemo M10 E-09 附件字段识别（*FileId / *AttachmentId → upload 控件）
  * @module cli/gen
  */
 
 import type { ParsedEnum, ParsedField, ParsedModel } from './schema-parser.js';
 
 /** 前端表单控件类型（与 admin-web CrudTable 的 FormField.type 对齐） */
-export type ControlType = 'input' | 'textarea' | 'number' | 'password' | 'select' | 'radio' | 'switch' | 'date' | 'datetime' | 'dict-select';
+export type ControlType = 'input' | 'textarea' | 'number' | 'password' | 'select' | 'radio' | 'switch' | 'date' | 'datetime' | 'dict-select' | 'upload';
 
 /** 单条类型映射规则 */
 export interface TypeMapping {
@@ -76,6 +79,8 @@ export interface FieldMeta {
   isForeignKey: boolean;
   /** 外键关联的目标模型名 */
   fkTarget?: string;
+  /** 附件字段（M10 E-09：*FileId / *AttachmentId 的 String 字段；控件 upload，值存文件 id） */
+  isAttachment: boolean;
   /** 枚举字段 */
   isEnum: boolean;
   /** 枚举可选值 */
@@ -167,6 +172,11 @@ export function resolveFieldMeta(model: ParsedModel, field: ParsedField, context
   if (field.type === 'String' && field.attributes.dbType?.startsWith('Text')) control = 'textarea';
   // 外键一律关联选择（PRD-006 §6：外键 xxx_id → 关联选择，可配数据源）
   if (isForeignKey && !isBase) control = 'select';
+  // 附件字段（M10 E-09）：*FileId / *AttachmentId 的 String 字段 → 上传控件（值存文件 id）。
+  // 判定优先级高于外键：附件字段即使带 @relation（指向 UploadFile）也不走关联下拉
+  const isAttachment =
+    field.type === 'String' && !isBase && !isId && /(FileId|AttachmentId)$/.test(field.name);
+  if (isAttachment) control = 'upload';
 
   const meta: FieldMeta = {
     name: field.name,
@@ -178,7 +188,8 @@ export function resolveFieldMeta(model: ParsedModel, field: ParsedField, context
     optional: field.optional,
     isId,
     isBase,
-    isForeignKey: isForeignKey && !isBase,
+    isForeignKey: isForeignKey && !isBase && !isAttachment,
+    isAttachment,
     isEnum,
     unique,
     indexed,
@@ -188,6 +199,11 @@ export function resolveFieldMeta(model: ParsedModel, field: ParsedField, context
     searchable: (mapping?.searchable ?? false) && !isBase,
     inForm: !isBase && !isId,
   };
+  // 附件字段：列表不展示裸文件 id、不作查询条件（展示/下载由业务按需在页面层定制）
+  if (isAttachment) {
+    meta.listable = false;
+    meta.searchable = false;
+  }
 
   if (isEnum && enumDef) {
     meta.enumValues = enumDef.values.map((v) => v.name);

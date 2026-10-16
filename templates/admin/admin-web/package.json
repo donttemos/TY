@@ -1,0 +1,30 @@
+{
+  "name": "__APP_NAME__-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "由 @fw/cli 生成的管理后台前端（登录 + 动态路由 + 按钮级权限 + 示例 CRUD）",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "lint": "vue-tsc --noEmit"
+  },
+  "dependencies": {
+    "@element-plus/icons-vue": "^2.3.1",
+    "axios": "^1.7.9",
+    "element-plus": "^2.9.7",
+    "pinia": "^2.3.0",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@vue/language-core": "^3.3.13",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "typescript": "~5.6.3",
+    "unplugin-vue-components": "^32.1.0",
+    "vite": "^8.3.4",
+    "vue-tsc": "^3.3.13"
+  }
+}

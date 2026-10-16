@@ -11,6 +11,8 @@
  *   listDeadLetters 透传窗口（体验债：死信列表无分页）
  * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：新增 updateRuntimeOptions——mq.concurrency/rateLimit 经配置中心订阅热更（下推驱动）
  * @modified 2026-10-15 donttemo rateLimit 热更收口：bullmq 驱动重建消费器（先建新再关旧）使限速变更即时生效
+ * @modified 2026-10-15 donttemo M10/E-16：死信分页每页上限从硬编码 200 改为读运行时配置
+ *   deadLetterPageSizeMax（MQ_DEAD_LETTER_PAGE_MAX，默认 200 行为不变）
  * @module @fw/queue
  */
 
@@ -328,8 +330,8 @@ export class QueueService implements JobRunner {
   /**
    * 死信分页（管理面入口）
    *
-   * 页大小上限 200 与列表查询约定（api-spec §1.5）一致；越界值收敛到合法区间而不是报错——
-   * 运维页面的页码来自前端控件，因分页参数把整个管理页打成 400 得不偿失。
+   * 页大小上限取 `MQ_DEAD_LETTER_PAGE_MAX`（M10/E-16 配置化，默认 200，与 api-spec §1.5 列表约定同源）；
+   * 越界值收敛到合法区间而不是报错——运维页面的页码来自前端控件，因分页参数把整个管理页打成 400 得不偿失。
    *
    * @param queue 队列名（缺省全部）
    * @param page 页码（从 1 开始）
@@ -341,7 +343,9 @@ export class QueueService implements JobRunner {
     pageSize: number,
   ): Promise<{ total: number; items: DeadLetterRecord[]; page: number; pageSize: number }> {
     const safePage = Number.isFinite(page) ? Math.max(1, Math.floor(page)) : 1;
-    const safeSize = Number.isFinite(pageSize) ? Math.min(200, Math.max(1, Math.floor(pageSize))) : 20;
+    const safeSize = Number.isFinite(pageSize)
+      ? Math.min(this.opt.deadLetterPageSizeMax, Math.max(1, Math.floor(pageSize)))
+      : 20;
     const [total, items] = await Promise.all([
       this.driver.countDeadLetters(queue),
       this.driver.listDeadLetters(queue, { offset: (safePage - 1) * safeSize, limit: safeSize }),

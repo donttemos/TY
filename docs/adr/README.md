@@ -25,6 +25,9 @@
 | [0011](./0011-auth-strategy-registry.md) | 鉴权策略自实现注册表，不引入 passport 包 | 已采纳 | 鉴权 |
 | [0012](./0012-cache-own-port-over-cache-manager.md) | 缓存存储抽象自研 `CacheStore` 端口，不引入 cache-manager | 已采纳 | 缓存 |
 | [0013](./0013-async-job-center-in-memory-registry.md) | 异步任务中心用进程内存登记表，任务面只验归属人 | 已采纳 | 任务/导出 |
+| [0014](./0014-i18n-frontend-locale.md) | i18n 骨架：错误码文案前端接管，locale 运行时自研不引 vue-i18n | 已采纳 | 前端 |
+| [0015](./0015-dark-mode-tokens.md) | 暗色模式：令牌层双列落地 + 派生档静态预计算（弃 color-mix）+ 主题三态默认跟随系统 | 已采纳 | 前端 |
+| [0016](./0016-storage-port-fw-storage.md) | 文件存储端口 @fw/storage：端口 + local/s3 双驱动，S3 走 optional peer 结构化最小接口；附件字段约定 `*FileId` 由 codegen 识别 | 已采纳 | 后端 |
 
 ## 模板
 

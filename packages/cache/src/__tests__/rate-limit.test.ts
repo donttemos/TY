@@ -5,6 +5,8 @@
  *   fail-closed / 计数快照）、中间件（IP 规范化 / 429 响应形态与 Retry-After）。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-16 donttemo 驱动审查修复配套：新增时钟回拨语义（对齐 Redis Lua）、
+ *   capacity < cost 的 retryAfterMs=-1 哨兵、令牌桶 TTL 回收用例
  * @module @fw/cache
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -38,6 +40,41 @@ describe('memory 驱动令牌桶（tokenBucketTake）', () => {
     const c = await store.tokenBucketTake('fw:rl:k', 3, 2, 1, 12000);
     expect(c.allowed).toBe(true);
     expect(c.remaining).toBe(2);
+  });
+
+  it('时钟回拨语义与 Redis Lua 对齐：回拨不补充也不推进 last，恢复后按真实间隔补充', async () => {
+    const store = new MemoryCacheStore();
+    for (let i = 0; i < 3; i++) await store.tokenBucketTake('fw:rl:back', 3, 10, 1, 2000);
+    // 回拨到 1500：last 保持 2000，不补充（Redis 侧 `if now > last` 同语义）
+    const rollback = await store.tokenBucketTake('fw:rl:back', 3, 10, 1, 1500);
+    expect(rollback.allowed).toBe(false);
+    // 恢复到 2100：仅按真实流逝 100ms 补充 1 个令牌（回拨期间不得多补）
+    const after = await store.tokenBucketTake('fw:rl:back', 3, 10, 1, 2100);
+    expect(after.allowed).toBe(true);
+    expect(after.remaining).toBe(0);
+  });
+
+  it('capacity < cost 时返回 retryAfterMs = -1（永不可满足，不得误导为可立即重试）', async () => {
+    const store = new MemoryCacheStore();
+    const result = await store.tokenBucketTake('fw:rl:bad', 1, 10, 5, 1000);
+    expect(result.allowed).toBe(false);
+    expect(result.retryAfterMs).toBe(-1);
+  });
+
+  it('令牌桶有 TTL 回收：桶过期后重建为满桶，阈值清理使条目数有界', async () => {
+    const store = new MemoryCacheStore();
+    const T0 = 1_000_000;
+    // 容量 3 / 10/s → 桶 TTL = 300 + 60_000
+    for (let i = 0; i < 130; i++) await store.tokenBucketTake(`fw:rl:x${i}`, 3, 10, 1, T0);
+    expect(store.bucketCount()).toBe(130);
+    // 时钟推进越过全部旧桶 TTL 后注入 200 个新键：阈值清理把 130 个过期桶全部回收，
+    // 仅剩 200 个存活新桶（不清理时会是 330——修复前桶表只增不减）
+    for (let i = 200; i < 400; i++) await store.tokenBucketTake(`fw:rl:y${i}`, 3, 10, 1, T0 + 61_000);
+    expect(store.bucketCount()).toBe(200);
+    // 过期后再取原键：按新满桶放行（等价 Redis PEXPIRE 后 key 重建）
+    const revived = await store.tokenBucketTake('fw:rl:x0', 3, 10, 1, T0 + 61_000);
+    expect(revived.allowed).toBe(true);
+    expect(revived.remaining).toBe(2);
   });
 });
 
@@ -153,7 +190,7 @@ describe('RateLimitMiddleware', () => {
         };
       },
     };
-    // capacity=0 → 直接拒绝（cost=1 > capacity → retryAfterMs=0 → max(1, ...) = 1 秒）
+    // capacity=0 → 直接拒绝（cost=1 > capacity → retryAfterMs=-1「永不可满足」→ Retry-After 兜底 1 秒）
     middleware.use({ originalUrl: '/api/v1/users', ip: '5.5.5.5' }, res, () => {
       throw new Error('不应放行');
     });

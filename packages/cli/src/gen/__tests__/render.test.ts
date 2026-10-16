@@ -27,6 +27,8 @@ model Order {
   status    OrderStatus @default(PENDING)
   remark    String?  @db.Text
   authorId  String
+  /// 合同附件
+  contractFileId String
   expiresAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -186,6 +188,16 @@ describe('buildPlan 前端产物', () => {
     expect(form).toContain('orderApi.createOrder(form as unknown as CreateOrderInput)');
     expect(form).toContain('orderApi.updateOrder(props.orderId, form as unknown as UpdateOrderInput)');
     expect(form).toContain('const formFields: FormField[] = [');
+  });
+
+  it('M10 E-09 附件字段生成 upload 控件与 el-upload 分支（值存 /api/v1/files 的文件 id）', () => {
+    const form = contentOf(planOf(), 'src/views/order/form.vue');
+    // 字段配置：upload 控件（必填规则保留；无长度校验）、不做外键下拉
+    expect(form).toContain("prop: 'contractFileId', label: '合同附件', type: 'upload'");
+    expect(form).not.toMatch(/contractFileId'[^]*?type: 'select'/);
+    // 模板分支：FileUpload 组件接线
+    expect(form).toContain("import FileUpload from '@/components/FileUpload/index.vue';");
+    expect(form).toContain(`v-else-if="field.type === 'upload'"`);
   });
 
   it('Vue 模板字面量 {{ }} 正确输出（转义不被引擎吞掉）', () => {

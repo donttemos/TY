@@ -8,6 +8,8 @@
  *   单请求额外开销：memory 驱动 P95 ≤ 1ms（进程内惰性补充，无序列化）。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-16 donttemo 驱动审查修复：tokenBucketTake 返回 retryAfterMs=-1（capacity < cost
+ *   的配置错误）时记一次 error 告警并按 0 兜底，配置错误可观测而非静默全拒
  * @module @fw/cache
  */
 
@@ -84,6 +86,9 @@ export class RateLimitLimiter {
 
   private readonly counters: RateLimitSnapshot = { allowed: 0, denied: 0, whitelisted: 0, dryRunPassed: 0, failOpen: 0 };
 
+  /** 「capacity < cost」配置错误告警只记一次（每个 limiter 实例一次，防每请求刷屏） */
+  private configErrorLogged = false;
+
   constructor(options: RateLimitLimiterOptions) {
     this.store = options.store;
     this.capacity = options.capacity;
@@ -127,7 +132,16 @@ export class RateLimitLimiter {
         return { allowed: true, retryAfterMs: result.retryAfterMs, via: 'dry-run' };
       }
       this.counters.denied += 1;
-      return { allowed: false, retryAfterMs: result.retryAfterMs, via: 'token-bucket' };
+      // retryAfterMs = -1：cost > capacity 的配置错误，任何请求都永不可通过——
+      // 记一次告警（Retry-After 头按 1 秒兜底），让配置错误可观测而不是静默全拒
+      if (result.retryAfterMs < 0 && !this.configErrorLogged) {
+        this.configErrorLogged = true;
+        logger.error('限流配置错误：桶容量小于单次开销（capacity < cost），所有请求将被拒绝直到修正配置', {
+          capacity: this.capacity,
+          refillPerSecond: this.refillPerSecond,
+        });
+      }
+      return { allowed: false, retryAfterMs: Math.max(0, result.retryAfterMs), via: 'token-bucket' };
     } catch (error) {
       // 存储故障（CacheUnavailableError / 连接错误等）：与 cache 三防护同构——fail-open 可配
       if (this.failOpen) {

@@ -11,15 +11,21 @@
  * @modified 2026-10-14 donttemo M8 T-M8-04：注册 DATA_SCOPE_ORG 组织解析端口（org / org_below 数据范围）
  * @modified 2026-10-15 donttemo E-07：注册 OAuth2Controller（providers / authorize / callback 三端点，
  *   授权码流服务 AUTH_OAUTH2_FLOW 由 @fw/auth 的 AuthModule 装配并导出，应用只写控制器与身份映射）
+ * @modified 2026-10-15 donttemo E-10：装配审计归档——PrismaAuditArchiveStore（AuditArchivePort 的
+ *   Prisma 适配）+ AuditArchiveService + AuditArchiveJobs（@Cron audit.archive，分布式锁多副本单执行）
+ *   + AuditArchiveController（归档查询/导出两端点）
  * @module example-api/auth
  */
 
 import { Module } from '@nestjs/common';
-import { AuthModule, AUTH_STORE, DATA_SCOPE_ORG } from '@fw/auth';
+import { AuthModule, AUTH_STORE, DATA_SCOPE_ORG, AuditArchiveService } from '@fw/auth';
 import type { AuthStore, DataScopeOrgPort } from '@fw/auth';
 import { ADMIN_STORE, PrismaAdminStore } from '../admin/admin-store.js';
 import { DictController } from '../admin/dict.controller.js';
 import { MenusController } from '../admin/menus.controller.js';
+import { AuditArchiveController } from './audit-archive.controller.js';
+import { AuditArchiveJobs } from './audit-archive.jobs.js';
+import { PrismaAuditArchiveStore } from './audit-archive-store.js';
 import { AuditController } from './audit.controller.js';
 import { AuthController } from './auth.controller.js';
 import { AuthMaintenanceJobs } from './auth-maintenance.js';
@@ -40,6 +46,8 @@ import { UsersController } from './users.controller.js';
     UsersController,
     RbacController,
     AuditController,
+    // E-10：审计归档查询 / 导出（冷数据出口，数据范围与在线审计同源收敛）
+    AuditArchiveController,
     MaintenanceController,
     // E-07：OAuth2 授权码端到端（providers / authorize / callback；流服务由 AuthModule 装配导出）
     OAuth2Controller,
@@ -49,6 +57,14 @@ import { UsersController } from './users.controller.js';
   ],
   providers: [
     AuthMaintenanceJobs,
+    // E-10：审计归档链路——Prisma 适配（AuditArchivePort）→ 归档服务（先写归档后删在线）→ cron 载体
+    PrismaAuditArchiveStore,
+    {
+      provide: AuditArchiveService,
+      useFactory: (store: PrismaAuditArchiveStore): AuditArchiveService => new AuditArchiveService(store),
+      inject: [PrismaAuditArchiveStore],
+    },
+    AuditArchiveJobs,
     // 管理后台存储端口：用户软删 / 角色维护 / 菜单维护 / 登录设备 / 审计详情 / 字典
     { provide: ADMIN_STORE, useClass: PrismaAdminStore },
     // M8 T-M8-04：组织解析端口与 AuthStore 同实现（PrismaAuthStore），经 AUTH_STORE 适配注册，

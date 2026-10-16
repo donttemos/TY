@@ -7,12 +7,15 @@
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo 真机修复：API 基址增加同源 `/api/v1` 兜底。生产构建若缺
  *   VITE_API_BASE_URL（.env.* 不进版本库），baseURL 会退化为 undefined，请求落到静态站被拒 405
+ * @modified 2026-10-15 donttemo M10/E-17：响应/错误拦截器记录后端 X-Trace-Id（rememberTraceId），
+ *   供 RUM 上报与后端日志同链关联
  * @module admin-web/utils
  */
 
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { BIZ_CODE, BizError, describeBizError, toBizError, type FieldError } from './biz-error';
 import { tokenStore } from './token';
+import { rememberTraceId } from './trace';
 
 /** 刷新进行中的 Promise（并发 401 共用，避免多次刷新互相轮换） */
 let refreshing: Promise<string> | null = null;
@@ -101,6 +104,8 @@ service.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 service.interceptors.response.use(
   (response: AxiosResponse) => {
+    // M10/E-17：记录后端 traceId（RUM 上报与后端日志同链关联）
+    rememberTraceId(response.headers?.['x-trace-id']);
     const body = response.data as { code?: number; message?: string; data?: unknown; traceId?: string } | null;
     // 非信封响应（如静态资源）原样返回
     if (body === null || typeof body !== 'object' || !('code' in body)) {
@@ -122,6 +127,8 @@ service.interceptors.response.use(
     // HTTP 层错误：优先取响应信封转 BizError
     const axiosError = error as { response?: AxiosResponse<{ code?: number; message?: string; traceId?: string; data?: { details?: FieldError[] } }>; config?: InternalAxiosRequestConfig; message?: string };
     if (axiosError.response) {
+      // M10/E-17：失败响应同样记录 traceId（错误现场的关联价值更高）
+      rememberTraceId(axiosError.response.headers?.['x-trace-id']);
       const body = axiosError.response.data;
       if (body && typeof body === 'object' && typeof body.code === 'number') {
         const bizError = toBizError(body);

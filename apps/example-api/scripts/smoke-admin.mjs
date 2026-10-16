@@ -18,6 +18,8 @@
  *   「alice 读他人任务 404」的归属人隔离断言
  * @modified 2026-10-15 donttemo BUG-15 增量 + E-07：roles/dict 排序白名单断言（合法排序 + 未知字段
  *   400/1001）与 GET /dict/audit_module 四项断言（M9 起为六项：seed 补 queue/config 两模块）
+ * @modified 2026-10-15 donttemo M10/E-17：新增前端错误遥测段——POST /telemetry/client-errors
+ *   公开摄取（合法上报 received/total、超单批上限 400/1001、非法字段 details 一次回齐）
  * @module example-api
  */
 
@@ -767,6 +769,44 @@ async function main() {
   check('alice GET /permissions/tree → 403/3002（permission:read 未授予，越权面反向验证）',
     aliceTree.status === 403 && aliceTree.body.code === 3002,
     `http=${aliceTree.status} code=${aliceTree.body.code}`);
+
+  // ---------- 前端错误遥测（M10 E-17，公开端点） ----------
+  const rumReport = {
+    source: 'error',
+    message: 'Cannot read properties of undefined',
+    stack: 'TypeError: Cannot read properties of undefined\n    at render (AppMain.vue:42:11)',
+    resource: null,
+    page: '/dashboard',
+    url: 'http://127.0.0.1:3000/dashboard',
+    traceId: 'b3f1c9d2e4f5a6b7',
+    repeat: 1,
+    at: '2026-10-15T12:00:00.000Z',
+  };
+  const rumOk = await call('/api/v1/telemetry/client-errors', {
+    method: 'POST',
+    body: { app: 'admin-web', reports: [rumReport] },
+  });
+  check('POST /telemetry/client-errors 合法上报 → { received, total }（公开，无 token）',
+    isOk(rumOk.status) && rumOk.body.code === 0
+    && rumOk.body.data?.received === 1 && typeof rumOk.body.data?.total === 'number',
+    `http=${rumOk.status} code=${rumOk.body.code} data=${JSON.stringify(rumOk.body.data)}`);
+  const rumOver = await call('/api/v1/telemetry/client-errors', {
+    method: 'POST',
+    body: { app: 'admin-web', reports: Array.from({ length: 11 }, () => rumReport) },
+  });
+  check('单批 11 条（超 RUM_MAX_BATCH）→ 400/1001',
+    rumOver.status === 400 && rumOver.body.code === 1001,
+    `http=${rumOver.status} code=${rumOver.body.code}`);
+  const rumBad = await call('/api/v1/telemetry/client-errors', {
+    method: 'POST',
+    body: { app: 'admin-web', reports: [{ ...rumReport, source: 'weird', repeat: 0 }] },
+  });
+  check('非法 source + repeat → 400/1001 且 details 一次回齐两条字段定位',
+    rumBad.status === 400 && rumBad.body.code === 1001
+    && (rumBad.body.details ?? []).length === 2
+    && rumBad.body.details.some((d) => d.field === 'reports[0].source')
+    && rumBad.body.details.some((d) => d.field === 'reports[0].repeat'),
+    `http=${rumBad.status} code=${rumBad.code ?? rumBad.body.code} details=${(rumBad.body.details ?? []).map((d) => d.field).join(',')}`);
 
   console.log(`\n结果：${pass}/${total} 通过`);
   if (pass !== total) process.exitCode = 1;

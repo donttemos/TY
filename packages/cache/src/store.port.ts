@@ -6,6 +6,9 @@
  *   本文件不得出现任何驱动特有类型（ioredis / Redis 类型）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-16 donttemo 驱动审查修复：文档化两处端口契约——size() 为观测近似值
+ *   （memory=本进程条目 / redis=DBSIZE 整库，两驱动数值不可直接对比）；tokenBucketTake 的
+ *   retryAfterMs 增加 -1 哨兵语义（cost > capacity 时永不可满足，不得当作可立即重试）
  * @module @fw/cache
  */
 
@@ -18,7 +21,9 @@ import type { CacheDriverName } from './types.js';
  * - TTL 一律以**毫秒**传递，且必须为正数（禁止无过期写入）；
  * - `del` 幂等，返回实际删除数量；
  * - 条件操作（`compareAndDelete` / `compareAndExpire`）用于锁的安全释放与续期，
- *   redis 驱动用 Lua 保证原子，memory 驱动用单线程语义保证。
+ *   redis 驱动用 Lua 保证原子，memory 驱动用单线程语义保证；
+ * - `size()` 为**观测近似值**，语义随驱动不同不可直接对比：memory = 本进程有效条目数，
+ *   redis = `DBSIZE` 整库键数（含其他应用的键）。仅用于容量/内存观测与告警，禁止参与业务判定。
  */
 /** 令牌桶取令牌结果（M10 E-03） */
 export interface TokenBucketTakeResult {
@@ -26,7 +31,11 @@ export interface TokenBucketTakeResult {
   allowed: boolean;
   /** 取令牌后的桶内余额（向下取整） */
   remaining: number;
-  /** 余额不足时建议的等待毫秒数（攒够 cost 个令牌所需时间；allowed=true 时为 0） */
+  /**
+   * 余额不足时建议的等待毫秒数（攒够 cost 个令牌所需时间；allowed=true 时为 0）。
+   * **-1 = 永不可满足**：cost > capacity（或 refill ≤ 0）的配置错误，等待无意义——
+   * 调用方不得把 -1 或旧语义下的 0 当作「立即重试可行」。
+   */
   retryAfterMs: number;
 }
 
@@ -72,6 +81,6 @@ export interface CacheStorePort {
   ping(): Promise<boolean>;
   /** 释放连接（优雅停机） */
   close(): Promise<void>;
-  /** 当前有效键数量（观测用；redis 驱动返回本地计数近似值） */
+  /** 当前有效键数量（**观测近似值，语义随驱动**：见文件头约定，禁止业务判定用） */
   size(): Promise<number>;
 }

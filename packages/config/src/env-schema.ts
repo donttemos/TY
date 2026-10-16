@@ -21,6 +21,16 @@
  *   故障放行/灰度仅告警）——G5「限流默认开启」的框架级落地，77 键
  * @modified 2026-10-15 donttemo M10/E-07 新增 3 个 AUTH_* 键（OAuth2 提供方 JSON / 回调地址白名单 /
  *   API Key 签名密钥）——认证策略名实相符，80 键；全部 boot 键不入热更白名单
+ * @modified 2026-10-15 donttemo M10/E-10 新增 2 个 AUDIT_ARCHIVE_* 键（保留天数 / 单批条数）——
+ *   审计归档策略（PRD-010 AC7：在线表行数回落），82 键；boot 键不入热更白名单
+ * @modified 2026-10-15 donttemo M10/E-16 边界上限配置化：新增 4 键（WEB_KEEP_ALIVE_MAX 前端
+ *   keep-alive 条数 / MQ_DEAD_LETTER_PAGE_MAX 死信分页每页上限 / JOB_ARTIFACT_MAX_MB 任务产物
+ *   体积上限 / CONFIG_CENTER_HISTORY_MAX 配置历史版本数）——含 M10/E-10 两键共 87 键；
+ *   web.keepAliveMax 入热更白名单（12 键），其余 boot 键禁入
+ *   （前端 GET /configs 消费路径要求，PRD-010 E-16 评审扩范围），其余三项构造期读取，不入白名单
+ * @modified 2026-10-16 donttemo M10/E-09 新增 10 个 STORAGE_* 键（驱动/local 根目录/s3 五件套/
+ *   path-style/大小上限/扩展名白名单）——文件存储端口（PRD-010 E-09），97 键；
+ *   全部为 boot 键不入热更白名单（驱动与存储根属进程形态变更，必须走重启）
  * @module config
  * @since v0.1.0
  */
@@ -52,6 +62,8 @@ export const CONFIG_CENTER_DRIVER_VALUES = ['file', 'nacos'] as const;
 export const JOB_CENTER_DRIVER_VALUES = ['memory', 'db', 'bullmq'] as const;
 /** 限流键维度（M10/E-03）：per-ip 固定（中间件位于鉴权守卫之前，拿不到用户身份）；白名单豁免是另一出口 */
 export const RATE_LIMIT_SCOPE_VALUES = ['per-ip'] as const;
+/** 文件存储驱动可选值（M10/E-09 起生效；`oss`/`cos` 原生协议暂不入枚举，走 s3 兼容端点——非法取值启动即失败） */
+export const STORAGE_DRIVER_VALUES = ['local', 's3'] as const;
 
 /** 空字符串视为未设置（.env 里 `DB_URL=` 留空等价于注释掉） */
 const emptyToUndefined = (value: unknown): unknown =>
@@ -246,6 +258,38 @@ export const envSchema = z.object({
   RATE_LIMIT_FAIL_OPEN: boolString(true).describe('限流故障放行（RATE_LIMIT_FAIL_OPEN）'),
   /** 限流灰度模式（M10/E-03）：true = 仅计数告警不拦截（观测先行，切换放开即 false；非「关闭」——桶与计数照常运转） */
   RATE_LIMIT_DRY_RUN: boolString(false).describe('限流灰度仅告警（RATE_LIMIT_DRY_RUN）'),
+  /** 审计归档保留天数（M10/E-10）：createdAt 早于「now - 保留天数」的审计记录由定时任务迁入归档表（audit_log_archives）；与数据字典 §3.13 保留期口径一致 */
+  AUDIT_ARCHIVE_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(180).describe('审计归档保留天数（AUDIT_ARCHIVE_RETENTION_DAYS）'),
+  /** 审计归档单批条数（M10/E-10）：每批「先写归档（幂等 upsert）后删在线」，控制单批事务压力与长占锁时间 */
+  AUDIT_ARCHIVE_BATCH_SIZE: z.coerce.number().int().min(1).max(100000).default(1000).describe('审计归档单批条数（AUDIT_ARCHIVE_BATCH_SIZE）'),
+  /** 前端 keep-alive LRU 条数上限（M10/E-16）：admin-web 主内容区缓存已访问页面条数（启动经 GET /configs 读取，变更后刷新页面生效） */
+  WEB_KEEP_ALIVE_MAX: z.coerce.number().int().min(1).max(1000).default(12).describe('前端 keep-alive 条数上限（WEB_KEEP_ALIVE_MAX）'),
+  /** 死信分页每页条数上限（M10/E-16）：管理面死信列表 pageSize 钳制上界（与 api-spec §1.5 列表约定同源） */
+  MQ_DEAD_LETTER_PAGE_MAX: z.coerce.number().int().min(1).max(1000).default(200).describe('死信分页每页上限（MQ_DEAD_LETTER_PAGE_MAX）'),
+  /** 单任务产物体积上限（MB，M10/E-16）：超出任务失败并给可读原因（不静默截断）；memory 与 db/bullmq 驱动同口径 */
+  JOB_ARTIFACT_MAX_MB: z.coerce.number().int().min(1).max(1024).default(20).describe('任务产物体积上限（MB，JOB_ARTIFACT_MAX_MB）'),
+  /** 配置快照历史保留版本数（M10/E-16）：进程内环形表与持久历史的淘汰窗口同口径；回滚到已淘汰版本报 404/5003 */
+  CONFIG_CENTER_HISTORY_MAX: z.coerce.number().int().min(1).max(1000).default(20).describe('配置历史保留版本数（CONFIG_CENTER_HISTORY_MAX）'),
+  /** 文件存储驱动（M10/E-09）：local 本地磁盘（默认）/ s3 兼容对象存储（@aws-sdk/client-s3 optional peer）；boot 键禁热更 */
+  STORAGE_DRIVER: z.enum(STORAGE_DRIVER_VALUES).default('local').describe('文件存储驱动（STORAGE_DRIVER）'),
+  /** local 驱动存储根目录（M10/E-09）：对象 key 为其下的相对路径（<yyyyMM>/<uuid><ext>） */
+  STORAGE_LOCAL_ROOT: z.string().min(1).default('./uploads').describe('local 驱动存储根目录（STORAGE_LOCAL_ROOT）'),
+  /** S3 兼容端点（M10/E-09）：MinIO / COS / OSS 等自定义端点；缺省走 AWS 原生寻址 */
+  STORAGE_S3_ENDPOINT: optionalString().describe('S3 兼容端点（STORAGE_S3_ENDPOINT）'),
+  /** S3 区域（M10/E-09） */
+  STORAGE_S3_REGION: z.string().min(1).default('us-east-1').describe('S3 区域（STORAGE_S3_REGION）'),
+  /** S3 桶名（M10/E-09，s3 驱动必填，缺失启动即失败） */
+  STORAGE_S3_BUCKET: optionalString().describe('S3 桶名（STORAGE_S3_BUCKET）'),
+  /** S3 访问密钥 ID（M10/E-09；SDK 未显式配置时回退节点 IAM/环境链路） */
+  STORAGE_S3_ACCESS_KEY_ID: optionalString().describe('S3 访问密钥 ID（STORAGE_S3_ACCESS_KEY_ID）'),
+  /** S3 访问密钥（M10/E-09；敏感键不入日志） */
+  STORAGE_S3_SECRET_ACCESS_KEY: optionalString().describe('S3 访问密钥（STORAGE_S3_SECRET_ACCESS_KEY）'),
+  /** S3 path-style 寻址（M10/E-09）：MinIO 必须 true；AWS 原生建议 false */
+  STORAGE_S3_FORCE_PATH_STYLE: boolString(true).describe('S3 path-style 寻址（STORAGE_S3_FORCE_PATH_STYLE）'),
+  /** 单文件大小上限 MB（M10/E-09）：超出 400 拒绝（不静默截断），与任务中心产物口径一致 */
+  STORAGE_MAX_MB: z.coerce.number().int().min(1).max(1024).default(20).describe('单文件大小上限（MB，STORAGE_MAX_MB）'),
+  /** 上传扩展名白名单（M10/E-09，逗号分隔，大小写不敏感；默认收紧，按需放宽） */
+  STORAGE_ALLOWED_EXTS: z.string().min(1).default('.png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.csv,.xlsx,.docx,.zip').describe('上传扩展名白名单（STORAGE_ALLOWED_EXTS）'),
 });
 
 /** 校验后的环境变量类型 */
@@ -264,6 +308,7 @@ export const ENUM_OPTIONS: Record<string, readonly string[]> = {
   TRANSPORT_ROLE: TRANSPORT_ROLE_VALUES,
   TENANT_ORDER: TENANT_SOURCE_VALUES,
   CONFIG_CENTER_DRIVER: CONFIG_CENTER_DRIVER_VALUES,
+  STORAGE_DRIVER: STORAGE_DRIVER_VALUES,
 };
 
 /**
@@ -356,12 +401,30 @@ export const ENV_KEY_PATHS = {
   RATE_LIMIT_WHITELIST: 'rateLimit.whitelist',
   RATE_LIMIT_FAIL_OPEN: 'rateLimit.failOpen',
   RATE_LIMIT_DRY_RUN: 'rateLimit.dryRun',
+  AUDIT_ARCHIVE_RETENTION_DAYS: 'audit.archiveRetentionDays',
+  AUDIT_ARCHIVE_BATCH_SIZE: 'audit.archiveBatchSize',
+  WEB_KEEP_ALIVE_MAX: 'web.keepAliveMax',
+  MQ_DEAD_LETTER_PAGE_MAX: 'mq.deadLetterPageMax',
+  JOB_ARTIFACT_MAX_MB: 'jobCenter.artifactMaxMb',
+  CONFIG_CENTER_HISTORY_MAX: 'configCenter.historyMax',
+  STORAGE_DRIVER: 'storage.driver',
+  STORAGE_LOCAL_ROOT: 'storage.localRoot',
+  STORAGE_S3_ENDPOINT: 'storage.s3.endpoint',
+  STORAGE_S3_REGION: 'storage.s3.region',
+  STORAGE_S3_BUCKET: 'storage.s3.bucket',
+  STORAGE_S3_ACCESS_KEY_ID: 'storage.s3.accessKeyId',
+  STORAGE_S3_SECRET_ACCESS_KEY: 'storage.s3.secretAccessKey',
+  STORAGE_S3_FORCE_PATH_STYLE: 'storage.s3.forcePathStyle',
+  STORAGE_MAX_MB: 'storage.maxMb',
+  STORAGE_ALLOWED_EXTS: 'storage.allowedExts',
 } as const satisfies Record<keyof Env, string>;
 
 /**
  * 热更新白名单（M9/PRD-009 FR-03）：键为点路径，值为对应 Env 键名。
  *
  * 首版范围 = PRD-009 FR-03 定稿清单（log / cache / mq / otel / tenant 五个运行时可调域）；
+ * M10/E-16 增补 web.keepAliveMax（PRD-010 E-16 评审扩范围：前端 keep-alive 上限须经 GET /configs
+ * 运行时读取，不登记即不可见——与「按需入热更白名单」的 E-16 约束一致）；
  * **boot 键（端口 / 驱动 / 连接串 / 密钥 / 开关）一律禁改**——改动属进程形态变更，必须走重启；
  * 登录策略（auth.maxFailed / auth.lockMinutes）属安全基线，按 PRD-009 §9 决议不纳入。
  * 新键是否可热更在 ENV_KEY_PATHS 之外**显式**登记于此：不登记即不可热更（fail-safe 方向）。
@@ -378,4 +441,5 @@ export const ENV_HOT_KEYS = {
   'mq.concurrency': 'MQ_CONCURRENCY',
   'otel.sampleRatio': 'OTEL_SAMPLE_RATIO',
   'tenant.cacheTtl': 'TENANT_CACHE_TTL',
+  'web.keepAliveMax': 'WEB_KEEP_ALIVE_MAX',
 } as const satisfies Record<string, keyof Env>;

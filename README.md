@@ -90,7 +90,7 @@ framework/
     94b-queue-transport-cluster-live-test.md # E-06 收口：bullmq/transport 在 Redis Cluster 上的实跑实测
     95-doc-audit.md           # 文档一致性核对报告
     99-admin-web-enhancement-and-fixes.md # 管理后台前端功能补充与缺陷修复方案
-    adr/                      # 架构决策记录 0001–0013
+    adr/                      # 架构决策记录 0001–0015
     prd/                      # 按功能 / 迭代拆分的 PRD
     archive/                  # 已完结的历史记录归档（2026-10-15 起，避免与活动文档混排）
       release/                #   发布验收报告：90-release-v0.1.0.md、90-release-v0.2.0.md
@@ -99,20 +99,20 @@ framework/
       m8/                     #   M8 演练与基线：96-m8-drills.md、97-bench-baseline.md
 ```
 
-## 快速开始（目标体验，实现中）
+## 快速开始（admin 全栈模板，E-08 已交付）
 
 ```bash
-# 1. 用模板创建项目（未全局安装 CLI 时用 npx @fw/cli new）
+# 1. 用模板创建全栈管理后台（server + admin-web 两个工作区成员，fw new 自动注册进 pnpm-workspace.yaml）
 fw new my-system --template=admin
 
-# 2. 配置能力切换点（.env）
-DB_DRIVER=postgres      # mysql | postgres | sqlite
-CACHE_DRIVER=memory     # memory | redis | redis-cluster
-AUTH_STRATEGY=jwt       # jwt | session | oauth2 | apikey
-MQ_DRIVER=memory        # memory | bullmq
+# 2. 服务端：建库 + 种子 + 启动（首次登录 admin / Admin@123456，立即改密）
+cd my-system/server
+# 服务端依赖已随仓库根 pnpm i 就位，直接：
+pnpm db:migrate && pnpm db:seed
+pnpm build && pnpm dev              # http://localhost:3000/health
 
-# 3. 启动（默认自带登录、权限、健康检查）
-pnpm dev                # http://localhost:3000/health
+# 3. 前端（另开终端）
+cd ../admin-web && pnpm dev         # http://localhost:5173（dev 代理到 3000）
 
 # 4. 由数据表生成 CRUD（M6）
 fw gen crud order --dry
@@ -132,6 +132,7 @@ fw gen crud order
 | 队列与定时任务 | `@fw/queue`（统一 Job 抽象 + memory/bullmq 双驱动 + `@JobHandler`/`@Cron` 自动扫描 + 重试退避 + 死信重放 + 幂等 + 令牌桶限速 + cron 分布式锁 + 优雅停机 + 队列管理页；单测 135 / 覆盖率 93.1%、example-api 冒烟 31/31 含真实 Redis 失速恢复演练 TC-JOB-008） | M7 | ✅ 已发布 v0.2.0 |
 | 多租户与规模化 | `@fw/tenant`（三级回退租户解析 + fail-closed + 上下文透传）+ `@fw/db` TenantDataSource（dedicated 独立库路由：懒创建 + LRU/空闲淘汰 + Repository 按上下文选路）+ `@fw/auth` 数据权限四档（`DataScopeOrgPort` + all/org_below/org/self 解析与详情越权校验 + `departments`/`user_department` 模型）+ `@fw/transport` 传输层（in-process/redis 双驱动端口 + redis RPC 协议 + `@TransportHandler` 声明式注册 + 客户端代理，切换不改调用方代码）+ `@fw/telemetry` 链路追踪（OTel：HTTP 中间件 + 尾采样错误全采 + OTLP 导出 + 日志 span 桥接 + DB/缓存/队列/传输插桩）+ **部署模板（Helm Chart + compose + Nginx）与三大演练**；冒烟 48/48 + 17/17 + 14/14，演练 25/25、Chart 校验 63/63 | M8 | ✅ 已发布 v0.2.0（条件通过） |
 | 配置中心与热更新 | `@fw/config-center`（ConfigCenterPort + 本地 file 适配 mtime 轮询 + 原子写 + 单一生效管道：校验→审计→持久化→应用→通知，fail-keep / 先审计后生效）+ 热更新白名单 11 键从 env-schema 键注册表派生（完整性单测防键集漂移）+ 四框架服务订阅热更（Logger / Cache / Queue / OTel / Tenant）+ `/api/v1/configs` 查改端点（5001/5002/5003 错误码段）+ admin 参数配置页与变更历史 + mock 同构；单测 34/34，`smoke-config.mjs` 27/27、`smoke-mock` 119/119 | M9 | ✅ 已发布 v0.4.0 |
+| 文件存储端口 | `@fw/storage`（StoragePort + local/s3 双驱动 + `STORAGE_DRIVER` 枚举装配（非法取值启动即失败）+ 类型/大小白名单默认收紧 + 服务端生成存储 key 免疫路径穿越；S3 走 optional peer 懒加载，local 零依赖）+ `/api/v1/files` 三端点（上传 `file:create` / 元数据与下载登录即可）+ codegen 附件字段（`*FileId` → FileUpload 上传控件）+ mock 逐字节同构与 admin 模板收编（决策见 [ADR-0016](./docs/adr/0016-storage-port-fw-storage.md)）；单测 45/45、smoke-mock 140/140、smoke-template-admin 7/7 | M10（PRD-010 E-09） | ✅ 已交付（Unreleased） |
 
 ## 文档索引
 
@@ -149,7 +150,7 @@ fw gen crud order
 | [1Panel 真机部署手册](./docs/62-1panel-real-deploy.md) | 已有 1Panel 面板的服务器落地：OpenResty host 网络反代、容器化数据库的宿主端口接入、PostgreSQL schema 变体与迁移重建、2C2G 内存约束（V8 堆 + cgroup MemoryMax）、站点目录与 HTTPS |
 | [1Panel 真机部署验证报告](./docs/63-1panel-real-deploy-verification.md) | 上述手册在腾讯云 2C2G4M 上的**完整实测记录**：逐项耗时与内存数据、三条约束的实测结论、端到端冒烟结果、**5 个只有真机才会暴露的缺陷**（队列权限缺失、dedicated 租户连接串、pnpm bin 时序、迁移计数、镜像配置）与结清后的遗留清单 |
 | [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.5.0 已发布：多实例一致性收口 + 认证策略端到端） |
-| [ADR 架构决策记录](./docs/adr/README.md) | 13 条决策：NestJS / Prisma（已定稿）/ monorepo / 缓存 / 异步任务 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 |
+| [ADR 架构决策记录](./docs/adr/README.md) | 15 条决策：NestJS / Prisma（已定稿）/ monorepo / 缓存 / 异步任务 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 / i18n / 暗色模式 |
 | [编码 Git PR 规范](./docs/70-engineering-standards.md) | 编码规范、**中文注释规范（文件头含作者与日期）**、反模式清单、分支与提交约定、PR 与评审规则 |
 | [项目计划与任务板](./docs/80-project-plan.md) | 15 周甘特、M1–M8 WBS（40+ 任务）、任务板列与标签、当前快照 |
 | [增强功能规划](./docs/81-enhancement-roadmap.md) | v0.5.x–v0.6.x 完善项清单：多实例一致性、规模化遗留、模板生态、体验增强（E-01~E-17，含目标/收益/验收口径） |

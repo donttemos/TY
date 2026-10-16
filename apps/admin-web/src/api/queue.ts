@@ -51,7 +51,7 @@ export function tickCron(name: string): Promise<CronTickResult> {
  * 死信列表（分页）
  * @param queue 队列名（可选）
  * @param page 页码（从 1 开始）
- * @param pageSize 每页条数（默认 20，上限 200）
+ * @param pageSize 每页条数（默认 20，上限为服务端 MQ_DEAD_LETTER_PAGE_MAX，默认 200——M10/E-16 可配）
  */
 export function fetchDeadLetters(queue?: string, page = 1, pageSize = 20): Promise<DeadLetterListResult> {
   return request.get<DeadLetterListResult>('/admin/queue/dead-letters', {

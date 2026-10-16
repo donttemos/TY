@@ -34,7 +34,7 @@ describe('ENV_HOT_KEYS（热更新白名单）一致性', () => {
     expect(Object.keys(ENV_HOT_KEYS).length).toBeLessThan(Object.keys(ENV_KEY_PATHS).length);
   });
 
-  it('PRD-009 FR-03 首版白名单范围固定（11 键；扩范围需评审 PRD）', () => {
+  it('热更白名单范围固定（12 键：PRD-009 FR-03 首版 11 键 + PRD-010 E-16 评审扩范围 web.keepAliveMax）', () => {
     expect(Object.keys(ENV_HOT_KEYS).sort()).toEqual(
       [
         'log.level',
@@ -48,6 +48,7 @@ describe('ENV_HOT_KEYS（热更新白名单）一致性', () => {
         'mq.concurrency',
         'otel.sampleRatio',
         'tenant.cacheTtl',
+        'web.keepAliveMax',
       ].sort(),
     );
   });

@@ -29,9 +29,48 @@ export function makeRuntime(overrides: Partial<TransportRuntimeOptions> = {}): T
 const POLL_INTERVAL_MS = 5;
 
 /**
+ * 进程内事件总线（模拟 Redis pub/sub）：多连接共用同一 bus 即可复现「跨实例广播」——
+ * 这是 E-12 多副本语义的单测近似（两个驱动实例 = 两个进程）。
+ */
+export class FakePubSubBus {
+  /** 频道 → 监听器集合 */
+  private readonly channels = new Map<string, Set<(channel: string, message: string) => void>>();
+
+  /** 注册监听器 */
+  attach(channel: string, listener: (channel: string, message: string) => void): void {
+    const bucket = this.channels.get(channel) ?? new Set();
+    bucket.add(listener);
+    this.channels.set(channel, bucket);
+  }
+
+  /** 移除监听器 */
+  detach(channel: string, listener: (channel: string, message: string) => void): void {
+    const bucket = this.channels.get(channel);
+    if (!bucket) return;
+    bucket.delete(listener);
+    if (bucket.size === 0) this.channels.delete(channel);
+  }
+
+  /** 广播并返回收到消息的订阅方数量 */
+  broadcast(channel: string, message: string): number {
+    const bucket = this.channels.get(channel);
+    if (!bucket) return 0;
+    for (const listener of [...bucket]) listener(channel, message);
+    return bucket.size;
+  }
+
+  /** 当前某频道的订阅方数量（断言退订用） */
+  subscriberCount(channel: string): number {
+    return this.channels.get(channel)?.size ?? 0;
+  }
+}
+
+/**
  * 内存版 fake Redis：以 Map 模拟列表，LPUSH 入头、BLPOP 弹尾、BRPOP 弹头，
  * 阻塞命令按真实超时时间轮询等待（无数据到期返回 null），与 ioredis 语义一致。
  * caller 与 worker 连接可指向同一实例（共享列表存储），quit/disconnect 幂等。
+ * M10 E-12：另实现 PUBLISH / SUBSCRIBE / UNSUBSCRIBE（经可共享的 FakePubSubBus，
+ * 多个 FakeRedis 传入同一 bus 即模拟 Redis 的跨连接广播）。
  */
 export class FakeRedis implements RedisLike {
   /** 列表存储（键 → 元素数组；头 = 数组首部） */
@@ -42,6 +81,19 @@ export class FakeRedis implements RedisLike {
   closed = false;
   /** ping 次数 */
   pingCount = 0;
+  /** 事件总线（缺省独享；跨实例测试传入共享实例） */
+  readonly bus: FakePubSubBus;
+  /** 已订阅频道 → 总线监听器 */
+  private readonly subscriptions = new Map<string, (channel: string, message: string) => void>();
+  /** message 监听器（`on('message', ...)`） */
+  private readonly messageListeners: Array<(...args: unknown[]) => void> = [];
+
+  /**
+   * @param bus 共享事件总线（缺省独享，单连接自收自发）
+   */
+  constructor(bus?: FakePubSubBus) {
+    this.bus = bus ?? new FakePubSubBus();
+  }
 
   /** LPUSH：压入列表头 */
   async lpush(key: string, value: string): Promise<number> {
@@ -89,9 +141,35 @@ export class FakeRedis implements RedisLike {
     this.closed = true;
   }
 
-  /** ON：仅消费事件订阅，不做派发 */
-  on(_event: string, _handler: (...args: unknown[]) => void): unknown {
+  /** ON：message 事件进入监听表（其余事件仅消费，不派发） */
+  on(event: string, handler: (...args: unknown[]) => void): unknown {
+    if (event === 'message') this.messageListeners.push(handler);
     return this;
+  }
+
+  /** PUBLISH：经总线广播，返回订阅方数量 */
+  async publish(channel: string, message: string): Promise<number> {
+    return this.bus.broadcast(channel, message);
+  }
+
+  /** SUBSCRIBE：同一频道重复订阅幂等 */
+  async subscribe(channel: string): Promise<unknown> {
+    if (this.subscriptions.has(channel)) return 'OK';
+    const listener = (ch: string, message: string): void => {
+      for (const handler of [...this.messageListeners]) handler(ch, message);
+    };
+    this.subscriptions.set(channel, listener);
+    this.bus.attach(channel, listener);
+    return 'OK';
+  }
+
+  /** UNSUBSCRIBE：移除总线监听器 */
+  async unsubscribe(channel: string): Promise<unknown> {
+    const listener = this.subscriptions.get(channel);
+    if (!listener) return 'OK';
+    this.subscriptions.delete(channel);
+    this.bus.detach(channel, listener);
+    return 'OK';
   }
 
   /** 取某键当前长度（测试断言入队/清理用） */

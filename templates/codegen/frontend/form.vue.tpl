@@ -1,7 +1,9 @@
 <!--
  * @file form.vue
  * @description {{model.name}} 表单弹窗（由 fw gen crud 生成）：独立于列表页的录入 / 编辑组件，
- *   字段与控件由 schema 元信息推导（input / textarea / number / switch / datetime / dict-select / select）。
+ *   字段与控件由 schema 元信息推导（input / textarea / number / switch / datetime / dict-select / select / upload）。
+ *   附件字段（*FileId / *AttachmentId）用 upload 控件：上传走 /api/v1/files（服务端 @fw/storage 做类型/大小白名单），
+ *   表单值存文件 id，下载按 id 现取。
  *   提交走 api/{{model.kebab}}.ts；外键下拉数据源与枚举字典按 TODO 补齐后即可端到端使用。
  * @author {{author}}
  * @created {{created}}
@@ -16,6 +18,7 @@ import { ElMessage } from 'element-plus';
 import type { FormInstance, FormRules } from 'element-plus';
 import * as {{model.camel}}Api from '@/api/{{model.kebab}}';
 import type { Create{{model.name}}Input, Update{{model.name}}Input } from '@/api/{{model.kebab}}';
+import FileUpload from '@/components/FileUpload/index.vue';
 import type { FormField } from '@/components/CrudTable/types';
 
 const props = defineProps<{
@@ -120,6 +123,12 @@ async function submit(): Promise<void> {
         <el-select v-else-if="field.type === 'select' || field.type === 'dict-select'" v-model="form[field.prop]">
           <el-option v-for="option in field.options ?? []" :key="String(option.value)" :label="option.label" :value="option.value" />
         </el-select>
+        <!-- 附件（PRD-010 E-09）：上传走 /api/v1/files，文件 id 写回表单模型 -->
+        <file-upload
+          v-else-if="field.type === 'upload'"
+          :model-value="(form[field.prop] as string) ?? ''"
+          @update:model-value="(value: string) => (form[field.prop] = value)"
+        />
         <el-input v-else v-model="form[field.prop]" />
       </el-form-item>
     </el-form>

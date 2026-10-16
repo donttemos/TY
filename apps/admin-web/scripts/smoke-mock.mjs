@@ -19,7 +19,7 @@
  * @modified 2026-10-15 donttemo BUG-15 增量 + E-07：roles/dict 排序白名单断言（合法排序 + 未知字段
  *   400/1001）与 GET /dict/audit_module 四项断言
  * @modified 2026-10-15 donttemo M9/PRD-009：① audit_module 断言更新为六项（seed 与 mock 同批补 queue/config）；
- *   ② 新增参数配置段——GET /configs 白名单 11 键、PUT 合法值生效（source 翻转 + 版本号递增 + 审计落盘）、
+ *   ② 新增参数配置段——GET /configs 白名单 12 键、PUT 合法值生效（source 翻转 + 版本号递增 + 审计落盘）、
  *   boot 键 400/5001、未知键 404/5003、非法值 400/5002（旧值保持 + 失败审计 + 原因回显）、同值写不产生审计、
  *   alice 无 system:config:read/write → 3002 双断言
  *   与原地重跑 / 越权（3002）与任务归属人隔离（404）
@@ -505,6 +505,53 @@ async function main() {
       && csvDownloadText.split('\r\n').length >= 2,
       `bytes=${csvDownloadBytes.length}`);
 
+    // ---- M10 E-13 站内信 / 通知中心（mock 与 example-api §3.14 同构）----
+    const notifList = await api('GET', '/notifications', { token: newAccess });
+    const notifItems = notifList.body?.data?.items ?? [];
+    check('GET /notifications 返回列表与未读数（分页字段齐备）',
+      notifList.status === 200 && Array.isArray(notifItems) && notifItems.length >= 2
+      && typeof notifList.body?.data?.unread === 'number' && notifList.body?.data?.page === 1
+      && notifList.body?.data?.pageSize === 20,
+      `total=${notifList.body?.data?.total} unread=${notifList.body?.data?.unread}`);
+    check('列表项不含内部字段（userId / dedupeKey）',
+      notifItems[0] !== undefined && notifItems[0].userId === undefined && notifItems[0].dedupeKey === undefined,
+      `keys=${Object.keys(notifItems[0] ?? {}).join(',')}`);
+
+    const unreadOnly = await api('GET', '/notifications?unreadOnly=true', { token: newAccess });
+    check('unreadOnly=true 只回未读且 total 与 unread 一致',
+      unreadOnly.body?.data?.total === unreadOnly.body?.data?.unread
+      && (unreadOnly.body?.data?.items ?? []).every((item) => item.read === false),
+      `total=${unreadOnly.body?.data?.total} unread=${unreadOnly.body?.data?.unread}`);
+
+    const firstUnread = (unreadOnly.body?.data?.items ?? [])[0];
+    const notifRead = await api('POST', `/notifications/${firstUnread?.id}/read`, { token: newAccess });
+    check('POST /notifications/:id/read → read=true 且未读减一',
+      (notifRead.status === 200 || notifRead.status === 201) && notifRead.body?.data?.read === true
+      && notifRead.body?.data?.readAt != null,
+      `http=${notifRead.status} read=${notifRead.body?.data?.read}`);
+
+    // 归属人隔离反向验证：他人（bob，持 notification:read）读 admin 的消息 → 404 不泄露存在性
+    const bobLogin = await api('POST', '/auth/login', { body: { account: 'bob', password: 'Bob@123456' } });
+    const bobToken = bobLogin.body?.data?.accessToken ?? '';
+    const bobRead = await api('POST', `/notifications/${firstUnread?.id}/read`, { token: bobToken });
+    check('他人读你的消息 → 404（归属人即边界）', bobRead.status === 404, `http=${bobRead.status}`);
+    const bobList = await api('GET', '/notifications', { token: bobToken });
+    check('两人的消息面互相隔离（bob 看不到 admin 的消息）',
+      (bobList.body?.data?.items ?? []).every((item) => item.id !== firstUnread?.id),
+      `bob total=${bobList.body?.data?.total}`);
+
+    const readAll = await api('POST', '/notifications/read-all', { token: newAccess });
+    const afterReadAll = await api('GET', '/notifications/unread-count', { token: newAccess });
+    check('POST /notifications/read-all 后未读数归零',
+      (readAll.status === 200 || readAll.status === 201) && afterReadAll.body?.data?.unread === 0,
+      `updated=${readAll.body?.data?.updated} unread=${afterReadAll.body?.data?.unread}`);
+
+    const notifRemoved = await api('DELETE', `/notifications/${firstUnread?.id}`, { token: newAccess });
+    const notifAfterRemove = await api('GET', '/notifications', { token: newAccess });
+    check('DELETE /notifications/:id 后总数回落',
+      notifRemoved.status === 200 && notifAfterRemove.body?.data?.total === (notifList.body?.data?.total ?? 0) - 1,
+      `total=${notifAfterRemove.body?.data?.total}`);
+
     // 失败路径（mock 调试开关 simulate=fail）→ 重跑恢复
     const failDispatch = await api('GET', '/audit-logs/export?simulate=fail', { token: newAccess });
     const failDispatchId = failDispatch.body?.data?.id;
@@ -578,8 +625,8 @@ async function main() {
 
     const cfgList = await api('GET', '/configs', { token: newAccess });
     const cfgData = cfgList.body?.data?.configs ?? [];
-    check('GET /configs 返回白名单 11 键（boot 键不进列表）',
-      cfgList.body?.code === 0 && cfgData.length === 11
+    check('GET /configs 返回白名单 12 键（boot 键不进列表）',
+      cfgList.body?.code === 0 && cfgData.length === 12
       && cfgData.every((c) => c.hot === true && typeof c.key === 'string' && c.envKey)
       && !cfgData.some((c) => c.key === 'db.driver'),
       `count=${cfgData.length}`);
@@ -629,6 +676,88 @@ async function main() {
     check('alice 无 system:config:read → 3002', cfgAliceList.body?.code === 3002, `code=${cfgAliceList.body?.code}`);
     const cfgAlicePut = await api('PUT', '/configs/cache.ttl', { token: aliceToken, body: { value: 1 } });
     check('alice 无 system:config:write → 3002', cfgAlicePut.body?.code === 3002, `code=${cfgAlicePut.body?.code}`);
+
+    // ---------- 前端错误遥测（M10 E-17，公开端点 + fire-and-forget 契约） ----------
+    phase('前端错误遥测（/telemetry/client-errors，E-17）');
+    const rumReport = {
+      source: 'error',
+      message: 'Cannot read properties of undefined',
+      stack: 'TypeError: Cannot read properties of undefined\n    at render (AppMain.vue:42:11)',
+      resource: null,
+      page: '/dashboard',
+      url: 'http://mock.local/dashboard',
+      traceId: 'b3f1c9d2e4f5a6b7',
+      repeat: 1,
+      at: '2026-10-15T12:00:00.000Z',
+    };
+    const rumOk = await api('POST', '/telemetry/client-errors', { body: { app: 'admin-web', reports: [rumReport] } });
+    check('合法上报 → { received, total }（公开端点，无需 token）',
+      rumOk.body?.code === 0 && rumOk.body?.data?.received === 1 && typeof rumOk.body?.data?.total === 'number',
+      `code=${rumOk.body?.code} data=${JSON.stringify(rumOk.body?.data)}`);
+    const rumBatch = await api('POST', '/telemetry/client-errors', {
+      body: { app: 'admin-web', reports: Array.from({ length: 10 }, () => rumReport) },
+    });
+    check('单批 10 条（RUM_MAX_BATCH 同口径）放行', rumBatch.body?.code === 0 && rumBatch.body?.data?.received === 10);
+    const rumOver = await api('POST', '/telemetry/client-errors', {
+      body: { app: 'admin-web', reports: Array.from({ length: 11 }, () => rumReport) },
+    });
+    check('单批 11 条 → 400/1001', rumOver.status === 400 && rumOver.body?.code === 1001, `http=${rumOver.status} code=${rumOver.body?.code}`);
+    const rumEmpty = await api('POST', '/telemetry/client-errors', { body: { app: 'admin-web', reports: [] } });
+    check('空 reports → 400/1001', rumEmpty.status === 400 && rumEmpty.body?.code === 1001, `http=${rumEmpty.status} code=${rumEmpty.body?.code}`);
+    const rumBadSource = await api('POST', '/telemetry/client-errors', {
+      body: { app: 'admin-web', reports: [{ ...rumReport, source: 'weird' }] },
+    });
+    check('非法 source → 400/1001 且 details 定位 reports[0].source',
+      rumBadSource.status === 400 && rumBadSource.body?.code === 1001
+      && rumBadSource.body?.details?.[0]?.field === 'reports[0].source',
+      `http=${rumBadSource.status} code=${rumBadSource.body?.code} field=${rumBadSource.body?.details?.[0]?.field}`);
+    const rumNoApp = await api('POST', '/telemetry/client-errors', { body: { reports: [rumReport] } });
+    check('缺 app → 400/1001', rumNoApp.status === 400 && rumNoApp.body?.code === 1001, `http=${rumNoApp.status} code=${rumNoApp.body?.code}`);
+
+    // ---------- M10 E-09 附件（/files 三端点；PRD-010） ----------
+    phase('M10 E-09 附件（/files）');
+    const fileBytes = Buffer.from(`E-09 mock upload ${Date.now()}\n二进制保真 \x00\x01\xfe\xff`);
+    const boundary = `----fw-smoke-${Date.now()}`;
+    const multipart = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="冒烟附件.txt"\r\nContent-Type: text/plain\r\n\r\n`),
+      fileBytes,
+      Buffer.from(`\r\n--${boundary}--\r\n`),
+    ]);
+    const upload = await fetch(`${BASE}/files`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+      body: multipart,
+    });
+    const uploadJson = await upload.json().catch(() => null);
+    check('上传成功（信封含 id/url/size）',
+      upload.status === 200 && uploadJson?.code === 0 && typeof uploadJson?.data?.id === 'string' && uploadJson.data.url === `/api/v1/files/${uploadJson.data.id}/download`,
+      `http=${upload.status} code=${uploadJson?.code}`);
+    const fileId = uploadJson?.data?.id ?? '';
+    check('响应 size 与字节一致', uploadJson?.data?.size === fileBytes.length, `size=${uploadJson?.data?.size} expect=${fileBytes.length}`);
+
+    const fileMeta = await api('GET', `/files/${fileId}`, { token: adminToken });
+    check('元数据可查（含原始文件名）', fileMeta.body?.code === 0 && fileMeta.body?.data?.originalName === '冒烟附件.txt', `code=${fileMeta.body?.code}`);
+
+    const download = await fetch(`${BASE}/files/${fileId}/download`, { headers: { Authorization: `Bearer ${adminToken}` } });
+    const downloadBytes = Buffer.from(await download.arrayBuffer());
+    check('下载逐字节一致（N-02 同构纪律）', download.status === 200 && downloadBytes.equals(fileBytes), `http=${download.status} bytes=${downloadBytes.length}`);
+
+    const badUpload = await fetch(`${BASE}/files`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminToken}`, 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+      body: Buffer.concat([
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="evil.exe"\r\nContent-Type: application/octet-stream\r\n\r\nxx\r\n--${boundary}--\r\n`),
+      ]),
+    });
+    const badUploadJson = await badUpload.json().catch(() => null);
+    check('白名单外类型 → 400（与 @fw/storage 文案逐字一致）',
+      badUpload.status === 400 && badUploadJson?.code === 1001 && badUploadJson?.message === '不支持的文件类型：.exe',
+      `http=${badUpload.status} msg=${badUploadJson?.message}`);
+
+    const fileNoToken = await fetch(`${BASE}/files/${fileId}/download`);
+    check('未登录下载 → 401', fileNoToken.status === 401, `http=${fileNoToken.status}`);
+    const fileMissing = await api('GET', '/files/none-exists', { token: adminToken });
+    check('不存在文件 → 404 不泄露存在性', fileMissing.status === 404, `http=${fileMissing.status}`);
 
     const logout = await api('POST', '/auth/logout', { token: newAccess });
     check('登出成功', logout.body?.code === 0);

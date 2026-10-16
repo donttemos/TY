@@ -1,8 +1,11 @@
 /*
  * @file fw new 命令
- * @description 从 templates/<name> 复制项目模板并替换 __APP_NAME__ 占位符；admin/cms 模板分别在 M5/M6 交付，当前明确报错而不是静默降级。
+ * @description 从 templates/<name> 复制项目模板并替换 __APP_NAME__ 占位符。
+ *   admin 模板（M10 E-08）为全栈形态（server + admin-web 两个工作区成员），生成后自动把两个成员
+ *   注册进框架仓库根的 pnpm-workspace.yaml（带标记注释，幂等可重入）；cms 模板按需规划，明确报错不静默降级。
  * @author donttemo
  * @created 2026-10-09
+ * @modified 2026-10-15 donttemo E-08：admin 模板交付——全栈工作区成员注册 + 定制后续步骤提示
  * @module cli
  * @since v0.1.0
  */
@@ -10,12 +13,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** 支持的模板及其交付状态 */
+/** admin 模板的两个工作区成员子目录（生成后注册进根 pnpm-workspace.yaml） */
+const ADMIN_WORKSPACE_MEMBERS = ['server', 'admin-web'] as const;
+
+/** 支持的模板及其交付状态（空串 = 已交付；非空 = 未交付原因） */
 const TEMPLATES: Record<string, string> = {
   api: '',
-  // admin / cms 尚未交付：给出明确的里程碑提示，避免生成半成品
-  admin: 'admin 模板在 M5（管理后台）交付',
-  cms: 'cms 模板在 M5 后按需规划',
+  admin: '',
+  // cms 尚未交付：给出明确的规划提示，避免生成半成品
+  cms: 'cms 模板按需规划（见 docs/81 A-8）',
 };
 
 /**
@@ -41,7 +47,8 @@ export async function runNew(name: string, template: string): Promise<void> {
     throw new Error(`目录已存在：${target}`);
   }
 
-  const source = path.join(findTemplatesRoot(), template);
+  const templatesRoot = findTemplatesRoot();
+  const source = path.join(templatesRoot, template);
   if (!fs.existsSync(source)) {
     throw new Error(`模板目录缺失：${source}（请确认仓库完整性）`);
   }
@@ -53,11 +60,73 @@ export async function runNew(name: string, template: string): Promise<void> {
   if (fs.existsSync(envExample)) {
     fs.copyFileSync(envExample, path.join(target, '.env'));
   }
+  // admin 模板：服务端 .env 一并就位（JWT_SECRET 占位值仅供本地开发，README 已提示必改）
+  const serverEnvExample = path.join(target, 'server', '.env.example');
+  if (fs.existsSync(serverEnvExample)) {
+    fs.copyFileSync(serverEnvExample, path.join(target, 'server', '.env'));
+  }
+
+  // admin 模板是全栈形态：两个子包作为工作区成员注册进框架仓库根（E-08）
+  const registered = template === 'admin' ? registerWorkspaceMembers(templatesRoot, target, name) : [];
 
   console.log(`项目已创建：${target}`);
-  console.log('\n后续步骤：');
-  console.log(`  cd ${name}`);
-  console.log('  pnpm i && pnpm build && pnpm dev   # http://localhost:3000/health');
+  if (template === 'admin') {
+    console.log('\n已自动注册工作区成员：' + (registered.join('、') || '（见下方说明）'));
+    if (registered.length === 0) {
+      console.log('⚠️  生成目录不在框架仓库内，未自动注册：请把以下两项加入框架仓库根 pnpm-workspace.yaml 的 packages 列表后，在仓库根执行 pnpm i');
+      for (const member of ADMIN_WORKSPACE_MEMBERS) console.log(`  - "${name}/${member}"`);
+    }
+    console.log('\n后续步骤（在框架仓库根执行 pnpm i 之后）：');
+    console.log(`  cd ${name}/server`);
+    console.log('  cp .env.example .env                    # 必改 JWT_SECRET（占位值仅供本地开发）');
+    console.log('  pnpm prisma:generate');
+    console.log('  pnpm db:migrate && pnpm db:seed         # RBAC 基线：admin / Admin@123456');
+    console.log('  pnpm build && pnpm dev                  # http://localhost:3000/health');
+    console.log(`  cd ../admin-web && pnpm dev             # http://localhost:5173（dev 代理到 3000）`);
+  } else {
+    console.log('\n后续步骤：');
+    console.log(`  cd ${name}`);
+    console.log('  pnpm i && pnpm build && pnpm dev   # http://localhost:3000/health');
+  }
+}
+
+/**
+ * 把 admin 模板的两个子包注册为框架工作区成员（幂等）。
+ * 仅当生成目录位于框架仓库内时执行——workspace globs 相对仓库根解析，仓库外注册无意义。
+ * @param templatesRoot 模板根（框架仓库下）
+ * @param target 生成目录绝对路径
+ * @param name 项目名
+ * @returns 成功注册的成员 glob 列表；空数组 = 未注册（目录在仓库外）
+ */
+function registerWorkspaceMembers(templatesRoot: string, target: string, name: string): string[] {
+  const repoRoot = path.dirname(templatesRoot);
+  const relative = path.relative(repoRoot, target);
+  // 目录在仓库外（relative 以 .. 开头或为绝对路径）→ 不注册，由输出提示手工处理
+  if (relative.startsWith('..') || path.isAbsolute(relative)) return [];
+
+  const globs = ADMIN_WORKSPACE_MEMBERS.map((member) => `${name}/${member}`);
+  const workspaceFile = path.join(repoRoot, 'pnpm-workspace.yaml');
+  const content = fs.readFileSync(workspaceFile, 'utf8');
+  const missing = globs.filter((glob) => !new RegExp(`^\\s*-\\s*"${glob}"\\s*$`, 'm').test(content));
+  if (missing.length === 0) return globs;
+
+  // 在 packages: 列表末尾追加（保持既有缩进两空格 + 标记注释，便于识别与手工清理）
+  const lines = content.split('\n');
+  let insertAt = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^packages:\s*$/.test(lines[i])) {
+      insertAt = i + 1;
+      while (insertAt < lines.length && /^\s*-\s/.test(lines[insertAt])) insertAt += 1;
+      break;
+    }
+  }
+  if (insertAt === -1) {
+    throw new Error('pnpm-workspace.yaml 缺少 packages: 段，无法注册工作区成员（请手工添加）');
+  }
+  const block = [`  # ↓ 由 fw new ${name} --template=admin 注册（${new Date().toISOString().slice(0, 10)}）；弃用项目时删除目录并移除这两行`, ...missing.map((glob) => `  - "${glob}"`)];
+  lines.splice(insertAt, 0, ...block);
+  fs.writeFileSync(workspaceFile, lines.join('\n'), 'utf8');
+  return globs;
 }
 
 /** 从 CLI 包位置向上查找仓库根（以 pnpm-workspace.yaml 为标志） */

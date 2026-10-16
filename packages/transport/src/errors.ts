@@ -107,8 +107,51 @@ export class DuplicateAddressError extends TransportError {
   }
 }
 
+/** 事件主题非法：须为点分非空段（至少两段），段内字符 [a-zA-Z0-9_-] */
+export class InvalidTopicError extends TransportError {
+  /** 非法主题 */
+  readonly topic: string;
+
+  /**
+   * @param topic 事件主题
+   */
+  constructor(topic: string) {
+    super(`事件主题非法：${topic}（须为点分非空段，如 job.progress / queue.alert）`);
+    this.name = 'InvalidTopicError';
+    this.topic = topic;
+  }
+}
+
+/** 驱动不支持事件面（tcp / kafka 预留驱动或自定义注入的 RPC-only 驱动） */
+export class TransportEventsUnsupportedError extends TransportError {
+  /** 驱动名 */
+  readonly driver: string;
+
+  /**
+   * @param driver 驱动名
+   */
+  constructor(driver: string) {
+    super(`传输驱动 ${driver} 未实现事件面（publish / subscribe）：E-12 SSE 需 in-process 或 redis 驱动`);
+    this.name = 'TransportEventsUnsupportedError';
+    this.driver = driver;
+  }
+}
+
 /** 地址格式：点分非空段（至少两段），段内仅字母/数字/下划线/连字符 */
 const ADDRESS_PATTERN = /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)+$/;
+
+/** 主题格式：点分非空段（至少两段），段内仅字母/数字/下划线/连字符（与地址同约束，降低记忆成本） */
+const TOPIC_PATTERN = /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)+$/;
+
+/**
+ * 校验事件主题，非法即抛 InvalidTopicError（发布与订阅共用同一约束）
+ * @param topic 事件主题
+ */
+export function assertTopic(topic: string): void {
+  if (typeof topic !== 'string' || !TOPIC_PATTERN.test(topic)) {
+    throw new InvalidTopicError(String(topic));
+  }
+}
 
 /**
  * 校验传输地址，非法即抛 InvalidAddressError（注册与调用共用同一约束）

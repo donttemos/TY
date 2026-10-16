@@ -102,6 +102,48 @@ export interface TransportRuntimeOptions {
   shutdownTimeoutMs: number;
 }
 
+// ---------------- 事件面（M10 E-12：SSE 实时推送的承载通道） ----------------
+
+/**
+ * 事件主题：点分非空段（如 `job.progress` / `queue.alert`）。
+ * 与传输地址（RPC 面）分属两个命名空间——地址是「找谁处理」，主题是「发生了什么」。
+ */
+export type TransportTopic = string;
+
+/** 事件元信息（驱动在投递时构造，供订阅方诊断与去重） */
+export interface TransportEventMeta {
+  /** 主题 */
+  topic: TransportTopic;
+  /** 发布方驱动名 */
+  driver: TransportDriverName;
+  /** 发布方实例标识（缺省 `主机名-pid`） */
+  instanceId: string;
+  /** 发布时刻（毫秒时间戳） */
+  emittedAt: number;
+}
+
+/**
+ * 事件处理器：与 RPC 处理器（`TransportHandlerFn`）的区别在于**无返回值**且**扇出**——
+ * 同一主题的全部订阅方都会收到（RPC 是一对一应答）。异常被驱动吞掉并记日志，
+ * 单个订阅方故障不影响其他订阅方（SSE 单连接断开的典型场景）。
+ */
+export type TransportEventHandler = (payload: unknown, meta: TransportEventMeta) => void;
+
+/** 取消订阅函数（幂等；重复调用无副作用） */
+export type TransportEventUnsubscribe = () => void;
+
+/** 事件发布统计（并入 TransportCallStats.events） */
+export interface TransportEventStats {
+  /** 本进程已发布事件数 */
+  published: number;
+  /** 本进程已收到事件数（含跨进程经 Redis 扇出到达的） */
+  received: number;
+  /** 当前订阅的主题数 */
+  topics: number;
+  /** 当前订阅的主题列表 */
+  topicList: string[];
+}
+
 /** 调用统计快照 */
 export interface TransportCallStats {
   /** 驱动名 */
@@ -124,6 +166,8 @@ export interface TransportCallStats {
   timeouts: number;
   /** 本进程处理请求数 */
   handled: number;
+  /** 事件面统计（发布 / 接收 / 订阅主题） */
+  events: TransportEventStats;
   /** 是否已启动 */
   started: boolean;
 }

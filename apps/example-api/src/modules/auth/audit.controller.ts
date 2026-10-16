@@ -41,7 +41,7 @@ import type { JobArtifact, JobReporter } from '../jobs/job-center.port.js';
  * 键为 HTTP 参数名（snake_case），值为实体字段名。白名单外字段一律 400 ——
  * 既避免把任意 query 参数拼进 orderBy，也避免通过排序推断未暴露字段。
  */
-const AUDIT_SORT_FIELDS = {
+export const AUDIT_SORT_FIELDS = {
   id: 'id',
   module: 'module',
   action: 'action',
@@ -266,7 +266,7 @@ function csvCell(value: unknown): string {
  *
  * 带 UTF-8 BOM：Excel 直接打开中文列头不乱码（这是导出功能最常见的落地问题）。
  */
-function buildAuditCsv(rows: AuditLogRecord[]): string {
+export function buildAuditCsv(rows: AuditLogRecord[]): string {
   const header = ['id', 'createdAt', 'userId', 'module', 'action', 'targetType', 'targetId', 'ip', 'traceId', 'before', 'after'];
   const lines = [header.join(',')];
   for (const row of rows) {

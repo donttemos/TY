@@ -37,3 +37,10 @@ packages/db/prisma/matrix-client-*/
 *.timestamp-*.mjs
 
 *.db-journal
+
+# @fw/storage local 驱动默认根目录（运行期产物，不入库）
+uploads/
+
+# @fw/storage local 驱动默认根目录（运行期产物，不入库）
+apps/example-api/uploads/
+template-admin-smoke/uploads/

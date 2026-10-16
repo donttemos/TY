@@ -22,6 +22,12 @@ export interface RedisLike {
   del(key: string): Promise<number>;
   /** 设置过期（应答键安全网，防调用方异常退出后泄漏） */
   expire(key: string, seconds: number): Promise<number>;
+  /** 发布事件到频道（M10 E-12 事件面；PUBLISH） */
+  publish(channel: string, message: string): Promise<number>;
+  /** 订阅频道（M10 E-12 事件面；订阅模式下该连接不可执行常规命令，故独立连接） */
+  subscribe(channel: string): Promise<unknown>;
+  /** 取消订阅频道（M10 E-12 事件面） */
+  unsubscribe(channel: string): Promise<unknown>;
   /** 探测连通性 */
   ping(): Promise<string>;
   /** 优雅关闭 */

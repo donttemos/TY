@@ -37,8 +37,9 @@
 | 编号 | 模块 / 页面 | 目标行为（交互流程 + 数据展示） | 依赖 | 验收 |
 |---|---|---|---|---|
 | **N-01** | **租户管理页 `/system/tenants`**（原型 §3 M8 规划项） | 列表展示租户编码/名称/隔离级别（`shared`/`dedicated`）/状态/创建时间；支持新建（选 `isolation`）、改套餐与状态、停用（不物理删除）、`shared ↔ dedicated` 迁移（长任务 → 进度反馈）。隔离级别与状态用 `<StatusTag>` + 字典 `tenant_isolation` / `tenant_status`；停用与迁移必须二次确认 | **后端 `/tenants` 五个端点（api-spec §3.9 已定义，实现为零）+ 权限点 `tenant:read/create/update/delete/manage`** | ✅ **已完成（2026-10-15）**：后端五端点 + `TenantAdminStore`（Prisma/内存双实现）+ `@IgnoreTenant` 豁免 + legacy 守卫；前端 `views/system/tenants/index.vue`（CrudTable + 停用/迁移二次确认，迁移接入任务条）；mock 同构；`tenant-admin` 单测 20 + `smoke-admin` 22 条断言通过 |
-| **N-02** | **异步导出任务中心**（原型 §7「导出 / 批量走异步任务」） | 列表页点导出 → 派发任务返回 `jobId` → 页脚常驻任务条（进度百分比 + 轮询退避）→ 完成后下载；失败可重试并展示 `traceId` | **后端 `/audit-logs/export`（api-spec §3.7 标 Backlog）与通用 `/jobs/:id/progress`** | ✅ **已完成（2026-10-15）**：`JobCenterService`（进程内存登记表 / 归属人隔离 / 产物上限 20MB / 重跑状态机）+ `/jobs/:id/progress|retry|download`；`GET /audit-logs/export` 派发；前端 `useJobCenter` store + `JobBar.vue`（轮询退避 1s×1.5 封顶 10s、连续 3 失败标 stale、sessionStorage 按用户持久化）+ 审计页导出按钮；CSV 与 mock 逐字节同构；单测 10 + 12 + 冒烟通过 |
+| **N-02** | **异步导出任务中心**（原型 §7「导出 / 批量走异步任务」） | 列表页点导出 → 派发任务返回 `jobId` → 页脚常驻任务条（进度百分比 + 轮询退避）→ 完成后下载；失败可重试并展示 `traceId` | **后端 `/audit-logs/export`（api-spec §3.7 标 Backlog）与通用 `/jobs/:id/progress`** | ✅ **已完成（2026-10-15）**：`JobCenterService`（进程内存登记表 / 归属人隔离 / 产物上限 20MB / 重跑状态机）+ `/jobs/:id/progress|retry|download`；`GET /audit-logs/export` 派发；前端 `useJobCenter` store + `JobBar.vue`（轮询退避 1s×1.5 封顶 10s、连续 3 失败标 stale、sessionStorage 按用户持久化）+ 审计页导出按钮；CSV 与 mock 逐字节同构；单测 10 + 12 + 冒烟通过。**M10 E-12 增补**：感知方式改为「SSE 实时优先、轮询兜底」——建流成功后停轮询并保留 60s 低频对账（防漏事件），SSE 不可用（环境无 `EventSource` / 取票失败 / 断连）自动回落原退避轮询；任务条显示「实时 / 轮询」徽标 |
 | **N-03** | **403 无权限整页视图**（CrudTable 四态之一，原型 §5.2） | 列表接口返回 `3002` 时，**整页替换**为无权限插画 + 「申请权限」引导 + 返回工作台，不再渲染表格骨架 | 无（前端自闭环） | 有权限与无权限的页面截图可对比；`3002` 不与其他错误共用同一提示文案 |
+| **N-04** | **消息中心铃铛**（M10 E-13 站内信前端面） | 顶栏常驻铃铛 + 未读角标；下拉展示最近消息（级别色点 + 标题 + 摘要 + 相对时间）、单条已读 / 删除、全部已读；任务在别的页面跑完即冒红点（SSE `notification` 事件），不依赖轮询 | **后端 `/notifications` 五端点 + 权限点 `notification:read`（api-spec §3.14，M10 E-13 已交付）** | ✅ **已完成（2026-10-15）**：`layout/NotificationBell.vue` + `store/notification.ts` + `store/realtime.ts`（单连接多消费者，任务条与铃铛共用一条 SSE）+ `api/notification.ts` + `utils/relative-time.ts`；无权限时整块隐藏；mock 同构（五端点 + 预置演示消息）；单测 15 条 + `smoke-notifications` 29/29 |
 
 ### 2.2 完善（已存在但行为不达要求）
 
@@ -150,7 +151,7 @@
 |---|---|
 | 浏览器 | Chrome / Edge / Firefox 最新两个大版本（TC-NFR-008）；构建产物为纯静态资源，无 Node 运行时 |
 | 断点 | ≥1440 侧边栏展开；1280–1440 次要列可折叠；768–1280 侧边栏自动折叠为图标；<768 抽屉式侧边栏 + 表格转卡片（仅保证可用） |
-| 主题 | 浅色 / 暗色 / 紧凑三态经 CSS 变量覆盖 Element Plus 令牌，业务组件禁止写死颜色；主色可切换并持久化 |
+| 主题 | 浅色 / 暗色 / 紧凑三态经 CSS 变量覆盖 Element Plus 令牌，业务组件禁止写死颜色（**由单测扫描强制**，颜色只能来自 `styles/variables.css`）；主色可切换并持久化；**暗色为设计令牌一等形态**（E-15）——25 原型 §2.1 两列逐项落地，EP 结构令牌（页面 / 卡片 / 浮层底色、空填充、文本五级）统一映射到 `--fw-*`，语义色派生档按主题分流（浅向白 / 暗向黑、`dark-2` 反向）且按混色公式预计算为静态值（构建产物已逐项复验）；主题模式三态 **浅色 / 暗色 / 跟随系统（缺省）**，`prefers-color-scheme` 变更即时生效、显式选择不被系统覆盖，`index.html` 前置脚本首帧上色防闪屏（决策见 [ADR-0015](./adr/0015-dark-mode-tokens.md)） |
 | 可访问性 | 表格与表单可键盘操作；图标按钮提供 `aria-label`/tooltip；状态不仅靠颜色表达 |
 | 环境变量 | `VITE_API_BASE_URL` 缺失时兜底同源 `/api/v1`（真机 405 缺陷的根治手段之一）；`VITE_AUTH_STORAGE=none` 时本地不落令牌（`AUTH_STRATEGY=session`）；**构建期输入不得只存在于被 gitignore 的 `.env.*`** |
 | 体积门禁 | `dist` gzip ≤ 600 kB，`vendor-element-plus` gzip ≤ 360 kB（mock 冒烟脚本内置，当前 311.5 kB / 231.6 kB） |

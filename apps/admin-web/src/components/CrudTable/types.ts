@@ -10,6 +10,8 @@
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo 新增 permissionActions 覆盖项与 FormField.multiple（多选下拉，
  *   修复 roleIds 这类「值为数组」的字段被单选框渲染导致回显为空、提交成字符串的缺陷）
+ * @modified 2026-10-16 donttemo PRD-010 E-09 新增 upload 控件类型（附件字段 *FileId；
+ *   上传走 /api/v1/files，文件 id 写回表单模型，控件为 FileUpload 组件）
  * @module admin-web/components
  */
 
@@ -66,7 +68,7 @@ export interface SearchField {
 export interface FormField {
   prop: string;
   label: string;
-  type: 'input' | 'textarea' | 'number' | 'password' | 'select' | 'radio' | 'switch' | 'date' | 'datetime' | 'dict-select';
+  type: 'input' | 'textarea' | 'number' | 'password' | 'select' | 'radio' | 'switch' | 'date' | 'datetime' | 'dict-select' | 'upload';
   /** 静态选项 */
   options?: { label: string; value: string | number | boolean }[];
   /** 字典编码（dict-select） */

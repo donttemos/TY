@@ -5,6 +5,8 @@
  *   以及优雅停机时「未完成任务重新入队」（PRD-007 FR-06/FR-07/FR-08/FR-10，TC-JOB-003/004/005/007）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-16 donttemo 驱动审查修复配套：新增每队列限速隔离、假时钟停机不死循环、
+ *   失败处理链路异常隔离、死信 payload 深拷贝与同毫秒 tie-breaker、options 防污染回归用例
  * @module @fw/queue
  */
 
@@ -295,5 +297,106 @@ describe('MemoryQueueDriver 停机（FR-10 / TC-JOB-005）', () => {
     await driver.resume();
     await waitFor(() => executed.length === 1, '重启后继续执行');
     await driver.close();
+  });
+});
+
+describe('MemoryQueueDriver 驱动审查修复回归', () => {
+  it('限速按队列生效：一队列令牌耗尽不阻塞其他队列（与 bullmq per-Worker limiter 对齐）', async () => {
+    const driver = makeDriver({ concurrency: 10, rateLimit: 1 });
+    const executed: string[] = [];
+    await driver.start(makeRunner(async (record) => void executed.push(record.name)));
+    // busy 队列灌 5 个：容量 1、每秒补 1，第 1 个拿走满桶后其余只能排队等补充
+    for (let i = 0; i < 5; i++) await driver.enqueue(makeRecord({ queue: 'busy', name: `busy-${i}` }));
+    // idle 队列 1 个：必须立即执行，不被 busy 队列的限速拖住（旧实现全局单桶会被饿死）
+    await driver.enqueue(makeRecord({ queue: 'idle', name: 'idle-1' }));
+    await waitFor(() => executed.includes('idle-1'), '其他队列不受限速队列阻塞', 500);
+    expect(executed[0]).toBe('busy-0'); // 入堆序在前者先拿各自队列的满桶
+    await driver.close();
+  });
+
+  it('假时钟下 close() 不死循环：等待真实在途 Promise + 独立超时定时器', async () => {
+    const fakeNow = 1_000_000; // 恒定时钟：旧实现按 now() 推进 deadline 永不满足 → 轮询死循环
+    const driver = new MemoryQueueDriver({ concurrency: 1, rateLimit: 0, deadLetterMax: 10, now: () => fakeNow });
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await driver.start(makeRunner(async () => void (await gate)));
+    await driver.enqueue(makeRecord({ name: 'stuck', runAt: fakeNow }));
+    await waitFor(() => driver.pendingCount() === 0, '任务已被取出');
+    const requeued = await driver.close(50);
+    expect(requeued).toBe(1);
+    expect(driver.pendingCount()).toBe(1);
+    release?.();
+  }, 3000);
+
+  it('失败处理链路异常被隔离：onDeadLetter 抛错不产生 unhandled rejection，消费循环继续', async () => {
+    const driver = makeDriver();
+    const processed: string[] = [];
+    const runner = makeRunner(async (record) => {
+      if (record.name === 'boom') throw new Error('必然失败');
+      processed.push(record.name);
+    });
+    runner.onDeadLetter = () => {
+      throw new Error('告警回调炸了');
+    };
+    await driver.start(runner);
+    await driver.enqueue(makeRecord({ name: 'boom', attempts: 1 }));
+    await driver.enqueue(makeRecord({ name: 'after-boom' }));
+    await waitFor(() => processed.includes('after-boom'), '后续任务照常消费', 3000);
+    expect((await driver.listDeadLetters()).map((item) => item.name)).toContain('boom');
+    await driver.close();
+  });
+
+  it('listDeadLetters 返回深拷贝 payload：修改返回项不污染归档与重放', async () => {
+    const driver = makeDriver();
+    let fail = true;
+    const payloads: unknown[] = [];
+    const runner = makeRunner(async (record) => {
+      if (fail) throw new Error('临时故障');
+      payloads.push(record.payload);
+    });
+    await driver.start(runner);
+    await driver.enqueue(makeRecord({ attempts: 2, backoff: [5], payload: { v: 1 } }));
+    await waitFor(() => runner.deadLetters.length === 1, '进入死信', 3000);
+    const [dead] = await driver.listDeadLetters();
+    (dead.payload as { v: number }).v = 999;
+    fail = false;
+    expect(await driver.requeueDeadLetter(dead.id)).toBe(true);
+    await waitFor(() => payloads.length === 1, '重放执行', 3000);
+    expect(payloads[0]).toEqual({ v: 1 }); // 归档数据未被视图修改污染
+    await driver.close();
+  });
+
+  it('listDeadLetters 同毫秒失败按归档序倒序（tie-breaker 保证翻页稳定）', async () => {
+    const driver = new MemoryQueueDriver({ concurrency: 1, rateLimit: 0, deadLetterMax: 10, now: () => 1_000_000 });
+    const runner = makeRunner(async () => {
+      throw new Error('always fail');
+    });
+    await driver.start(runner);
+    const ids: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      const id = `same-ms-${i}`;
+      ids.push(id);
+      await driver.enqueue(makeRecord({ id, name: 'fail', attempts: 1, runAt: 1_000_000 }));
+      // 用同步条件等待（onDeadLetter 回调计数）；waitFor 逐轮 sleep 5ms 让事件循环
+      // 得以触发唤醒定时器——async 条件在这里不可用（Promise 恒真值，等待形同虚设）
+      await waitFor(() => runner.deadLetters.length >= i + 1, `死信 ${id} 归档`, 3000);
+    }
+    // failedAt 全部相同（固定时钟）：排序回落归档序倒序（后归档在前），两次读取结果一致
+    const first = (await driver.listDeadLetters()).map((item) => item.id);
+    const second = (await driver.listDeadLetters()).map((item) => item.id);
+    expect(first).toEqual([...ids].reverse());
+    expect(first).toEqual(second);
+    await driver.close();
+  });
+
+  it('applyRuntimeOptions 只改驱动私有副本，不回写构造入参对象', async () => {
+    const options = { concurrency: 1, rateLimit: 0, deadLetterMax: 10 };
+    const driver = new MemoryQueueDriver(options);
+    driver.ensureQueue('default');
+    driver.applyRuntimeOptions({ concurrency: 5 });
+    expect(options.concurrency).toBe(1); // 传入对象未被污染（多实例防串扰）
+    expect((await driver.stats()).queues[0]?.concurrency).toBe(5); // 驱动副本即时生效
   });
 });

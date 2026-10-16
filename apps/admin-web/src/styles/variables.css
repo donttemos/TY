@@ -5,6 +5,24 @@
  *   暗色模式由 html.dark 切换（Element Plus dark/css-vars.css 已处理组件暗色）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-16 donttemo M10/E-15 暗色令牌层收口：
+ *   ① 暗色块按原型 §2.1「暗色列」补齐全部语义色（主 / 成功 / 警告 / 危险 / 信息）与文本、背景、卡片、
+ *      边框令牌，并补 --fw-overlay（浮层底色）与 --fw-shadow-up（上投影，暗色需加深）；
+ *   ② 语义色派生档（light-3/5/7/8/9 与 dark-2）两套主题各自派生——浅色向白混色、暗色向黑混色、dark-2 反向
+ *      （与 Element Plus 浅 / 暗主题的派生方向一致；EP 以页面底色为混色基准，本处以纯黑 / 纯白为基准，
+ *      差异只在中间档亮度，方向与对比度方向不变）。**派生档按混色公式预计算为静态值，不用 color-mix()**：
+ *      构建期 CSS 管线（vite 8 / lightningcss）会丢弃无法静态求值的 `color-mix(in srgb, var(--x) 70%, #fff)`
+ *      声明——开发态看着有效、构建产物静默回落到 Element Plus 默认派生色（实测踩坑）。静态值由单测按同一
+ *      混色公式逐项校验，改基色漏改派生档即红；主色是运行时可选，其派生档仍由 store 动态写入（store/app.ts
+ *      同口径）；
+ *   ③ 补齐 --el-color-*-rgb 三元组（EP 部分规则以 rgba(var(--el-color-x-rgb), α) 取色，只改十六进制会让
+ *      这些位置颜色对不上）；主色的 rgb 由 store 随主色写入；
+ *   ④ 结构性令牌映射：EP 的页面底色 / 卡片底色 / 浮层底色 / 空填充 / 文本五级统一落到 --fw-* 语义令牌，
+ *      避免「改 --fw-* 而 EP 组件不跟随」的两套调色板并存——映射在 :root 与 html.dark 各写一次
+ *      （EP 的 html.dark 选择器特异性高于 :root，只在 :root 写会被其覆盖）。
+ *   未收编项（如实登记）：EP 结构边框五级（extra-light/lighter/light/base/dark）保留 EP 暗色派生值
+ *      （#2b2b2c~#636466）——各级边框在暗色下需保证可见性，强行压到单一 --fw-border（#2e2e30）会让表格
+ *      分隔线与输入框描边不可见；框架自有容器（.fw-card / 布局分隔线）仍只吃 --fw-border。
  * @module admin-web/styles
  */
 
@@ -15,6 +33,7 @@
   --fw-navbar-height: 56px;
   --fw-tags-height: 34px;
   --fw-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --fw-shadow-up: 0 -1px 3px rgba(0, 0, 0, 0.06);
 
   /* 语义色（原型 §2.1 浅色） */
   --fw-text-1: #1f2329;
@@ -23,16 +42,74 @@
   --fw-bg: #f5f7fa;
   --fw-surface: #ffffff;
   --fw-border: #e5e6eb;
+  /* 浮层底色（弹窗 / 下拉 / 气泡）：浅色下与卡片同色 */
+  --fw-overlay: #ffffff;
 
-  /* Element Plus 主题令牌覆盖（主色由 store 动态写入 --el-color-primary） */
+  /* Element Plus 主题令牌覆盖（主色及其派生档由 store 按主题动态写入） */
   --el-color-primary: #2f6bff;
+  --el-color-primary-rgb: 47, 107, 255;
   --el-color-success: #18a058;
+  --el-color-success-rgb: 24, 160, 88;
   --el-color-warning: #f0a020;
+  --el-color-warning-rgb: 240, 160, 32;
   --el-color-danger: #d93026;
+  --el-color-danger-rgb: 217, 48, 38;
+  --el-color-error: #d93026;
+  --el-color-error-rgb: 217, 48, 38;
   --el-color-info: #4098fc;
+  --el-color-info-rgb: 64, 152, 252;
   --el-border-radius-small: 4px;
   --el-border-radius-base: 8px;
   --el-font-size-extra-small: 12px;
+
+  /* 语义色派生档（浅色口径：基色向白混色；dark-2 向黑）——次档占比 30/50/70/80/90%、dark-2 占 20% */
+  --el-color-primary-light-3: #6d97ff;
+  --el-color-primary-light-5: #97b5ff;
+  --el-color-primary-light-7: #c1d3ff;
+  --el-color-primary-light-8: #d5e1ff;
+  --el-color-primary-light-9: #eaf0ff;
+  --el-color-primary-dark-2: #2656cc;
+  --el-color-success-light-3: #5dbd8a;
+  --el-color-success-light-5: #8cd0ac;
+  --el-color-success-light-7: #bae3cd;
+  --el-color-success-light-8: #d1ecde;
+  --el-color-success-light-9: #e8f6ee;
+  --el-color-success-dark-2: #138046;
+  --el-color-warning-light-3: #f5bd63;
+  --el-color-warning-light-5: #f8d090;
+  --el-color-warning-light-7: #fbe3bc;
+  --el-color-warning-light-8: #fcecd2;
+  --el-color-warning-light-9: #fef6e9;
+  --el-color-warning-dark-2: #c0801a;
+  --el-color-danger-light-3: #e46e67;
+  --el-color-danger-light-5: #ec9893;
+  --el-color-danger-light-7: #f4c1be;
+  --el-color-danger-light-8: #f7d6d4;
+  --el-color-danger-light-9: #fbeae9;
+  --el-color-danger-dark-2: #ae261e;
+  --el-color-error-light-3: #e46e67;
+  --el-color-error-light-5: #ec9893;
+  --el-color-error-light-7: #f4c1be;
+  --el-color-error-light-8: #f7d6d4;
+  --el-color-error-light-9: #fbeae9;
+  --el-color-error-dark-2: #ae261e;
+  --el-color-info-light-3: #79b7fd;
+  --el-color-info-light-5: #a0ccfe;
+  --el-color-info-light-7: #c6e0fe;
+  --el-color-info-light-8: #d9eafe;
+  --el-color-info-light-9: #ecf5ff;
+  --el-color-info-dark-2: #337aca;
+
+  /* 结构性令牌映射（浅色）：EP 结构色统一取自 --fw-* 语义令牌 */
+  --el-bg-color-page: var(--fw-bg);
+  --el-bg-color: var(--fw-surface);
+  --el-bg-color-overlay: var(--fw-overlay);
+  --el-fill-color-blank: var(--fw-surface);
+  --el-text-color-primary: var(--fw-text-1);
+  --el-text-color-regular: var(--fw-text-1);
+  --el-text-color-secondary: var(--fw-text-2);
+  --el-text-color-placeholder: var(--fw-text-3);
+  --el-text-color-disabled: var(--fw-text-3);
 }
 
 /* 暗色令牌（原型 §2.1 暗色列） */
@@ -43,7 +120,72 @@ html.dark {
   --fw-bg: #17171a;
   --fw-surface: #232324;
   --fw-border: #2e2e30;
+  --fw-overlay: #2a2a2d;
   --fw-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --fw-shadow-up: 0 -1px 3px rgba(0, 0, 0, 0.4);
+
+  /* 语义色（原型 §2.1 暗色列） */
+  --el-color-primary: #5b8cff;
+  --el-color-primary-rgb: 91, 140, 255;
+  --el-color-success: #36ad6a;
+  --el-color-success-rgb: 54, 173, 106;
+  --el-color-warning: #f2c037;
+  --el-color-warning-rgb: 242, 192, 55;
+  --el-color-danger: #e0574d;
+  --el-color-danger-rgb: 224, 87, 77;
+  --el-color-error: #e0574d;
+  --el-color-error-rgb: 224, 87, 77;
+  --el-color-info: #5aa8ff;
+  --el-color-info-rgb: 90, 168, 255;
+
+  /* 语义色派生档（暗色口径：基色向黑混色；dark-2 向白） */
+  --el-color-primary-light-3: #4062b3;
+  --el-color-primary-light-5: #2e4680;
+  --el-color-primary-light-7: #1b2a4d;
+  --el-color-primary-light-8: #121c33;
+  --el-color-primary-light-9: #090e1a;
+  --el-color-primary-dark-2: #7ca3ff;
+  --el-color-success-light-3: #26794a;
+  --el-color-success-light-5: #1b5735;
+  --el-color-success-light-7: #103420;
+  --el-color-success-light-8: #0b2315;
+  --el-color-success-light-9: #05110b;
+  --el-color-success-dark-2: #5ebd88;
+  --el-color-warning-light-3: #a98627;
+  --el-color-warning-light-5: #79601c;
+  --el-color-warning-light-7: #493a11;
+  --el-color-warning-light-8: #30260b;
+  --el-color-warning-light-9: #181306;
+  --el-color-warning-dark-2: #f5cd5f;
+  --el-color-danger-light-3: #9d3d36;
+  --el-color-danger-light-5: #702c27;
+  --el-color-danger-light-7: #431a17;
+  --el-color-danger-light-8: #2d110f;
+  --el-color-danger-light-9: #160908;
+  --el-color-danger-dark-2: #e67971;
+  --el-color-error-light-3: #9d3d36;
+  --el-color-error-light-5: #702c27;
+  --el-color-error-light-7: #431a17;
+  --el-color-error-light-8: #2d110f;
+  --el-color-error-light-9: #160908;
+  --el-color-error-dark-2: #e67971;
+  --el-color-info-light-3: #3f76b3;
+  --el-color-info-light-5: #2d5480;
+  --el-color-info-light-7: #1b324d;
+  --el-color-info-light-8: #122233;
+  --el-color-info-light-9: #09111a;
+  --el-color-info-dark-2: #7bb9ff;
+
+  /* 结构性令牌映射（暗色）：必须重写——EP 的 html.dark 选择器特异性高于 :root */
+  --el-bg-color-page: var(--fw-bg);
+  --el-bg-color: var(--fw-surface);
+  --el-bg-color-overlay: var(--fw-overlay);
+  --el-fill-color-blank: var(--fw-surface);
+  --el-text-color-primary: var(--fw-text-1);
+  --el-text-color-regular: var(--fw-text-1);
+  --el-text-color-secondary: var(--fw-text-2);
+  --el-text-color-placeholder: var(--fw-text-3);
+  --el-text-color-disabled: var(--fw-text-3);
 }
 
 /* 紧凑模式：压缩控件与表格行高（原型 FR-02） */

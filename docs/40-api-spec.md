@@ -4,11 +4,21 @@
 >
 > 变更记录：2026-10-13 donttemo M7：§3.8 按实现定稿（`/admin/queue/*` + `system:queue:*`，原 `/jobs` + `job:*` 方案废止，理由见 §3.8 说明）。
 >
+> 变更记录：2026-10-15 donttemo M10 E-12：新增 §3.13 实时事件流 SSE（`POST /events/ticket` 一次性票据 +
+> `GET /events/stream` 长连接；`job` / `queue` 两类事件，主题按权限裁剪，任务事件按归属人过滤）。
+>
+> 变更记录：2026-10-15 donttemo M10 E-13：新增 §3.14 站内信 / 通知中心（`/notifications` 五端点，
+> `notification:read` 守卫 + 归属人 404）；§3.13 增 `notification` 事件（站内信实时未读，主题按权限裁剪）。
+>
 > 变更记录：2026-10-15 donttemo M10 E-01：§3.11 补注任务登记表驱动化（`JOB_CENTER_DRIVER`：memory 进程内默认 / db·bullmq 落库多副本可达）；
 > §3.7 导出与 §3.9 迁移的执行体在 db/bullmq 驱动下经注册表按 params 重建（跨实例重跑）。
 >
 > 变更记录：2026-10-15 donttemo M10 E-02/E-04：§3.12 补注配置中心多实例语义（快照历史下沉 `config_snapshots`，版本基线跨实例对齐，nacos 驱动转正）；
 > §3.4 `GET /permissions/tree` 由 Backlog 转为已实现（三层树，前端授权弹窗与权限码选择器换接）。
+>
+> 变更记录：2026-10-15 donttemo M10 E-10：§3.7 新增 `/audit-archives`（归档查询）与 `/audit-archives/export`
+>（归档异步导出）两端点——审计归档策略的冷数据出口，数据范围与排序白名单同源收敛；归档本体为定时任务
+> `audit.archive`（@fw/queue cron + 分布式锁，不占 API 面），运行快照见 `GET /auth-maintenance/audit-archive`。
 >
 > 变更记录：2026-10-15 donttemo M10 E-03：业务 API 框架级限流默认开启（令牌桶按 IP，G5 兑现）——未豁免路由超限返回
 > `429/9003`（RATE_LIMITED，既有错误码段）+ `Retry-After` 头；豁免白名单 `RATE_LIMIT_WHITELIST`（默认 health/ready/metrics）；
@@ -120,6 +130,8 @@
 | `9003` | 429 | 触发限流 | 按 `Retry-After` 退避 |
 
 > 分段：`1xxx` 通用、`2xxx` 预留、`3xxx` 鉴权、`4xxx` 租户与业务、`5xxx` 配置中心（M9）、`9xxx` 系统。新增错误码必须同步本表与 PRD-001。
+>
+> 文案本地化归属（E-14 / ADR-0014）：错误码的用户可读文案由**前端 locale 表承载**（admin-web `src/locales`，zh-CN / en-US 双表键集与错误码全集编译期同构），后端只回码不负责翻译——zh-CN 显示沿用「后端 `message` 优先」，非 zh-CN 由前端表接管。新增错误码除本表与 PRD-001 外，须同步前端两表（漏同步 `vue-tsc` 即红）。
 
 ## 3. 接口清单
 
@@ -219,6 +231,8 @@
 | GET | `/audit-logs` | `audit:read` | 分页查询，支持 `user_id / module / action / target / 时间区间` |
 | GET | `/audit-logs/:id` | `audit:read` | 详情，含变更前后值（脱敏） |
 | GET | `/audit-logs/export` | `audit:export` | 异步导出：派发到任务中心并**立即返回 `jobId`**（不等导出完成），进度 / 下载 / 重跑走 §3.11 的 `/jobs/:id/*`；同样受 `dataScope` 收敛（`self` 范围只导自己的记录）。CSV 产物与 mock 逐字节同构（UTF-8 BOM + CRLF + 引号转义） |
+| GET | `/audit-archives` | `audit:read` | 归档审计分页查询（M10 E-10）：参数与 `/audit-logs` 同形（`user_id / module / action / target / 时间区间 / sort` 白名单同源）；数据范围同样收敛——归档不是越权后门 |
+| GET | `/audit-archives/export` | `audit:export` | 归档审计异步导出（M10 E-10）：与 `/audit-logs/export` 同机制（任务中心类型 `audit.archive.export`，返回 `jobId`），CSV 产物形态逐字节同构；数据范围在派发时收敛固化进 params |
 
 ### 3.8 任务与队列（PRD-007）
 
@@ -235,7 +249,7 @@
 | GET | `/admin/queue/handlers` | `system:queue:list` | 已注册任务名（排查「任务未注册」） |
 | GET | `/admin/queue/crons` | `system:queue:list` | 定时任务快照：`enabled / items[]（expression/lock/nextRunAt/runs/lockedOut/lastResult）` |
 | POST | `/admin/queue/crons/:name/tick` | `system:queue:manage` | 手动触发定时任务（仍走分布式锁），返回 `results[{ name, acquired }]` |
-| GET | `/admin/queue/dead-letters` | `system:queue:list` | 死信列表（可按 `queue` 过滤），返回 `{ total, items[] }` |
+| GET | `/admin/queue/dead-letters` | `system:queue:list` | 死信列表（可按 `queue` 过滤），返回 `{ total, items[] }`；分页 `pageSize` 上限经 `MQ_DEAD_LETTER_PAGE_MAX` 配置（默认 200，M10 E-16），超出钳制到上限而非报错 |
 | POST | `/admin/queue/dead-letters/:id/requeue` | `system:queue:manage` | 重放单条死信，返回 `{ id, requeued }`（不存在时 `requeued=false` 而非报错） |
 | DELETE | `/admin/queue/dead-letters` | `system:queue:manage` | 清理死信（可按 `queue` 过滤），返回 `{ removed }` |
 | POST | `/admin/queue/pause` / `/admin/queue/resume` | `system:queue:manage` | 暂停 / 恢复消费 |
@@ -274,7 +288,7 @@
 
 > 任务面（`/jobs/:id/*`）**只验登录 + 归属人**，不额外要求业务权限码——语义是「我自己的任务」。
 > 派发侧（`/audit-logs/export`、`/tenants/:id/migrate`）才由业务权限码把关。
-> **不存在的任务 / 非归属人一律 `404`**（不泄露存在性）。产物上限 20MB，超出即失败终态。
+> **不存在的任务 / 非归属人一律 `404`**（不泄露存在性）。产物体积上限经 `JOB_ARTIFACT_MAX_MB` 配置（默认 20MB，M10 E-16），超出即失败终态。
 > `download` 返回裸文本流（非统一信封），前端按 Blob 下载。
 > **登记表驱动（M10 E-01，`JOB_CENTER_DRIVER`）**：`memory`（默认）= 进程内存（重启即失效，
 > `404` 语义一致）；`db` / `bullmq` = `jobs` 表登记（`404` 同语义含已裁剪任务），**多副本下
@@ -289,7 +303,8 @@
 
 ### 3.12 参数配置（M9 / PRD-009）
 
-> 配置中心管理面。**GET 只列热更新白名单键**（11 键：log / cache / mq / otel / tenant 五个运行时可调域）；
+> 配置中心管理面。**GET 只列热更新白名单键**（12 键：log / cache / mq / otel / tenant / web 六个运行时可调域；
+> `web.keepAliveMax` 为 M10 E-16 新增——前端 keep-alive 条数上限经该键热更）；
 > boot 键（端口 / 驱动 / 连接串 / 密钥 / 开关）env 独占、不进列表，改动走重启——尝试写入已知 boot 键返回 `5001`。
 > 写走单一生效管道：**校验 → 审计（先审计后生效）→ 持久化事实源 → 应用覆盖 → 通知订阅者**；
 > 审计落 `module=config`（变更历史在审计日志按该模块过滤）。`CONFIG_CENTER_ENABLED=false` 时 GET 仍可用
@@ -302,7 +317,89 @@
 |---|---|---|---|
 | GET | `/configs` | `system:config:read` | 白名单键当前生效值列表：`{key, value, source(runtime/env), hot, envKey, updatedAt}` + 运行元信息 `meta`（驱动 / 快照版本号 / 轮询间隔 / 最近生效时间 / 最近错误） |
 | PUT | `/configs/:key` | `system:config:write` | 修改白名单键，body `{value}`（JSON 语义）；响应 `{key, oldValue, newValue, snapshotVersion}`。错误：白名单外 `400/5001`、值非法 `400/5002`（`details` 带原因，**信封顶层**）、键不存在 `404/5003`；同值写入视为无变更（不产生审计） |
-| POST | `/configs/rollback` | `system:config:write` | 一键回滚（M9 Backlog）：body `{version?}`（缺省 = 上一个快照版本）；响应 `{fromVersion, toVersion, changed:[{key,oldValue,newValue}], snapshotVersion}`。三阶段：全量预审计（任一失败整体不生效）→ 持久化目标覆盖 → 逐键应用并通知；回滚本身计入历史（可再回滚 = 撤销回滚）。错误：版本不存在（进程内仅保留最近 20 版）`404/5003`、无历史可回滚 `400/1004`、审计/持久化失败 `500/9001`；未启用 `400/1004` |
+| POST | `/configs/rollback` | `system:config:write` | 一键回滚（M9 Backlog）：body `{version?}`（缺省 = 上一个快照版本）；响应 `{fromVersion, toVersion, changed:[{key,oldValue,newValue}], snapshotVersion}`。三阶段：全量预审计（任一失败整体不生效）→ 持久化目标覆盖 → 逐键应用并通知；回滚本身计入历史（可再回滚 = 撤销回滚）。错误：版本不存在（保留版本数经 `CONFIG_CENTER_HISTORY_MAX` 配置，默认 20 版，M10 E-16）`404/5003`、无历史可回滚 `400/1004`、审计/持久化失败 `500/9001`；未启用 `400/1004` |
+
+### 3.13 实时事件流 SSE（M10 E-12）
+
+> 统一 SSE 通道：任务进度与队列告警经**一条长连接**下发，前端轮询降级为兜底（`EventSource`
+> 建流失败 / 环境不支持 → 自动回落轮询）。事件面承载在 `@fw/transport`（`TRANSPORT_DRIVER=redis`
+> 时经 Redis pub/sub 跨实例扇出，SSE 由任意实例可服务）。
+>
+> **鉴权用一次性票据而非 `?token=`**：`EventSource` 无法自定义请求头，令牌只能进查询串，
+> 而查询串会落进网关访问日志——等于把长期凭证写进日志。故先经带 Bearer 的 `POST /events/ticket`
+> 换一张 **60s、取后即废** 的票据（票据存 `CACHE_STORE`，redis 驱动下多实例共享）。
+> `GET /events/stream` 标 `@Public()` 由控制器内核销票据，票据无效一律 `401/3001`，**不开流**。
+>
+> **主题按权限裁剪**：`job`（任务事件）人人可用；`notification`（站内信）需 `notification:read`；
+> `queue`（队列告警）需 `system:queue:list`。
+> **归属人隔离**：任务事件服务端按 `ownerId` 过滤（同一主题下不把别人的任务推给你）。
+> 事件名（SSE `event:`）：`ready`（建连确认，data 含可订阅主题）/ `job` / `queue`。
+> 心跳为注释帧（`: heartbeat`，15s），响应带 `X-Accel-Buffering: no` 防反代缓冲。
+
+| 方法 | 路径 | 权限点 | 说明 |
+|---|---|---|---|
+| POST | `/events/ticket` | 登录即可 | 签发一次性票据 `{ticket, expiresIn: 60, topics: ('job'\|'queue')[]}`；`topics` 按调用者权限裁剪（无 `system:queue:list` 只得 `job`） |
+| GET | `/events/stream?ticket=…` | 一次性票据 | `text/event-stream` 长连接。`event: job` 的 data = `{kind: created\|progress\|finished, job: JobView, ownerId}`（与 `GET /jobs/:id/progress` 同形，前端零转换消费）；`event: notification` 的 data = `{ownerId, notification: NotificationView}`（M10 E-13 站内信，前端零转换消费，见 §3.14）；`event: queue` 的 data = `{kind: dead-letter\|backlog, at, queue?, jobId?, jobName?, attemptsMade?, reason?, waiting?, threshold?}`。票据无效/已核销 → `401/3001`（响应为普通 JSON 信封，非事件流） |
+
+### 3.14 站内信 / 通知中心（M10 E-13）
+
+> 消息中心的用户面：列表（含未读数）、未读数、标记已读、全部已读、删除。
+> **鉴权 `notification:read`**（不落「登录即可」：消息中心是可授予、可回收的能力面；
+> 与审计 / 队列同构的「权限点 + seed」流程）。**归属人即边界**：全部端点只操作本人消息，
+> 越权与不存在一律 `404`（不泄露存在性，与 §3.11 任务面同语义）。
+>
+> **消息如何产生**：站内信**不由业务代码直接调用**产生，而是通知派发器订阅 `@fw/transport`
+> 事件面后按规则落库（E-12 的接缝）——`job.progress` 的**终态**事件 → 派发人一条
+> （`job.finished` / `job.failed`；运行中的进度事件不通知，进度感知属任务条）；
+> `queue.alert` → 持 `system:queue:list` 的账号各一条（`queue.dead-letter` / `queue.backlog`）。
+> **幂等**：`dedupe_key` 唯一（多副本各收到同一事件时只有一个写入成功；任务重跑因 `updatedAt` 变化
+> 会产生新消息）。**实时**：落库后广播 `notification.created`，经 §3.13 的 `notification` 事件推送，
+> 铃铛未读无需轮询。**保留窗口**：每人最多 200 条，超出淘汰最旧。
+>
+> 列表参数按 §1.5 约定钳制（`pageSize` 上限 200）。`POST` 类端点沿用本仓惯例返回 `201`。
+
+| 方法 | 路径 | 权限点 | 说明 |
+|---|---|---|---|
+| GET | `/notifications` | `notification:read` | 本人消息分页 `{total, unread, items, page, pageSize}`；`unreadOnly=true` 只回未读；列表项 `{id, kind, level, title, content, refType, refId, traceId, read, readAt, createdAt}`（不含 userId 等内部字段） |
+| GET | `/notifications/unread-count` | `notification:read` | `{unread}`（铃铛角标；实时不可用时的按需刷新端点） |
+| POST | `/notifications/:id/read` | `notification:read` | 标记单条已读（**幂等**：已读再标仍成功），返回更新后的视图；非归属人 `404` |
+| POST | `/notifications/read-all` | `notification:read` | 全部标记已读 `{updated}`（仅本人未读） |
+| DELETE | `/notifications/:id` | `notification:read` | 删除本人消息 `{id, removed}`；非归属人 `404` |
+
+### 3.15 前端错误遥测（M10 E-17）
+
+> RUM（admin-web 实时用户监控）的服务端接收面。`POST /telemetry/client-errors` 标 **`@Public`**：
+> 登录页与未登录态的异常同样要能上报；前端 `sendBeacon`（不可用时 `fetch keepalive` 兜底）
+> **fire-and-forget**，不依赖响应内容——响应体仅为被动观测回带。
+> 采集端三重上限防一个 bug 刷爆上报：同签名去重（每签名 ≤5 条 / 会话）、单会话 ≤100 条、
+> 单批 ≤10 条（`RUM_MAX_BATCH`，即下表 `reports` 条数上限）。
+> 服务端主观测路径是 **error 级结构化日志**（`module=rum`，字段化上下文，与后端异常同一管道
+> 可检索，对齐「错误全采」理念）；计数为**进程内视图**（多实例合计需日志侧聚合），随摄取响应
+> 回带 `{received, total}`，**不设 stats 查询端点**（不新增权限码）。
+> `reports[].traceId` 取上报前最近一次后端响应头 `X-Trace-Id`——前端错误与后端日志同链关联。
+> 载荷字段与前端 `ClientErrorReport` 同构；校验失败 `400/1001`，`details` 带 `reports[i].field`
+> 字段级定位（多字段错误一次回齐，不逐条试错）。
+
+| 方法 | 路径 | 权限点 | 说明 |
+|---|---|---|---|
+| POST | `/telemetry/client-errors` | 公开 | 接收一批前端错误。body `{app: string(≤64), reports[1..10]}`；`reports[]` 字段：`source`（`error`/`rejection`/`vue`/`resource`）、`message`（必填非空，≤2000）、`stack`（≤4000 或 null）、`resource`（≤2000 或 null）、`page`（≤500）、`url`（≤2000）、`traceId`（≤64 或 null）、`repeat`（1–1000 整数）、`at`（ISO 8601，≤40）。响应 `{received, total}`：`received` 本批接收条数，`total` 本实例累计条数。体积防御：单字段长度钳制 + Nest 默认 body 上限 |
+
+### 3.16 附件存储（M10 E-09）
+
+> 文件内容经 `@fw/storage` 的 StoragePort 落地（`STORAGE_DRIVER=local` 本地磁盘 / `s3` S3 兼容对象存储，
+> 切换只改配置、业务代码零改动）；本表（元数据，数据字典 §3.19）与端点不随驱动变化。
+> **默认安全**：类型 / 大小白名单默认收紧（`STORAGE_MAX_MB=20`、扩展名白名单见 §3 配置键），
+> 超限 / 越权类型一律 `400/1001` 且文案与 `@fw/storage` 逐字一致（不静默截断）；
+> 存储 key 由服务端生成（`<yyyyMM>/<uuid><ext>`，不透传用户输入，天然免疫路径穿越）。
+> 前端消费：`fw gen crud` 识别附件字段（`*FileId` / `*AttachmentId` 的 String 字段）生成 upload 控件
+> （FileUpload 组件），表单值存文件 id，下载按 id 现取。
+> 下载与元数据**登录即可**（语义同任务产物下载——我自己的上传产物）；上传消耗存储面，需 `file:create`。
+
+| 方法 | 路径 | 权限点 | 说明 |
+|---|---|---|---|
+| POST | `/files` | `file:create` | 上传附件（multipart/form-data，字段名 `file`）。响应 `{id, url, originalName, size, mimeType}`，`url` 为 `/api/v1/files/:id/download` 相对路径。超限 / 白名单外扩展名 / 缺 file 段 → `400/1001` |
+| GET | `/files/:id` | 登录 | 元数据 `{id, originalName, size, mimeType, createdAt}`；不存在或已软删 → `404/1002`（不泄露存在性） |
+| GET | `/files/:id/download` | 登录 | 文件字节流（非统一信封；`Content-Disposition` 带 RFC 5987 编码原始文件名）。不存在或已软删 → `404/1002` |
 
 ## 4. 限流与幂等
 

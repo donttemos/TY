@@ -1,13 +1,23 @@
 /*
  * @file 鉴权存储内存实现
  * @description AuthStore 的内存实现：用于单元测试、无数据库演示与 M4 前的 stub（对齐 85 文档 §4 stub 策略）。
- *   行为与 Prisma 实现保持一致：分页 page 从 1 起、pageSize 上限 100；用户出参不含口令哈希；
- *   权限按 user_role → role_permission 聚合去重。仅用于进程内场景，多实例下不共享状态。
+ *   与 Prisma 实现对齐的部分：分页 page 从 1 起、pageSize 上限 100；用户出参不含口令哈希；
+ *   权限按 user_role → role_permission 聚合去重；用户带真实 createdAt（种子时刻/创建时刻）；
+ *   用户列表默认排序 createdAt desc + id asc；关联写入校验引用存在（对齐 DB 外键）。
+ *   **已知差异**（评审确认，非遗漏）：① NULL 在内存排序中视为最小值——Postgres 视 NULL 为最大、
+ *   MySQL 视为最小，方言位置差异由各 Prisma 实现承担，内存实现只保证「同一输入 → 同一输出」；
+ *   ② 仅进程内，多实例不共享状态。
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo 实现 hasActiveRefreshTokenInFamily
  * @modified 2026-10-14 donttemo BUG-15：pageUsers 消费 query.sort（内存排序 + 主键 tie-breaker 回落，
  *   与 Prisma 实现的排序语义保持一致）
+ * @modified 2026-10-16 donttemo 驱动审查修复：① nextId 与 seedXxx 显式 id 撞号——种子 id 为 `mem-N`
+ *   时推进计数器、发号时校验全表不重号（此前 seed mem-1 后 createUser 生成 mem-1 静默覆盖种子用户）；
+ *   ② 用户建模真实 createdAt（此前列表恒 null，与 Prisma 不一致）；
+ *   ③ updateUser 定义 patch 语义：业务列白名单（对齐 Prisma 可更新列），未知列报错；
+ *   ④ replaceUserRoles / replaceRolePermissions 校验引用存在（对齐 DB 外键，杜绝悬空引用）；
+ *   ⑤ 移除 grantRolePermissions 测试便利方法（与 replaceRolePermissions 完全等价，不该出现在生产类面）。
  * @module @fw/auth
  */
 
@@ -31,6 +41,26 @@ import type {
 const PAGE_SIZE_MAX = 100;
 
 /**
+ * updateUser 可更新的业务列白名单（对齐 Prisma users 表可更新列；
+ * id 为主键、createdAt 由存储层管理，均不可经 patch 修改）
+ */
+const USER_PATCH_FIELDS: readonly string[] = [
+  'tenantId',
+  'username',
+  'phone',
+  'email',
+  'passwordHash',
+  'nickname',
+  'avatar',
+  'status',
+  'lastLoginAt',
+  'lastLoginIp',
+];
+
+/** `mem-N` 形态的种子 id：提取 N 用于推进计数器，避免与后续发号撞号 */
+const MEM_ID_PATTERN = /^mem-(\d+)$/;
+
+/**
  * 内存存储：测试与演示用
  */
 export class MemoryAuthStore implements AuthStore {
@@ -42,27 +72,54 @@ export class MemoryAuthStore implements AuthStore {
   private readonly rolePermissions = new Map<ID, Set<ID>>();
   private readonly refreshTokens = new Map<ID, RefreshTokenRecord>();
   private readonly auditLogs: AuditLogRecord[] = [];
+  /** 用户创建时间（seedUser / createUser 时刻；列表投影与排序用，对齐 Prisma 行为） */
+  private readonly userCreatedAt = new Map<ID, Date>();
   private seq = 0;
 
-  /** 生成自增主键（测试可预期） */
+  /** 生成自增主键（测试可预期；对已占用的 `mem-N` 跳号，绝不覆盖既有记录） */
   private nextId(): string {
-    this.seq += 1;
-    return `mem-${this.seq}`;
+    for (;;) {
+      this.seq += 1;
+      const id = `mem-${this.seq}`;
+      if (!this.idInUse(id)) return id;
+    }
+  }
+
+  /** id 是否已被任何一张内存表占用 */
+  private idInUse(id: string): boolean {
+    return (
+      this.users.has(id) ||
+      this.roles.has(id) ||
+      this.permissions.has(id) ||
+      this.menus.has(id) ||
+      this.refreshTokens.has(id) ||
+      this.auditLogs.some((log) => log.id === id)
+    );
+  }
+
+  /** 种子显式 id 为 `mem-N` 时推进计数器（后续发号从 N+1 起，消除撞号窗口） */
+  private noteSeededId(id: ID): void {
+    const match = MEM_ID_PATTERN.exec(id);
+    if (match) this.seq = Math.max(this.seq, Number(match[1]));
   }
 
   // ---------- 装配辅助（仅内存实现提供） ----------
 
-  /** 直接注入用户（测试预置数据） */
-  seedUser(user: Omit<AuthUser, 'id'> & { id?: ID }): AuthUser {
+  /** 直接注入用户（测试预置数据；createdAt 缺省为注入时刻，不入实体——实体结构与 Prisma 对齐） */
+  seedUser(user: Omit<AuthUser, 'id'> & { id?: ID; createdAt?: Date }): AuthUser {
     const id = user.id ?? this.nextId();
-    const entity: AuthUser = { ...user, id };
+    this.noteSeededId(id);
+    const { createdAt, ...entityFields } = user;
+    const entity: AuthUser = { ...entityFields, id };
     this.users.set(id, entity);
+    this.userCreatedAt.set(id, createdAt ?? new Date());
     return entity;
   }
 
   /** 注入角色 */
   seedRole(role: Omit<AuthRole, 'id'> & { id?: ID }): AuthRole {
     const id = role.id ?? this.nextId();
+    this.noteSeededId(id);
     const entity: AuthRole = { ...role, id };
     this.roles.set(id, entity);
     return entity;
@@ -71,6 +128,7 @@ export class MemoryAuthStore implements AuthStore {
   /** 注入权限点 */
   seedPermission(permission: Omit<AuthPermission, 'id'> & { id?: ID }): AuthPermission {
     const id = permission.id ?? this.nextId();
+    this.noteSeededId(id);
     const entity: AuthPermission = { ...permission, id };
     this.permissions.set(id, entity);
     return entity;
@@ -79,6 +137,7 @@ export class MemoryAuthStore implements AuthStore {
   /** 注入菜单 */
   seedMenu(menu: Omit<AuthMenu, 'id'> & { id?: ID }): AuthMenu {
     const id = menu.id ?? this.nextId();
+    this.noteSeededId(id);
     const entity: AuthMenu = { ...menu, id };
     this.menus.set(id, entity);
     return entity;
@@ -111,12 +170,19 @@ export class MemoryAuthStore implements AuthStore {
       lastLoginIp: null,
     };
     this.users.set(entity.id, entity);
+    this.userCreatedAt.set(entity.id, new Date());
     return entity;
   }
 
   async updateUser(id: ID, patch: Partial<AuthUser>): Promise<AuthUser> {
     const current = this.users.get(id);
     if (!current) throw new Error(`用户不存在: ${id}`);
+    // patch 语义（对齐 Prisma 列更新）：仅接受业务列白名单；未知列报错而非静默忽略
+    // （Prisma 遇到未知列同样抛错）；id 不可变更，createdAt 由存储层管理
+    const unknown = Object.keys(patch).filter((key) => !USER_PATCH_FIELDS.includes(key));
+    if (unknown.length > 0) {
+      throw new Error(`updateUser 不支持的字段: ${unknown.join(', ')}（仅接受用户业务列，id/createdAt 不可经 patch 修改）`);
+    }
     const next = { ...current, ...patch, id };
     this.users.set(id, next);
     return next;
@@ -125,34 +191,38 @@ export class MemoryAuthStore implements AuthStore {
   async pageUsers(query: UserQuery): Promise<PageResult<UserListItem>> {
     const page = Math.max(1, Math.floor(query.page));
     const pageSize = Math.min(PAGE_SIZE_MAX, Math.max(1, Math.floor(query.pageSize)));
-    let rows = [...this.users.values()];
-    if (query.status !== undefined) rows = rows.filter((u) => u.status === query.status);
+    // createdAt 由存储层单独建模（AuthUser 实体与 Prisma 行结构对齐，不含创建时间列），
+    // 排序与投影时从映射取真实值
+    let rows = [...this.users.values()].map((user) => ({ user, createdAt: this.userCreatedAt.get(user.id) ?? null }));
+    if (query.status !== undefined) rows = rows.filter((r) => r.user.status === query.status);
     if (query.keyword) {
       const kw = query.keyword.toLowerCase();
-      rows = rows.filter((u) => u.username.toLowerCase().includes(kw) || (u.nickname ?? '').toLowerCase().includes(kw));
+      rows = rows.filter(
+        (r) => r.user.username.toLowerCase().includes(kw) || (r.user.nickname ?? '').toLowerCase().includes(kw),
+      );
     }
     if (query.roleId) {
-      rows = rows.filter((u) => this.userRoles.get(u.id)?.has(query.roleId as string) === true);
+      rows = rows.filter((r) => this.userRoles.get(r.user.id)?.has(query.roleId as string) === true);
     }
-    // 排序（BUG-15）：字段白名单已在 HTTP 层校验，这里只负责方向；未传时回落主键升序
-    const sortEntries = Object.entries(query.sort ?? {}) as Array<[string, 'asc' | 'desc']>;
+    // 排序（BUG-15）：字段白名单已在 HTTP 层校验，这里只负责方向；
+    // 未传时与 Prisma 实现一致回落 createdAt desc（createdAt 为真实种子/创建时刻）
+    const sortEntries = Object.entries(query.sort ?? { createdAt: 'desc' }) as Array<[string, 'asc' | 'desc']>;
     rows.sort((a, b) => {
-      const left = a as unknown as Record<string, unknown>;
-      const right = b as unknown as Record<string, unknown>;
       for (const [field, direction] of sortEntries) {
-        const diff = compareValues(left[field], right[field]);
+        const left = field === 'createdAt' ? a.createdAt : (a.user as unknown as Record<string, unknown>)[field];
+        const right = field === 'createdAt' ? b.createdAt : (b.user as unknown as Record<string, unknown>)[field];
+        const diff = compareValues(left, right);
         if (diff !== 0) return direction === 'desc' ? -diff : diff;
       }
-      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      return a.user.id < b.user.id ? -1 : a.user.id > b.user.id ? 1 : 0;
     });
     const total = rows.length;
     // C-06 契约 §3.3：列表项须带 roleIds（分配角色弹窗预选）与 createdAt。
-    // 内存实现不建模创建时间（用户是 seedUser 注入的），roleIds 由关联集合投影。
-    const items = rows.slice((page - 1) * pageSize, page * pageSize).map(({ passwordHash: _ignored, ...rest }) => ({
-      ...rest,
-      roleIds: [...(this.userRoles.get(rest.id) ?? [])],
-      createdAt: null,
-    }));
+    // createdAt 为真实种子/创建时刻（对齐 Prisma 行为）；roleIds 由关联集合投影。
+    const items = rows.slice((page - 1) * pageSize, page * pageSize).map(({ user, createdAt }) => {
+      const { passwordHash: _ignored, ...rest } = user;
+      return { ...rest, roleIds: [...(this.userRoles.get(user.id) ?? [])], createdAt };
+    });
     return { items, total, page, pageSize, hasMore: page * pageSize < total };
   }
 
@@ -196,10 +266,17 @@ export class MemoryAuthStore implements AuthStore {
   }
 
   async replaceUserRoles(userId: ID, roleIds: ID[]): Promise<void> {
+    // 对齐 DB 外键：悬空引用直接报错，不静默写库（Prisma 侧 FK 违例同形）
+    this.assertExists('用户', this.users.has(userId), userId);
+    const missing = roleIds.filter((roleId) => !this.roles.has(roleId));
+    this.assertMissing('角色', missing);
     this.userRoles.set(userId, new Set(roleIds));
   }
 
   async replaceRolePermissions(roleId: ID, permissionIds: ID[]): Promise<void> {
+    this.assertExists('角色', this.roles.has(roleId), roleId);
+    const missing = permissionIds.filter((permissionId) => !this.permissions.has(permissionId));
+    this.assertMissing('权限点', missing);
     this.rolePermissions.set(roleId, new Set(permissionIds));
   }
 
@@ -213,11 +290,6 @@ export class MemoryAuthStore implements AuthStore {
       if (roleIds.has(roleId)) userIds.push(userId);
     }
     return userIds;
-  }
-
-  /** 直接授权（测试便捷方法，等价于 replaceRolePermissions） */
-  async grantRolePermissions(roleId: ID, permissionIds: ID[]): Promise<void> {
-    await this.replaceRolePermissions(roleId, permissionIds);
   }
 
   // ---------- 刷新令牌 ----------
@@ -314,13 +386,24 @@ export class MemoryAuthStore implements AuthStore {
     const items = rows.slice((page - 1) * pageSize, page * pageSize);
     return { items, total, page, pageSize, hasMore: page * pageSize < total };
   }
+
+  /** 引用主体不存在的统一报错（对齐 DB 外键违例语义） */
+  private assertExists(label: string, exists: boolean, id: ID): void {
+    if (!exists) throw new Error(`${label}不存在: ${id}（关联写入须引用已存在的记录，外键约束）`);
+  }
+
+  /** 引用集合中不存在项的统一报错 */
+  private assertMissing(label: string, missing: readonly string[]): void {
+    if (missing.length > 0) throw new Error(`${label}不存在: ${missing.join(', ')}（关联写入须引用已存在的记录，外键约束）`);
+  }
 }
 
 /**
  * 内存排序的字段值比较（BUG-15）
  *
  * Date 按时间戳、number 按数值、其余按字符串比较；null/undefined 视为最小值。
- * 具体方言的 NULL 排序位置差异由 Prisma 实现负责，内存实现只保证「同一输入 → 同一输出」的确定性。
+ * 具体方言的 NULL 排序位置差异由 Prisma 实现负责，内存实现只保证「同一输入 → 同一输出」的确定性
+ * （见文件头「已知差异」）。
  */
 function compareValues(left: unknown, right: unknown): number {
   if (left === right) return 0;

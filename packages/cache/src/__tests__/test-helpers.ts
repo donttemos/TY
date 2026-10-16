@@ -5,6 +5,8 @@
  *   使 redis 驱动可在无真实 Redis 的沙箱内完整验证（TC-CACHE-001/009）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-16 donttemo 驱动审查修复配套：FakeRedisClient.eval 增加 SADD+PEXPIRE
+ *   原子脚本分支（驱动侧集合登记已合并为单条 Lua）
  * @module @fw/cache
  */
 
@@ -205,10 +207,19 @@ export class FakeRedisClient implements RedisClientLike {
     return [...(this.liveSet(key)?.members ?? [])];
   }
 
-  /** 按脚本内容模拟两条 Lua（GET 比较后 DEL / PEXPIRE） */
+  /** 按脚本内容模拟 Lua：SADD+PEXPIRE（集合登记原子脚本）/ GET 比较后 DEL / PEXPIRE */
   async eval(script: string, _numKeys: number, ...args: Array<string | number>): Promise<unknown> {
     this.evalCalls++;
-    const [key, expected, ttl] = args as [string, string, number | undefined];
+    const [key, ...rest] = args as [string, ...Array<string | number>];
+    if (script.includes('SADD')) {
+      // 集合登记原子脚本：ARGV[1]=TTL，其余为成员；SADD 与 PEXPIRE 必须同一次 eval 内完成
+      const [ttl, ...members] = rest as [number, ...string[]];
+      const added = await this.sadd(key, ...members);
+      const set = this.liveSet(key);
+      if (set) set.expireAt = Date.now() + Number(ttl);
+      return added;
+    }
+    const [expected, ttl] = rest as [string, number | undefined];
     const entry = this.live(key);
     if (!entry || entry.value !== expected) return 0;
     if (script.includes('pexpire')) {

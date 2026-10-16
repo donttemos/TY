@@ -275,6 +275,8 @@ export interface QueueRuntimeOptions {
   rateLimit: number;
   /** 死信保留上限 */
   deadLetterMax: number;
+  /** 死信分页每页条数上限（M10/E-16：管理面 pageSize 钳制上界，原硬编码 200） */
+  deadLetterPageSizeMax: number;
   /** 优雅停机等待在途任务的超时（毫秒） */
   shutdownTimeoutMs: number;
   /** bullmq 失速检测间隔（毫秒；0 = 用 bullmq 默认 30s。消费进程被强杀后，在途任务最长等这么久被搬回等待区） */

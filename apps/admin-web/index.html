@@ -4,6 +4,28 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>通用应用框架 · 管理后台</title>
+    <script>
+      // 首帧上色（E-15 暗色模式）：应用脚本执行前按持久化偏好设置 html.dark / html.compact，
+      // 否则暗色用户会先看到浅色底再被 store 切成暗色（闪屏）。口径与 src/store/app.ts 同源：
+      // 键 fw_admin_appearance + themeMode(light|dark|auto，兼容旧版 darkMode 布尔) + prefers-color-scheme。
+      // 本处是该口径唯一的前置副本（上色必须早于应用脚本），键名 / 模式枚举 / 媒体查询串由单测与 store 对齐。
+      (function () {
+        try {
+          var raw = localStorage.getItem('fw_admin_appearance');
+          var saved = raw ? JSON.parse(raw) : {};
+          var mode = saved.themeMode;
+          if (mode !== 'light' && mode !== 'dark' && mode !== 'auto') {
+            mode = typeof saved.darkMode === 'boolean' ? (saved.darkMode ? 'dark' : 'light') : 'auto';
+          }
+          var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var root = document.documentElement;
+          if (mode === 'dark' || (mode === 'auto' && prefersDark)) root.classList.add('dark');
+          if (saved.compactMode === true) root.classList.add('compact');
+        } catch (error) {
+          // 隐私模式 / 存储损坏：按默认浅色渲染，应用内 store 会再按当前偏好校正一次
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

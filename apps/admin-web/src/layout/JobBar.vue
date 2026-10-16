@@ -6,6 +6,8 @@
  *   轮询与退避逻辑在 composables/useJobCenter.ts（本组件只做展示与交互）。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-16 donttemo M10 E-15：上投影改令牌 --fw-shadow-up（暗色下 rgba 阴影需加深，
+ *   写死浅色阴影在暗色底上不可见）
  * @module admin-web/layout
 -->
 
@@ -78,6 +80,14 @@ function copyTraceId(traceId: string): void {
     <!-- 汇总行（点击展开 / 收起） -->
     <div class="fw-jobbar-head" @click="jobCenter.toggle()">
       <span class="fw-jobbar-head-label">后台任务</span>
+      <el-tooltip
+        :content="jobCenter.sseStatus === 'open' ? '实时推送已连接（SSE）' : '实时推送不可用，已降级为轮询（1s~10s 退避）'"
+        placement="top"
+      >
+        <span class="fw-jobbar-head-mode" :class="jobCenter.sseStatus === 'open' ? 'is-live' : 'is-poll'">
+          {{ jobCenter.sseStatus === 'open' ? '实时' : '轮询' }}
+        </span>
+      </el-tooltip>
       <el-tag v-if="jobCenter.runningCount > 0" size="small" type="primary" effect="light">进行中 {{ jobCenter.runningCount }}</el-tag>
       <el-tag v-if="jobCenter.failedCount > 0" size="small" type="danger" effect="light">失败 {{ jobCenter.failedCount }}</el-tag>
       <el-tag v-if="jobCenter.runningCount === 0 && jobCenter.failedCount === 0" size="small" type="success" effect="light">全部完成</el-tag>
@@ -131,7 +141,7 @@ function copyTraceId(traceId: string): void {
 .fw-jobbar {
   border-top: 1px solid var(--fw-border);
   background: var(--fw-surface);
-  box-shadow: 0 -1px 3px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--fw-shadow-up);
   flex-shrink: 0;
 }
 
@@ -149,6 +159,21 @@ function copyTraceId(traceId: string): void {
   font-size: 13px;
   font-weight: 600;
   color: var(--fw-text-1);
+}
+
+/* 进度感知方式徽标：实时（SSE 在线）/ 轮询（兜底） */
+.fw-jobbar-head-mode {
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid var(--fw-border);
+  color: var(--fw-text-3);
+}
+
+.fw-jobbar-head-mode.is-live {
+  color: var(--el-color-success);
+  border-color: var(--el-color-success-light-5);
 }
 
 .fw-jobbar-head-progress {

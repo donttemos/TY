@@ -173,7 +173,8 @@ export interface ConfigRollbackResult {
  * 注入后：快照历史与版本号基线下沉持久层——A 实例写入的版本对 B 实例可见（回滚跨实例一致），
  * 版本号以持久层最新值为基线单调推进（多实例不撞号、meta.snapshotVersion 读取一致）。
  * 不注入（缺省）= 进程内环形表（M9 原行为，单实例语义，既有单测零改动）。
- * 实现（应用侧 Prisma store）负责淘汰策略（建议与 MAX_HISTORY 同口径保留最近 20 版）。
+ * 实现（应用侧 Prisma store）负责淘汰策略（M10/E-16 起保留版本数经 CONFIG_CENTER_HISTORY_MAX
+ * 配置，默认 20；服务的 maxHistory 与持久淘汰窗口应同源）。
  */
 export interface ConfigHistoryPort {
   /** 追加快照条目（版本推进后调用；实现建议对重复版本 upsert——外部事实源与本地推进可能同号） */

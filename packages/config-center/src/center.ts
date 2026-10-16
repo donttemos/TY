@@ -10,6 +10,8 @@
  * @modified 2026-10-15 donttemo M10 E-02：多实例语义——可选注入 ConfigHistoryPort，快照历史下沉
  *   持久层：版本号以持久层最新值为基线推进（多实例不撞号），回滚候选集跨实例可见（AC2），
  *   syncRemoteVersion() 供 GET /configs 读取时对齐（A 写版本 B 读一致）。不注入 = 进程内环形表（原行为）
+ * @modified 2026-10-15 donttemo M10/E-16：快照历史保留版本数经 maxHistory 选项配置
+ *   （CONFIG_CENTER_HISTORY_MAX，默认 20；进程内环形表与持久历史淘汰窗口同口径）
  * @module config-center
  */
 import { envSchema, ENV_HOT_KEYS, ENV_KEY_PATHS, type Env } from '@fw/config';
@@ -31,8 +33,8 @@ import type {
 
 const logger = Logger.for('config.center');
 
-/** 快照历史保留上限（进程内环形；超出淘汰最旧，回滚到已淘汰版本报 5003） */
-const MAX_HISTORY = 20;
+/** 快照历史保留上限默认值（进程内环形；超出淘汰最旧，回滚到已淘汰版本报 5003。M10/E-16 起可配置） */
+const DEFAULT_MAX_HISTORY = 20;
 
 /** 点路径 → Env 键名（热更新白名单倒排） */
 const HOT_PATH_TO_ENV: ReadonlyMap<string, string> = new Map(Object.entries(ENV_HOT_KEYS).map(([path, envKey]) => [path, envKey]));
@@ -56,6 +58,11 @@ export interface ConfigCenterOptions {
    * 多副本回滚/版本号一致；缺省 = 进程内环形表（M9 原行为，单实例语义）
    */
   history?: ConfigHistoryPort;
+  /**
+   * 快照历史保留版本数（M10/E-16，CONFIG_CENTER_HISTORY_MAX）：进程内环形表与持久历史
+   * 淘汰窗口同口径；缺省 20
+   */
+  maxHistory?: number;
   /** 时钟注入（测试用；缺省系统时间） */
   now?: () => Date;
 }
@@ -84,6 +91,9 @@ export class ConfigCenterService {
 
   /** 快照历史持久端口（M10 E-02，可选；缺省进程内环形表） */
   private readonly historyPort: ConfigHistoryPort | undefined;
+
+  /** 快照历史保留版本数（M10/E-16，CONFIG_CENTER_HISTORY_MAX；环形表与持久淘汰窗口同口径） */
+  private readonly maxHistory: number;
 
   private readonly now: () => Date;
 
@@ -114,6 +124,7 @@ export class ConfigCenterService {
     this.env = options.env;
     this.audit = options.audit;
     this.historyPort = options.history;
+    this.maxHistory = options.maxHistory ?? DEFAULT_MAX_HISTORY;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -364,7 +375,7 @@ export class ConfigCenterService {
    *
    * 语义与安全：
    * - `version` 缺省 = 回滚到**上一个**历史版本（当前版本之前的最近一条）；
-   * - 目标版本必须仍在进程内历史环形表中（仅保留最近 20 条），已淘汰报 404/5003；
+   * - 目标版本必须仍在历史表中（仅保留最近 maxHistory 条，默认 20），已淘汰报 404/5003；
    * - 三阶段：**先全量预审计**（任一审计失败 → 整体不生效）→ **持久化目标覆盖集**（API 源；失败整体失败）
    *   → **逐键应用并通知**（与单键管道同一生效语义；目标未覆盖的键 = 恢复 env 快照值）；
    * - 回滚本身也是一次版本推进并计入历史（回滚后可再回滚）；
@@ -380,7 +391,7 @@ export class ConfigCenterService {
     let candidates: ConfigSnapshotEntry[];
     if (this.historyPort) {
       try {
-        candidates = await this.historyPort.list(MAX_HISTORY);
+        candidates = await this.historyPort.list(this.maxHistory);
       } catch (error) {
         throw new BizError(ErrorCode.INTERNAL, `读取配置历史失败：${error instanceof Error ? error.message : String(error)}`);
       }
@@ -399,7 +410,7 @@ export class ConfigCenterService {
       if (!found) {
         throw new BizError(
           ErrorCode.CONFIG_NOT_FOUND,
-          `配置历史版本 ${targetVersion} 不存在（仅保留最近 ${MAX_HISTORY} 个版本）`,
+          `配置历史版本 ${targetVersion} 不存在（仅保留最近 ${this.maxHistory} 个版本）`,
         );
       }
       entry = found;
@@ -615,7 +626,7 @@ export class ConfigCenterService {
       overlay: Object.fromEntries(this.overlay),
     };
     this.history.push(entry);
-    while (this.history.length > MAX_HISTORY) this.history.shift();
+    while (this.history.length > this.maxHistory) this.history.shift();
     if (this.historyPort) {
       try {
         await this.historyPort.append(entry);

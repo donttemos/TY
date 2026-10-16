@@ -451,4 +451,25 @@ describe('一键回滚（M9 Backlog）', () => {
     expect(result.snapshotVersion).toBe(2);
     expect(audit.records).toHaveLength(1); // 只有最初 write 的那一条
   });
+
+  it('M10/E-16：maxHistory 可配——环形表按配置值淘汰，回滚 404 文案同步', async () => {
+    const driver = makeDriver();
+    const audit = makeAudit();
+    // 只保留 2 版：init(v1) → 两次 write（v2/v3）后 v1 被淘汰
+    const center = new ConfigCenterService({ driver, env: makeEnv(), audit, maxHistory: 2 });
+    await center.init();
+    await center.write('log.level', 'debug', apiCtx); // v2
+    await center.write('cache.ttl', 900, apiCtx); // v3
+    expect(center.historySize).toBe(2);
+
+    // 回滚到已淘汰版本：404/5003，文案按配置值回显
+    await expect(center.rollback(1, apiCtx)).rejects.toMatchObject({
+      code: ErrorCode.CONFIG_NOT_FOUND,
+      message: expect.stringContaining('仅保留最近 2 个版本'),
+    });
+    // 窗口内版本仍可回滚
+    const back = await center.rollback(2, apiCtx);
+    expect(back.fromVersion).toBe(3);
+    expect(back.toVersion).toBe(2);
+  });
 });

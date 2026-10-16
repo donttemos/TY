@@ -24,6 +24,19 @@
  * @modified 2026-10-15 donttemo BUG-15 增量 + E-07：/roles、/dict/categories、/dict/items 接入排序
  *   白名单（与 example-api 逐项一致，未知字段 400/1001 不静默忽略）；/dict/audit_module 字典端点
  *   随字典数据落地（GET /dict/:code 通用段直接命中，无需单独 handler）
+ * @modified 2026-10-15 donttemo M10 E-12：`POST /events/ticket` 明确返回「mock 不提供 SSE」，
+ *   前端据此确定性降级为轮询兜底（不伪造票据）
+ * @modified 2026-10-15 donttemo M10 E-13：站内信五端点（`/notifications` 列表/未读数/已读/全部已读/删除，
+ *   `notification:read` 守卫 + 归属人 404）+ 权限点与角色授权同步（mock 无事件面，消息为预置数据）
+ * @modified 2026-10-15 donttemo M10/E-16：死信分页每页上限提为常量（与 @fw/queue 的
+ *   MQ_DEAD_LETTER_PAGE_MAX 默认值同口径）；配置中心白名单补 web.keepAliveMax（12 键）、
+ *   已知键集补 E-16 四个新点路径（boot 键 → 5001 判别依据）
+ * @modified 2026-10-15 donttemo M10/E-17：新增公开端点 `POST /telemetry/client-errors`
+ *   （前端 RUM 错误上报，与 example-api ClientErrorsController 同构：形状 / 来源枚举 /
+ *   单批 10 条校验，响应 `{ received, total }`）
+ * @modified 2026-10-16 donttemo M10 E-09：附件三端点（`POST /files` multipart 上传 + `file:create`
+ *   守卫，`GET /files/:id` 元数据与 `GET /files/:id/download` 登录即可）——类型/大小白名单默认
+ *   收紧口径与 @fw/storage 同源（20MB + 扩展名白名单，400 文案逐字一致），下载逐字节回放
  * @module admin-web/mock
  */
 
@@ -36,12 +49,14 @@ import type {
   MockJob,
   MockMenu,
   MockMenuTree,
+  MockNotification,
   MockOrder,
   MockPermission,
   MockRole,
   MockSession,
   MockTenant,
   MockTokenPayload,
+  MockUploadFile,
   MockUser,
 } from './db';
 import { db as defaultDb } from './db';
@@ -72,6 +87,12 @@ const CODE = {
   CONFIG_INVALID_VALUE: 5002,
   CONFIG_NOT_FOUND: 5003,
 } as const;
+
+/**
+ * 死信分页每页条数上限（M10/E-16：与 @fw/queue 的 MQ_DEAD_LETTER_PAGE_MAX 默认值同口径；
+ * mock 无 env 注入面，固定取默认值 200）
+ */
+const MOCK_DEAD_LETTER_PAGE_MAX = 200;
 
 /** HTTP 状态码映射 */
 const HTTP_STATUS: Record<number, number> = {
@@ -218,6 +239,77 @@ function send<T>(res: ServerResponse, code: number, message: string, data: T, tr
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('X-Trace-Id', traceId);
   res.end(JSON.stringify(body));
+}
+
+/** M10 E-09 附件上传上限：与 @fw/storage 默认（STORAGE_MAX_MB=20）同口径（mock 无 env 注入面） */
+const MOCK_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+/** M10 E-09 扩展名白名单：与 @fw/storage 默认（STORAGE_ALLOWED_EXTS）逐项一致 */
+const MOCK_UPLOAD_ALLOWED_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.pdf', '.txt', '.csv', '.xlsx', '.docx', '.zip'];
+
+/** 读原始请求体（multipart 用；JSON 走 readBody；超限断连返回 null 与 readBody 语义一致） */
+function readRawBody(req: IncomingMessage, maxBytes: number): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        req.destroy();
+        resolve(null);
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', () => resolve(null));
+  });
+}
+
+/** multipart 提取结果（字段名 file 的那一段） */
+interface MultipartFilePart {
+  fileName: string;
+  contentType: string;
+  data: Buffer;
+}
+
+/**
+ * 最小 multipart 解析：只取 name="file" 的段（mock 专用，满足前端 el-upload FormData 形态）。
+ * 与真实后端 multer 的差异点（多文件 / 非常规编码）不需要——前端只会发单文件段。
+ * boundary 取自 HTTP 头（请求体里只有分隔行，没有 boundary= 声明）。
+ */
+function extractMultipartFile(raw: Buffer, contentTypeHeader: string | undefined): MultipartFilePart | null {
+  const boundaryMatch = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(contentTypeHeader ?? '');
+  if (!boundaryMatch) return null;
+  const boundary = `--${(boundaryMatch[1] ?? boundaryMatch[2]).trim()}`;
+  const segments: MultipartFilePart[] = [];
+  let cursor = raw.indexOf(boundary);
+  while (cursor >= 0) {
+    const headStart = cursor + boundary.length;
+    if (raw.subarray(headStart, headStart + 2).toString() === '--') break;
+    const headEnd = raw.indexOf('\r\n\r\n', headStart);
+    if (headEnd < 0) break;
+    const next = raw.indexOf(boundary, headEnd + 4);
+    if (next < 0) break;
+    const head = raw.subarray(headStart, headEnd).toString('utf8');
+    const name = /name="([^"]*)"/.exec(head)?.[1] ?? '';
+    // 段体去掉结尾 \r\n（boundary 前的 CRLF 属协议分隔符）；非 file 段丢弃
+    const data = name === 'file' ? raw.subarray(headEnd + 4, next - 2) : Buffer.alloc(0);
+    segments.push({
+      fileName: name === 'file' ? (/filename="([^"]*)"/.exec(head)?.[1] ?? '') : '',
+      contentType: /content-type:\s*([^\r\n]+)/i.exec(head)?.[1]?.trim() ?? 'application/octet-stream',
+      data,
+    });
+    cursor = next;
+  }
+  return segments.find((segment) => segment.data.length > 0 || segment.fileName !== '') ?? null;
+}
+
+/** 扩展名提取（小写含点；与 @fw/storage extOf 同语义） */
+function uploadExtOf(fileName: string): string {
+  const base = fileName.split(/[\\/]/).pop() ?? '';
+  const dot = base.lastIndexOf('.');
+  if (dot <= 0) return '';
+  return base.slice(dot).toLowerCase();
 }
 
 /** 菜单树（嵌套结构，按 sort 排序） */
@@ -547,6 +639,75 @@ function applyMockSort<T extends object>(
 }
 
 /** 主处理器：返回 handled=false 时由中间件调用 next() 放行 */
+/**
+ * M10/E-17：前端错误上报（RUM）mock 计数——进程内累计，与 example-api 的
+ * ClientErrorsService 同口径（「本实例累计」语义，多实例合计需日志侧聚合）
+ */
+let mockClientErrorTotal = 0;
+
+/** E-17：错误来源枚举（与后端 CLIENT_ERROR_SOURCES / 前端 RumSource 同集合） */
+const MOCK_CLIENT_ERROR_SOURCES = ['error', 'rejection', 'vue', 'resource'];
+
+/** E-17：单批上限（与后端 CLIENT_ERROR_MAX_BATCH / 前端 RUM_MAX_BATCH 同值） */
+const MOCK_CLIENT_ERROR_MAX_BATCH = 10;
+
+/**
+ * M10/E-17：前端错误上报（与 example-api ClientErrorsController 同构——公开端点，
+ * 校验形状 / 来源枚举 / 条数上限，逐条落库不模拟（mock 无日志管道），
+ * 响应回带 `{ received, total }`。校验失败 400/1001 且 details 带字段级定位）
+ */
+function handleClientErrors(body: Record<string, unknown>, res: ServerResponse, traceId: string): void {
+  const app = body.app;
+  if (typeof app !== 'string' || app.length === 0 || app.length > 64) {
+    send(res, CODE.BAD_REQUEST, 'app 必填字符串，长度 1-64', null, traceId, [{ field: 'app', message: '必填字符串，长度 1-64' }]);
+    return;
+  }
+  const reports = body.reports;
+  if (!Array.isArray(reports)) {
+    send(res, CODE.BAD_REQUEST, 'reports 需为数组', null, traceId, [{ field: 'reports', message: '需为数组' }]);
+    return;
+  }
+  if (reports.length === 0) {
+    send(res, CODE.BAD_REQUEST, 'reports 不能为空', null, traceId, [{ field: 'reports', message: '至少包含 1 条上报' }]);
+    return;
+  }
+  if (reports.length > MOCK_CLIENT_ERROR_MAX_BATCH) {
+    send(res, CODE.BAD_REQUEST, `单批最多 ${MOCK_CLIENT_ERROR_MAX_BATCH} 条上报`, null, traceId, [
+      { field: 'reports', message: `条数不得超过 ${MOCK_CLIENT_ERROR_MAX_BATCH}` },
+    ]);
+    return;
+  }
+  const details: Array<{ field: string; message: string }> = [];
+  reports.forEach((item, index) => {
+    const report = (item ?? {}) as Record<string, unknown>;
+    const field = (name: string): string => `reports[${index}].${name}`;
+    if (typeof report.source !== 'string' || !MOCK_CLIENT_ERROR_SOURCES.includes(report.source)) {
+      details.push({ field: field('source'), message: `需为 ${MOCK_CLIENT_ERROR_SOURCES.join(' / ')} 之一` });
+    }
+    if (typeof report.message !== 'string' || report.message.length === 0 || report.message.length > 2000) {
+      details.push({ field: field('message'), message: '必填非空字符串，长度不得超过 2000' });
+    }
+    if (typeof report.page !== 'string' || report.page.length > 500) {
+      details.push({ field: field('page'), message: '必填字符串，长度不得超过 500' });
+    }
+    if (typeof report.url !== 'string' || report.url.length > 2000) {
+      details.push({ field: field('url'), message: '必填字符串，长度不得超过 2000' });
+    }
+    if (typeof report.repeat !== 'number' || !Number.isInteger(report.repeat) || report.repeat < 1 || report.repeat > 1000) {
+      details.push({ field: field('repeat'), message: '需为 1-1000 的整数' });
+    }
+    if (typeof report.at !== 'string' || report.at.length === 0 || report.at.length > 40) {
+      details.push({ field: field('at'), message: '必填字符串（ISO 8601），长度不得超过 40' });
+    }
+  });
+  if (details.length > 0) {
+    send(res, CODE.BAD_REQUEST, '前端错误上报载荷校验失败', null, traceId, details);
+    return;
+  }
+  mockClientErrorTotal += reports.length;
+  send(res, CODE.OK, 'ok', { received: reports.length, total: mockClientErrorTotal }, traceId);
+}
+
 export async function handleMockRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -557,6 +718,56 @@ export async function handleMockRequest(
   const path = url.pathname.replace(/^\/api\/v1/, '') || '/';
   const method = (req.method ?? 'GET').toUpperCase();
   const query = url.searchParams;
+
+  // ---- M10 E-09 附件上传（multipart 原始体，须在 readBody 消费请求流之前接管） ----
+  if (path === '/files' && method === 'POST') {
+    const auth = authenticate(database, req);
+    if (!auth.ok) {
+      send(res, auth.code, auth.message, null, traceId);
+      return { handled: true };
+    }
+    const perm = requirePermission(database, auth.ctx, 'file:create');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    // 上限多留一段协议开销余量（boundary / 头部），超限断连 → 与超限 400 文案区分
+    const raw = await readRawBody(req, MOCK_UPLOAD_MAX_BYTES + 64 * 1024);
+    if (!raw) {
+      send(res, CODE.BAD_REQUEST, `文件超出大小上限（${Math.floor(MOCK_UPLOAD_MAX_BYTES / 1024 / 1024)}MB）`, null, traceId);
+      return { handled: true };
+    }
+    const part = extractMultipartFile(raw, req.headers['content-type']);
+    if (!part || part.data.length === 0) {
+      send(res, CODE.BAD_REQUEST, '请以 multipart/form-data 上传，字段名为 file', null, traceId);
+      return { handled: true };
+    }
+    if (part.data.length > MOCK_UPLOAD_MAX_BYTES) {
+      send(res, CODE.BAD_REQUEST, `文件超出大小上限（${Math.floor(MOCK_UPLOAD_MAX_BYTES / 1024 / 1024)}MB）`, null, traceId);
+      return { handled: true };
+    }
+    const ext = uploadExtOf(part.fileName);
+    if (!MOCK_UPLOAD_ALLOWED_EXTS.includes(ext)) {
+      send(res, CODE.BAD_REQUEST, `不支持的文件类型：${ext || '(无扩展名)'}`, null, traceId);
+      return { handled: true };
+    }
+    const id = randomId('file');
+    const row: MockUploadFile = {
+      id,
+      ownerId: auth.ctx.user.id,
+      originalName: part.fileName,
+      storedName: `mock/${id}${ext}`,
+      mimeType: part.contentType,
+      size: part.data.length,
+      deletedAt: null,
+      createdAt: new Date().toISOString(),
+      content: part.data,
+    };
+    database.uploadFiles.push(row);
+    send(res, CODE.OK, 'ok', { id, url: `/api/v1/files/${id}/download`, originalName: row.originalName, size: row.size, mimeType: row.mimeType }, traceId);
+    return { handled: true };
+  }
+
   const body = method === 'GET' || method === 'DELETE' ? {} : await readBody(req);
 
   // ---- 公开端点 ----
@@ -571,6 +782,12 @@ export async function handleMockRequest(
   // E-07：已注册 OAuth2 提供方列表（与真实后端同形；mock 无 IdP，如实返回空 → 登录页不渲染入口）
   if (path === '/auth/oauth2/providers' && method === 'GET') {
     send(res, CODE.OK, 'ok', { providers: [] }, traceId);
+    return { handled: true };
+  }
+  // E-17：前端 RUM 错误上报（与真实后端同构的公开端点——登录页与未登录态异常同样上报；
+  // fire-and-forget 语义，前端不依赖响应内容）
+  if (path === '/telemetry/client-errors' && method === 'POST') {
+    handleClientErrors(body, res, traceId);
     return { handled: true };
   }
 
@@ -1619,9 +1836,10 @@ export async function handleMockRequest(
       return { handled: true };
     }
     const queueName = query.get('queue');
-    // 分页（与 @fw/queue 改造同形）：不传时等价于第一页 + 全量 total，行为向后兼容
+    // 分页（与 @fw/queue 改造同形）：不传时等价于第一页 + 全量 total，行为向后兼容；
+    // 每页上限 MOCK_DEAD_LETTER_PAGE_MAX（M10/E-16，与 MQ_DEAD_LETTER_PAGE_MAX 默认值同口径）
     const page = Math.max(1, Number(query.get('page') ?? '1'));
-    const pageSize = Math.min(200, Math.max(1, Number(query.get('pageSize') ?? '20')));
+    const pageSize = Math.min(MOCK_DEAD_LETTER_PAGE_MAX, Math.max(1, Number(query.get('pageSize') ?? '20')));
     const items = queueName ? database.queue.deadLetters.filter((item) => item.queue === queueName) : database.queue.deadLetters;
     const windowed = paginate(items, page, pageSize);
     send(res, CODE.OK, 'ok', { total: windowed.total, items: windowed.items, page: windowed.page, pageSize: windowed.pageSize }, traceId);
@@ -1943,6 +2161,124 @@ export async function handleMockRequest(
     return { handled: true };
   }
 
+  // ---- M10 E-12 SSE 实时推送：mock 不实现流式推送，明确拒绝而非静默 200 ----
+  // 前端据此自动降级为轮询兜底（useJobCenter 的 sseStatus → 'closed'），
+  // 而不是拿到一张永远建不起来的票据后卡在「实时」态。
+  if (path === '/events/ticket' && method === 'POST') {
+    send(res, CODE.INTERNAL, 'mock 环境不提供 SSE 实时推送（前端自动降级为轮询兜底）', null, traceId);
+    return { handled: true };
+  }
+
+  // ---------- M10 E-13 站内信 / 通知中心（api-spec §3.14） ----------
+  // 与真实后端同语义：`notification:read` 守卫；归属人即边界（他人的消息一律 404 不泄露存在性）。
+  // mock 不产事件（无 SSE 事件面），消息来自 db 预置 + 前端动作产生。
+  if (path === '/notifications' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'notification:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const page = Math.max(1, Number(query.get('page') ?? '1') || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(query.get('pageSize') ?? '20') || 20));
+    const unreadOnly = query.get('unreadOnly') === 'true';
+    const mine = database.notifications
+      .filter((item) => item.userId === ctx.user.id)
+      .filter((item) => !unreadOnly || item.readAt === null)
+      .sort((a, b) => (a.createdAt === b.createdAt ? (a.id < b.id ? 1 : -1) : a.createdAt < b.createdAt ? 1 : -1));
+    const items = mine.slice((page - 1) * pageSize, page * pageSize).map(notificationView);
+    send(res, CODE.OK, 'ok', { total: mine.length, unread: unreadCount(database, ctx.user.id), items, page, pageSize }, traceId);
+    return { handled: true };
+  }
+
+  if (path === '/notifications/unread-count' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'notification:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    send(res, CODE.OK, 'ok', { unread: unreadCount(database, ctx.user.id) }, traceId);
+    return { handled: true };
+  }
+
+  if (path === '/notifications/read-all' && method === 'POST') {
+    const perm = requirePermission(database, ctx, 'notification:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const now = new Date().toISOString();
+    let updated = 0;
+    for (const item of database.notifications) {
+      if (item.userId === ctx.user.id && item.readAt === null) {
+        item.readAt = now;
+        updated += 1;
+      }
+    }
+    send(res, CODE.OK, 'ok', { updated }, traceId);
+    return { handled: true };
+  }
+
+  const notifReadMatch = /^\/notifications\/([\w-]+)\/read$/.exec(path);
+  if (notifReadMatch && method === 'POST') {
+    const perm = requirePermission(database, ctx, 'notification:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const item = findOwnedNotification(database, ctx, notifReadMatch[1] as string);
+    if (!item) {
+      send(res, CODE.NOT_FOUND, '消息不存在', null, traceId);
+      return { handled: true };
+    }
+    if (item.readAt === null) item.readAt = new Date().toISOString();
+    send(res, CODE.OK, 'ok', notificationView(item), traceId);
+    return { handled: true };
+  }
+
+  const notifDeleteMatch = /^\/notifications\/([\w-]+)$/.exec(path);
+  if (notifDeleteMatch && method === 'DELETE') {
+    const perm = requirePermission(database, ctx, 'notification:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const item = findOwnedNotification(database, ctx, notifDeleteMatch[1] as string);
+    if (!item) {
+      send(res, CODE.NOT_FOUND, '消息不存在', null, traceId);
+      return { handled: true };
+    }
+    database.notifications = database.notifications.filter((row) => row.id !== item.id);
+    send(res, CODE.OK, 'ok', { id: item.id, removed: true }, traceId);
+    return { handled: true };
+  }
+
+  // ---- M10 E-09 附件元数据与下载（api-spec §3.19；登录即可，语义同任务产物下载） ----
+  const fileMetaMatch = /^\/files\/([\w-]+)$/.exec(path);
+  if (fileMetaMatch && method === 'GET') {
+    const row = database.uploadFiles.find((item) => item.id === fileMetaMatch[1] && item.deletedAt === null);
+    if (!row) {
+      send(res, CODE.NOT_FOUND, '文件不存在或已删除', null, traceId);
+      return { handled: true };
+    }
+    send(res, CODE.OK, 'ok', { id: row.id, originalName: row.originalName, size: row.size, mimeType: row.mimeType, createdAt: row.createdAt }, traceId);
+    return { handled: true };
+  }
+
+  const fileDownloadMatch = /^\/files\/([\w-]+)\/download$/.exec(path);
+  if (fileDownloadMatch && method === 'GET') {
+    const row = database.uploadFiles.find((item) => item.id === fileDownloadMatch[1] && item.deletedAt === null);
+    if (!row) {
+      send(res, CODE.NOT_FOUND, '文件不存在或已删除', null, traceId);
+      return { handled: true };
+    }
+    // 裸文件流（非统一信封），与后端 UploadController.download 的 @Res() 直写一致；逐字节回放
+    res.statusCode = 200;
+    res.setHeader('Content-Type', row.mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(row.originalName)}`);
+    res.end(row.content);
+    return { handled: true };
+  }
+
   // ---- N-02 异步任务域（登录即可；归属人校验在处理器内，不泄露存在性一律 404） ----
   const jobProgressMatch = /^\/jobs\/([\w-]+)\/progress$/.exec(path);
   if (jobProgressMatch && method === 'GET') {
@@ -2096,6 +2432,35 @@ function findOwnedJob(database: MockDb, ctx: AuthContext, id: string): MockJob |
   return job;
 }
 
+/** M10 E-13：站内信对外视图（NotificationView 形状，剥掉 userId 等内部字段） */
+function notificationView(item: MockNotification): Record<string, unknown> {
+  return {
+    id: item.id,
+    kind: item.kind,
+    level: item.level,
+    title: item.title,
+    content: item.content,
+    refType: item.refType,
+    refId: item.refId,
+    traceId: item.traceId,
+    read: item.readAt !== null,
+    readAt: item.readAt,
+    createdAt: item.createdAt,
+  };
+}
+
+/** M10 E-13：本人未读数 */
+function unreadCount(database: MockDb, userId: string): number {
+  return database.notifications.filter((item) => item.userId === userId && item.readAt === null).length;
+}
+
+/** M10 E-13：按 id + 归属人查站内信（非归属人 / 不存在都返回 null，对外一律 404） */
+function findOwnedNotification(database: MockDb, ctx: AuthContext, id: string): MockNotification | null {
+  const item = database.notifications.find((row) => row.id === id);
+  if (!item || item.userId !== ctx.user.id) return null;
+  return item;
+}
+
 /** 派发瞬间的宽限窗口（毫秒）：让前端至少能观察到一次 pending，与后端的「立即执行」差异可接受 */
 const JOB_PENDING_GRACE_MS = 200;
 
@@ -2153,7 +2518,7 @@ interface MockConfigEntry {
   options?: readonly string[];
 }
 
-/** 热更新白名单 11 键（与 example-api 管道同一份约束语义） */
+/** 热更新白名单 12 键（与 example-api 管道同一份约束语义；M10/E-16 起含 web.keepAliveMax） */
 const MOCK_CONFIG_ENTRIES: MockConfigEntry[] = [
   { key: 'log.level', envKey: 'LOG_LEVEL', initial: 'info', type: 'string', options: ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] },
   { key: 'log.maxBytes', envKey: 'LOG_MAX_BYTES', initial: 8192, type: 'number', min: 512, int: true },
@@ -2166,18 +2531,20 @@ const MOCK_CONFIG_ENTRIES: MockConfigEntry[] = [
   { key: 'mq.concurrency', envKey: 'MQ_CONCURRENCY', initial: 10, type: 'number', min: 1, max: 1000, int: true },
   { key: 'otel.sampleRatio', envKey: 'OTEL_SAMPLE_RATIO', initial: 0.1, type: 'number', min: 0, max: 1 },
   { key: 'tenant.cacheTtl', envKey: 'TENANT_CACHE_TTL', initial: 60, type: 'number', min: 1, max: 3600, int: true },
+  { key: 'web.keepAliveMax', envKey: 'WEB_KEEP_ALIVE_MAX', initial: 12, type: 'number', min: 1, max: 1000, int: true },
 ];
 
-/** 已知键全集（boot 键 → 5001 的判别依据；与 @fw/config ENV_KEY_PATHS 值集同源） */
+/** 已知键全集（boot 键 → 5001 的判别依据；与 @fw/config ENV_KEY_PATHS 值集逐一同源，84 键） */
 const MOCK_KNOWN_CONFIG_PATHS: ReadonlySet<string> = new Set([
   'app.env', 'app.port', 'log.level', 'log.maxBytes', 'db.driver', 'db.url', 'db.slowMs',
   'cache.driver', 'cache.url', 'cache.prefix', 'cache.ttl', 'cache.maxItems', 'cache.failOpen',
   'cache.nullTtl', 'cache.ttlJitter', 'cache.lockTtl', 'cache.tagTtl', 'cache.slowMs', 'cache.maxValueBytes',
   'auth.strategy', 'auth.accessTtl', 'auth.refreshTtl', 'auth.maxFailed', 'auth.lockMinutes',
   'auth.refreshGraceSeconds', 'auth.passwordPolicy', 'auth.allowRegister', 'auth.apiKeys',
+  'auth.apiKeySignSecret', 'auth.oauth2.providers', 'auth.oauth2.redirectWhitelist',
   'jwt.secret', 'jwt.secretPrev',
   'mq.driver', 'mq.url', 'mq.prefix', 'mq.concurrency', 'mq.maxAttempts', 'mq.backoff', 'mq.jobTimeout',
-  'mq.cronEnabled', 'mq.rateLimit', 'mq.deadLetterMax', 'mq.shutdownTimeout', 'mq.stalledMs',
+  'mq.cronEnabled', 'mq.rateLimit', 'mq.deadLetterMax', 'mq.deadLetterPageMax', 'mq.shutdownTimeout', 'mq.stalledMs',
   'shutdown.timeoutSeconds',
   'tenant.enabled', 'tenant.order', 'tenant.headerName', 'tenant.baseDomain', 'tenant.jwtClaim',
   'tenant.cacheTtl', 'tenant.dbKey',
@@ -2185,6 +2552,13 @@ const MOCK_KNOWN_CONFIG_PATHS: ReadonlySet<string> = new Set([
   'transport.instanceId', 'transport.shutdownTimeout',
   'otel.enabled', 'otel.serviceName', 'otel.exporterUrl', 'otel.sampleRatio', 'otel.sampleErrors',
   'configCenter.enabled', 'configCenter.driver', 'configCenter.file', 'configCenter.pollSeconds',
+  'configCenter.nacos.serverAddr', 'configCenter.nacos.dataId', 'configCenter.nacos.group',
+  'configCenter.nacos.namespace', 'configCenter.nacos.username', 'configCenter.nacos.password',
+  'configCenter.historyMax',
+  'jobCenter.driver', 'jobCenter.artifactMaxMb',
+  'rateLimit.capacity', 'rateLimit.refillPerSecond', 'rateLimit.whitelist', 'rateLimit.failOpen', 'rateLimit.dryRun',
+  'audit.archiveRetentionDays', 'audit.archiveBatchSize',
+  'web.keepAliveMax',
 ]);
 
 /** 校验新值（与 env-schema 同约束）；返回 null = 合法，否则为拒绝原因 */

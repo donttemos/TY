@@ -92,11 +92,20 @@ describe('死信分页（窗口下推）', () => {
     expect(second.page).toBe(3);
     expect(second.items).toHaveLength(1); // 最后一页
 
-    // 页码 0 / 负值收敛到 1；页大小越界收敛到 [1, 200]
+    // 页码 0 / 负值收敛到 1；页大小越界收敛到 [1, 200]（MQ_DEAD_LETTER_PAGE_MAX 默认值）
     const clamped = await fixture.queue.pageDeadLetters(undefined, 0, 999);
     expect(clamped).toMatchObject({ page: 1, pageSize: 200 });
     const nan = await fixture.queue.pageDeadLetters(undefined, Number.NaN, Number.NaN);
     expect(nan).toMatchObject({ page: 1, pageSize: 20 });
+
+    // M10/E-16：页大小上限可配（MQ_DEAD_LETTER_PAGE_MAX 覆盖后按配置值钳制）
+    const custom = createQueueFixture({ deadLetterPageSizeMax: 5 });
+    try {
+      const capped = await custom.queue.pageDeadLetters(undefined, 1, 999);
+      expect(capped).toMatchObject({ page: 1, pageSize: 5 });
+    } finally {
+      await custom.stop();
+    }
 
     // 与旧接口行为兼容：不传窗口仍是全量
     expect(await fixture.queue.listDeadLetters()).toHaveLength(5);

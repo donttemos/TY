@@ -10,6 +10,8 @@
  *   db/bullmq 驱动下 JobRunnerRegistry 必须有任务类型的 factory（闭包不可跨实例/不落盘）。
  * @modified 2026-10-15 donttemo M10 E-01：静态模块改为 forRoot() 动态装配（app.module 同步改调用），
  *   按环境变量选驱动；bullmq 形态在装配期注册消费 handler
+ * @modified 2026-10-15 donttemo M10/E-16：产物体积上限经 JOB_ARTIFACT_MAX_MB 配置（MB → 字符数），
+ *   memory / db / bullmq 三驱动同口径注入，缺省 20MB 与 N-02 行为一致
  * @author donttemo
  * @created 2026-10-15
  * @module example-api/jobs
@@ -56,13 +58,18 @@ export class JobsModule {
    */
   static forRoot(): DynamicModule {
     const driverName = loadEnv().JOB_CENTER_DRIVER;
+    // M10/E-16：任务产物体积上限（MB → 字符数）——memory 与 db/bullmq 驱动同口径，缺省 20MB
+    const maxArtifactChars = loadEnv().JOB_ARTIFACT_MAX_MB * 1024 * 1024;
 
     // 执行体注册表：单例，业务控制器在构造期登记 factory（多副本重跑的重建依据）
     const registryProvider: Provider = JobRunnerRegistry;
     const providers: Provider[] = [registryProvider];
 
     if (driverName === 'memory') {
-      providers.push({ provide: JOB_CENTER_DRIVER_TOKEN, useFactory: (): JobCenterPort => new MemoryJobDriver() });
+      providers.push({
+        provide: JOB_CENTER_DRIVER_TOKEN,
+        useFactory: (): JobCenterPort => new MemoryJobDriver({ maxArtifactChars }),
+      });
     } else {
       // db / bullmq 共用持久层（jobs 表）
       providers.push({
@@ -73,7 +80,8 @@ export class JobsModule {
       if (driverName === 'db') {
         providers.push({
           provide: JOB_CENTER_DRIVER_TOKEN,
-          useFactory: (store: JobStore, registry: JobRunnerRegistry): JobCenterPort => new DbJobDriver(store, registry),
+          useFactory: (store: JobStore, registry: JobRunnerRegistry): JobCenterPort =>
+            new DbJobDriver(store, registry, { maxArtifactChars }),
           inject: [JOB_STORE_TOKEN, JobRunnerRegistry],
         });
       } else {
@@ -81,7 +89,7 @@ export class JobsModule {
           provide: JOB_CENTER_DRIVER_TOKEN,
           useFactory: (store: JobStore, registry: JobRunnerRegistry, queue: QueueService): JobCenterPort => {
             // 消费侧 handler：读库 → 按 type + params 重建 runner → 执行写库（与 db 驱动同一 JobExecutor）
-            const executor = new JobExecutor(store);
+            const executor = new JobExecutor(store, { maxArtifactChars });
             queue.register<JobExecutePayload>(JOB_CENTER_EXECUTE_HANDLER, async (payload) => {
               const row = await store.findById(payload.jobId);
               if (!row) {

@@ -1,6 +1,6 @@
 {
   "name": "fw-monorepo",
-  "version": "0.5.0",
+  "version": "0.5.5",
   "private": true,
   "description": "通用应用框架 monorepo：框架包 + 应用 + 项目模板",
   "packageManager": "pnpm@11.6.0",
@@ -15,7 +15,8 @@
     "check:headers": "node scripts/check-file-headers.mjs",
     "check:config": "fw check",
     "check:helm": "node scripts/check-helm-chart.mjs",
-    "check:api-parity": "node scripts/check-api-parity.mjs"
+    "check:api-parity": "node scripts/check-api-parity.mjs",
+    "smoke:template-admin": "node scripts/smoke-template-admin.mjs"
   },
   "devDependencies": {
     "turbo": "^2.3.0",

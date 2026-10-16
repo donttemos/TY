@@ -13,6 +13,7 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { Logger, getTraceId } from '@fw/logger';
+import { emitJobEvent } from '../job-events.js';
 import type {
   JobArtifact,
   JobCenterPort,
@@ -32,11 +33,17 @@ interface JobEntry {
   artifact: JobArtifact | null;
 }
 
-/** 单任务产物体积上限（字符数，约 20 MB 文本） */
-const MAX_ARTIFACT_CHARS = 20 * 1024 * 1024;
+/** 单任务产物体积上限默认值（字符数，约 20 MB 文本；M10/E-16 起可经 JOB_ARTIFACT_MAX_MB 配置） */
+const DEFAULT_MAX_ARTIFACT_CHARS = 20 * 1024 * 1024;
 
 /** 登记表保留上限（超出后丢弃最旧的已结束任务，防止长时间运行内存无界增长） */
 const MAX_ENTRIES = 200;
+
+/** memory 驱动构造选项 */
+export interface MemoryJobDriverOptions {
+  /** 单任务产物体积上限（字符数；缺省 20MB） */
+  maxArtifactChars?: number;
+}
 
 /**
  * memory 驱动：进程内登记表（默认驱动，N-02 原行为）
@@ -45,7 +52,17 @@ const MAX_ENTRIES = 200;
 export class MemoryJobDriver implements JobCenterPort {
   readonly kind = 'memory' as const;
 
+  /** 单任务产物体积上限（字符数；M10/E-16 JOB_ARTIFACT_MAX_MB） */
+  private readonly maxArtifactChars: number;
+
   private readonly entries = new Map<string, JobEntry>();
+
+  /**
+   * @param options 产物体积上限（缺省 20MB，与 N-02 交付行为一致）
+   */
+  constructor(options: MemoryJobDriverOptions = {}) {
+    this.maxArtifactChars = options.maxArtifactChars ?? DEFAULT_MAX_ARTIFACT_CHARS;
+  }
 
   /** 派发任务：立即返回视图（status=pending），执行在后台进行 */
   create(options: JobCreateOptions): JobView {
@@ -73,6 +90,8 @@ export class MemoryJobDriver implements JobCenterPort {
     // 不 await：接口立即返回 jobId，执行在事件循环上继续（与「关闭弹窗任务继续」的前端语义一致）
     void this.execute(id);
     logger.info('异步任务已派发', { jobId: id, type: view.type, ownerId: options.ownerId, traceId: view.traceId });
+    // E-12：派发即推（前端无需等首次轮询就知道任务已在排队）
+    emitJobEvent('created', snapshot, options.ownerId);
     return snapshot;
   }
 
@@ -106,6 +125,8 @@ export class MemoryJobDriver implements JobCenterPort {
     const snapshot = { ...entry.view };
     void this.execute(id);
     logger.info('异步任务重跑', { jobId: id, type: entry.view.type });
+    // E-12：重跑同样即时推（回到 pending）
+    emitJobEvent('created', snapshot, ownerId);
     return { view: snapshot };
   }
 
@@ -125,15 +146,18 @@ export class MemoryJobDriver implements JobCenterPort {
       entry.view.progress = Math.max(entry.view.progress, clamped);
       if (message !== undefined) entry.view.message = message;
       entry.view.updatedAt = new Date().toISOString();
+      // E-12：进度推进即时推（前端完成感知从最慢 10s → 秒级）
+      emitJobEvent('progress', entry.view, entry.ownerId);
     };
 
     entry.view.status = 'running';
     entry.view.message = '执行中';
     entry.view.updatedAt = new Date().toISOString();
+    emitJobEvent('progress', entry.view, entry.ownerId);
     try {
       const artifact = await entry.runner(report);
-      if (artifact && artifact.content.length > MAX_ARTIFACT_CHARS) {
-        throw new Error(`产物超过 ${Math.round(MAX_ARTIFACT_CHARS / 1024 / 1024)}MB 上限，请缩小导出范围后重试`);
+      if (artifact && artifact.content.length > this.maxArtifactChars) {
+        throw new Error(`产物超过 ${Math.round(this.maxArtifactChars / 1024 / 1024)}MB 上限，请缩小导出范围后重试`);
       }
       if (artifact) {
         entry.artifact = artifact;
@@ -143,11 +167,15 @@ export class MemoryJobDriver implements JobCenterPort {
       entry.view.status = 'succeeded';
       entry.view.message = artifact ? '已完成，可下载' : '已完成';
       entry.view.error = null;
+      entry.view.updatedAt = new Date().toISOString();
+      emitJobEvent('finished', entry.view, entry.ownerId);
       logger.info('异步任务完成', { jobId: id, type: entry.view.type, chars: artifact?.content.length ?? 0 });
     } catch (error) {
       entry.view.status = 'failed';
       entry.view.error = error instanceof Error ? error.message : String(error);
       entry.view.message = '执行失败，可重试';
+      entry.view.updatedAt = new Date().toISOString();
+      emitJobEvent('finished', entry.view, entry.ownerId);
       logger.error('异步任务失败', { jobId: id, type: entry.view.type, traceId: entry.view.traceId, error: entry.view.error });
     } finally {
       entry.view.updatedAt = new Date().toISOString();

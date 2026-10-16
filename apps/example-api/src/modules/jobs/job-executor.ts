@@ -9,19 +9,38 @@
  */
 
 import { Logger } from '@fw/logger';
+import { emitJobEvent } from './job-events.js';
 import type { JobReporter, JobRunner } from './job-center.port.js';
-import type { JobRecordRow, JobStore } from './jobs.store.js';
+import { jobRowToView, type JobRecordRow, type JobStore } from './jobs.store.js';
 
 const logger = Logger.for('jobs');
 
-/** 单任务产物体积上限（与 memory 驱动一致，约 20 MB 文本） */
-const MAX_ARTIFACT_CHARS = 20 * 1024 * 1024;
+/** 单任务产物体积上限默认值（字符数，约 20 MB 文本；M10/E-16 起可经 JOB_ARTIFACT_MAX_MB 配置） */
+const DEFAULT_MAX_ARTIFACT_CHARS = 20 * 1024 * 1024;
+
+/** 任务执行器构造选项 */
+export interface JobExecutorOptions {
+  /** 单任务产物体积上限（字符数；缺省 20MB，与 memory 驱动同口径） */
+  maxArtifactChars?: number;
+}
 
 /**
  * 任务执行器：执行 runner 并把状态/进度/产物持久化
  */
 export class JobExecutor {
-  constructor(private readonly store: JobStore) {}
+  /** 单任务产物体积上限（字符数；M10/E-16 JOB_ARTIFACT_MAX_MB） */
+  private readonly maxArtifactChars: number;
+
+  /**
+   * @param store 任务存储
+   * @param options 产物体积上限（缺省 20MB，与 N-02 交付行为一致）
+   */
+  constructor(
+    private readonly store: JobStore,
+    options: JobExecutorOptions = {},
+  ) {
+    this.maxArtifactChars = options.maxArtifactChars ?? DEFAULT_MAX_ARTIFACT_CHARS;
+  }
 
   /**
    * 执行任务并把全过程写库
@@ -35,16 +54,19 @@ export class JobExecutor {
       if (message !== undefined) row.message = message;
       row.updatedAt = new Date().toISOString();
       void this.store.update(row.id, { progress: row.progress, message: row.message }).catch(() => undefined);
+      // E-12：进度推进即时推
+      emitJobEvent('progress', jobRowToView(row), row.ownerId);
     };
 
     row.status = 'running';
     row.message = '执行中';
     row.updatedAt = new Date().toISOString();
     await this.store.update(row.id, { status: 'running', message: '执行中' }).catch(() => undefined);
+    emitJobEvent('progress', jobRowToView(row), row.ownerId);
     try {
       const artifact = await runner(report);
-      if (artifact && artifact.content.length > MAX_ARTIFACT_CHARS) {
-        throw new Error(`产物超过 ${Math.round(MAX_ARTIFACT_CHARS / 1024 / 1024)}MB 上限，请缩小导出范围后重试`);
+      if (artifact && artifact.content.length > this.maxArtifactChars) {
+        throw new Error(`产物超过 ${Math.round(this.maxArtifactChars / 1024 / 1024)}MB 上限，请缩小导出范围后重试`);
       }
       row.progress = 100;
       row.status = 'succeeded';
@@ -64,12 +86,16 @@ export class JobExecutor {
         artifactContent: row.artifactContent,
         artifactContentType: row.artifactContentType,
       });
+      row.updatedAt = new Date().toISOString();
+      emitJobEvent('finished', jobRowToView(row), row.ownerId);
       logger.info('异步任务完成', { jobId: row.id, type: row.type, chars: artifact?.content.length ?? 0 });
     } catch (error) {
       row.status = 'failed';
       row.error = error instanceof Error ? error.message : String(error);
       row.message = '执行失败，可重试';
       await this.store.update(row.id, { status: 'failed', error: row.error, message: row.message });
+      row.updatedAt = new Date().toISOString();
+      emitJobEvent('finished', jobRowToView(row), row.ownerId);
       logger.error('异步任务失败', { jobId: row.id, type: row.type, traceId: row.traceId, error: row.error });
     } finally {
       row.updatedAt = new Date().toISOString();

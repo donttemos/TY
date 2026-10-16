@@ -21,6 +21,7 @@ import type {
   JobView,
 } from '../job-center.port.js';
 import type { JobRecordRow, JobStore } from '../jobs.store.js';
+import { emitJobEvent } from '../job-events.js';
 import { JOB_DB_MAX_ENTRIES, jobRowToView, type RunnerRegistryLike } from './job-db.driver.js';
 
 const logger = Logger.for('jobs');
@@ -102,6 +103,8 @@ export class BullmqJobDriver implements JobCenterPort {
           .catch(() => undefined);
       });
     logger.info('异步任务已派发', { jobId: id, type: view.type, ownerId: options.ownerId, driver: 'bullmq', traceId: view.traceId });
+    // E-12：派发即推（执行可能在任意副本，进度事件由消费实例经 redis 事件面广播）
+    emitJobEvent('created', view, options.ownerId);
     return { ...view };
   }
 
@@ -136,7 +139,9 @@ export class BullmqJobDriver implements JobCenterPort {
           .catch(() => undefined);
       });
     logger.info('异步任务重跑', { jobId: id, type: row.type, driver: 'bullmq' });
-    return { view: jobRowToView(reset) };
+    const snapshot = jobRowToView(reset);
+    emitJobEvent('created', snapshot, ownerId);
+    return { view: snapshot };
   }
 
   /** 读库取产物（仅归属人；与 db 驱动同源） */

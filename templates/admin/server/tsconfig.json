@@ -1,0 +1,29 @@
+/*
+ * @file 项目编译配置（admin 模板）
+ * @description 自包含严格模式配置，不依赖 monorepo 基线；生成后可按项目需要调整
+ * @author donttemo
+ * @created 2026-10-15
+ * @since v0.1.0
+ */
+{
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "declaration": true,
+    "sourceMap": true,
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "isolatedModules": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
+  },
+  "include": ["src"],
+  "exclude": ["dist"]
+}

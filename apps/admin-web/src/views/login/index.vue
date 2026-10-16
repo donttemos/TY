@@ -8,6 +8,8 @@
  * @created 2026-10-13
  * @modified 2026-10-15 donttemo E-07：OAuth2 授权码入口 + 回调接管（providers 列表驱动，
  *   拉取失败按空处理不阻塞密码登录；回调解析抽 utils/oauth2.ts 供单测）
+ * @modified 2026-10-16 donttemo M10 E-15：验证码画布底色与 logo 文字色改设计令牌（暗色下跟随主题，
+ *   原写死的 #f0f2f5 / #fff 在暗色页面上是两块亮斑）
  * @module admin-web/views
 -->
 
@@ -73,6 +75,13 @@ const captchaEnabled = computed(() => import.meta.env.VITE_LOGIN_CAPTCHA === 'tr
 const captchaText = ref('');
 const captchaCanvas = ref<HTMLCanvasElement>();
 
+/** 验证码画布底色：读当前主题的页面底色令牌；取不到（非浏览器 / 样式未加载）时返回空串，
+ *  调用方保持透明（等同页面底色）——不写死任何颜色（E-15：暗色下画布不再是一块亮斑） */
+function canvasBackground(): string {
+  if (typeof window === 'undefined' || typeof window.getComputedStyle !== 'function') return '';
+  return window.getComputedStyle(document.documentElement).getPropertyValue('--fw-bg').trim();
+}
+
 /** 生成 4 位图形验证码（钩子演示；生产可替换为后端 /auth/captcha） */
 function refreshCaptcha(): void {
   const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -82,8 +91,12 @@ function refreshCaptcha(): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#f0f2f5';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // 底色取设计令牌（E-15：暗色下画布跟随 --fw-bg，不写死浅色底）
+  const background = canvasBackground();
+  if (background) {
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
   ctx.font = 'bold 22px serif';
   ctx.textAlign = 'center';
   for (let i = 0; i < 4; i += 1) {
@@ -234,7 +247,7 @@ async function handleLogin(): Promise<void> {
   height: 44px;
   border-radius: 8px;
   background: var(--el-color-primary);
-  color: #fff;
+  color: var(--el-color-white);
   font-weight: 700;
 }
 

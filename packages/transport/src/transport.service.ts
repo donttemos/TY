@@ -11,13 +11,22 @@
 
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { DiscoveryService, MetadataScanner } from '@nestjs/core';
-import { assertAddress, TransportTimeoutError } from './errors.js';
+import { assertAddress, assertTopic, TransportEventsUnsupportedError, TransportTimeoutError } from './errors.js';
 import { scanTransportHandlers } from './discovery.js';
 import { withClientSpan } from './trace.js';
 import { TRANSPORT_DRIVER, TRANSPORT_OPTIONS, TRANSPORT_REGISTRY } from './tokens.js';
 import type { TransportDriverPort } from './driver.port.js';
 import type { TransportRegistry } from './registry.js';
-import type { CallOptions, TransportCallStats, TransportDriverName, TransportHandlerFn } from './types.js';
+import type {
+  CallOptions,
+  TransportCallStats,
+  TransportDriverName,
+  TransportEventHandler,
+  TransportEventMeta,
+  TransportEventUnsubscribe,
+  TransportHandlerFn,
+  TransportTopic,
+} from './types.js';
 
 /**
  * 传输服务
@@ -30,6 +39,10 @@ export class TransportService {
   private successes = 0;
   private failures = 0;
   private timeouts = 0;
+  private eventsPublished = 0;
+  private eventsReceived = 0;
+  /** 主题 → 本进程订阅方数量（统计用；取消订阅后清理） */
+  private readonly eventTopics = new Map<string, number>();
 
   /**
    * @param driver 传输驱动（按 TRANSPORT_DRIVER 装配）
@@ -101,6 +114,53 @@ export class TransportService {
     return await this.driver.ping();
   }
 
+  // ---------------- 事件面（M10 E-12） ----------------
+
+  /**
+   * 发布事件
+   *
+   * 驱动未实现事件面时抛 `TransportEventsUnsupportedError`（快速失败优于静默丢事件——
+   * 静默会让 SSE 页面永远收不到推送却无任何报错）。
+   * @param topic 事件主题（点分，如 job.progress）
+   * @param payload 事件载荷（须可 JSON 序列化）
+   */
+  async publish(topic: TransportTopic, payload: unknown): Promise<void> {
+    assertTopic(topic);
+    const publish = this.driver.publish?.bind(this.driver);
+    if (!publish) throw new TransportEventsUnsupportedError(this.driver.kind);
+    await publish(topic, payload);
+    this.eventsPublished += 1;
+  }
+
+  /**
+   * 订阅事件
+   *
+   * 本服务在订阅方之上再包一层：计数 + 保护调用方（驱动已隔离订阅方异常，此处只做统计）。
+   * @param topic 事件主题
+   * @param handler 处理器
+   * @returns 取消订阅函数（幂等；同步释放主题计数）
+   */
+  async subscribe(topic: TransportTopic, handler: TransportEventHandler): Promise<TransportEventUnsubscribe> {
+    assertTopic(topic);
+    const subscribe = this.driver.subscribe?.bind(this.driver);
+    if (!subscribe) throw new TransportEventsUnsupportedError(this.driver.kind);
+    const wrapped: TransportEventHandler = (payload: unknown, meta: TransportEventMeta) => {
+      this.eventsReceived += 1;
+      handler(payload, meta);
+    };
+    const unsubscribe = await subscribe(topic, wrapped);
+    this.eventTopics.set(topic, (this.eventTopics.get(topic) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = (this.eventTopics.get(topic) ?? 1) - 1;
+      if (next <= 0) this.eventTopics.delete(topic);
+      else this.eventTopics.set(topic, next);
+      unsubscribe();
+    };
+  }
+
   /** 调用统计快照 */
   stats(): TransportCallStats {
     return {
@@ -114,6 +174,12 @@ export class TransportService {
       failures: this.failures,
       timeouts: this.timeouts,
       handled: this.driver.handledCount(),
+      events: {
+        published: this.eventsPublished,
+        received: this.eventsReceived,
+        topics: this.eventTopics.size,
+        topicList: [...this.eventTopics.keys()],
+      },
       started: this.started,
     };
   }

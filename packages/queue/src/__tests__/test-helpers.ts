@@ -26,6 +26,7 @@ export function makeRuntime(overrides: Partial<QueueRuntimeOptions> = {}): Queue
     cronEnabled: true,
     rateLimit: 0,
     deadLetterMax: 100,
+    deadLetterPageSizeMax: 200,
     shutdownTimeoutMs: 200,
     ...overrides,
   };

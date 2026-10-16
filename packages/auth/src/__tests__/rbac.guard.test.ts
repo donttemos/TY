@@ -102,7 +102,7 @@ describe('RbacGuard', () => {
     await expect(attempt()).rejects.toMatchObject({ code: ErrorCode.FORBIDDEN });
     const role = await h.store.listRolesByUserId(seeded.normal.id);
     const permission = h.store.seedPermission({ code: 'system:tenant:ignore', name: '跨租户维护', type: 'api', module: 'system' });
-    await h.store.grantRolePermissions(role[0].id, [permission.id]);
+    await h.store.replaceRolePermissions(role[0].id, [permission.id]);
     await h.permissions.invalidateUser(seeded.normal.id);
     await expect(attempt()).resolves.toBe(true);
     const audit = await h.store.pageAuditLogs({ page: 1, pageSize: 10, targetType: 'tenant_bypass' });

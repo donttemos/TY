@@ -6,6 +6,7 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo 下拉支持 multiple（roleIds 等数组字段必须多选，否则回显为空、提交成字符串）
+ * @modified 2026-10-16 donttemo PRD-010 E-09 新增 upload 控件分支（附件字段 *FileId，FileUpload 组件）
  * @module admin-web/components
 -->
 
@@ -13,6 +14,7 @@
 import { computed, reactive, ref, watch } from 'vue';
 import type { FormInstance, FormItemRule } from 'element-plus';
 import DictSelect from '@/components/DictSelect/index.vue';
+import FileUpload from '@/components/FileUpload/index.vue';
 import type { FormField, FormModel } from '@/components/CrudTable/types';
 
 const props = defineProps<{
@@ -147,6 +149,13 @@ defineExpose({ applyServerErrors });
               v-else-if="field.type === 'dict-select'"
               v-model="model[field.prop]"
               :dict-code="field.dictCode ?? ''"
+            />
+            <!-- 附件（PRD-010 E-09：上传走 /api/v1/files，文件 id 写回表单模型） -->
+            <file-upload
+              v-else-if="field.type === 'upload'"
+              :model-value="(model[field.prop] as string) ?? ''"
+              :disabled="mode === 'edit' && field.disabledOnEdit"
+              @update:model-value="(value: string) => (model[field.prop] = value)"
             />
             <!-- 单选组 -->
             <el-radio-group v-else-if="field.type === 'radio'" v-model="model[field.prop]">

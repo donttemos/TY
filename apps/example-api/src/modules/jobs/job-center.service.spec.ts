@@ -3,6 +3,7 @@
  * @description 直接实例化 JobCenterService 验证任务生命周期契约：派发即返回（不阻塞）、
  *   归属人隔离、进度单调收敛、成功 / 失败 / 产物超限三条终态路径、重跑状态机、
  *   登记表裁剪。执行体由测试注入，不依赖真实业务。
+ * @modified 2026-10-15 donttemo M10/E-16：新增产物上限可配断言（MemoryJobDriver 注入口径）
  * @author donttemo
  * @created 2026-10-15
  * @module example-api/jobs
@@ -11,6 +12,7 @@
 import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
 import { JobCenterService, type JobArtifact, type JobReporter } from './job-center.service.js';
+import { MemoryJobDriver } from './drivers/job-memory.driver.js';
 
 /** 让出事件循环，使派发后的后台执行（void this.execute）跑完 */
 function flush(): Promise<void> {
@@ -155,6 +157,34 @@ describe('JobCenterService', () => {
     expect(done?.status).toBe('failed');
     expect(done?.error).toContain('20MB');
     expect(service.artifact(view.id, 'u-1')).toBeNull();
+  });
+
+  it('M10/E-16：产物上限可配（JOB_ARTIFACT_MAX_MB）——按配置值判定且文案同步', async () => {
+    // 1MB 上限：略超即失败，错误原因按配置值回显（不再是硬编码 20MB）
+    const service = new JobCenterService(new MemoryJobDriver({ maxArtifactChars: 1024 * 1024 }));
+    const view = service.create({
+      type: 'test.huge',
+      title: '超大产物',
+      ownerId: 'u-1',
+      runner: async () => ({ fileName: 'big.csv', contentType: 'text/csv', content: 'x'.repeat(1024 * 1024 + 1) }),
+    });
+    await flush();
+
+    const done = service.get(view.id, 'u-1');
+    expect(done?.status).toBe('failed');
+    expect(done?.error).toContain('1MB');
+    expect(service.artifact(view.id, 'u-1')).toBeNull();
+
+    // 上限内的产物照常成功（配置收紧不影响正常导出）
+    const ok = service.create({
+      type: 'test.small',
+      title: '小产物',
+      ownerId: 'u-1',
+      runner: async () => ({ fileName: 'ok.csv', contentType: 'text/csv', content: 'x'.repeat(1024) }),
+    });
+    await flush();
+    expect(service.get(ok.id, 'u-1')?.status).toBe('succeeded');
+    expect(service.artifact(ok.id, 'u-1')?.content).toHaveLength(1024);
   });
 
   it('重跑状态机：仅失败任务可重跑；成功 / 执行中拒绝并给原因', async () => {

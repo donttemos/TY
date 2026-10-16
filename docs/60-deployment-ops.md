@@ -77,6 +77,7 @@
 | | `MQ_CRON_ENABLED` | 否 | true | 是否启用定时调度；多实例须配 Redis 分布式锁 |
 | | `MQ_RATE_LIMIT` | 否 | 0 | 每队列每秒处理上限；0 为不限速 |
 | | `MQ_DEAD_LETTER_MAX` | 否 | 1000 | 死信保留上限 |
+| | `MQ_DEAD_LETTER_PAGE_MAX` | 否 | 200 | 死信分页每页上限（M10/E-16，1~1000）：`GET /admin/queue/dead-letters` 的 `pageSize` 钳制值，超出收敛到上限而非报错；boot 键不入热更白名单 |
 | | `MQ_SHUTDOWN_TIMEOUT` | 否 | 30 | 等待在途任务的停机超时，单位秒 |
 | | `MQ_STALLED_MS` | 否 | 30000 | bullmq 失速检测间隔，单位毫秒；0 表示用 bullmq 默认值。消费进程被强杀后，在途任务最长等这么久被搬回等待区重试 |
 | 多租户 | `TENANT_ENABLED` | 否 | false | 多租户总开关；false 时全部接口按单租户运行（解析零开销短路），与 M7 行为一致 |
@@ -108,16 +109,31 @@
 | | `CONFIG_CENTER_NACOS_GROUP` | 否 | DEFAULT_GROUP | Nacos 分组 |
 | | `CONFIG_CENTER_NACOS_NAMESPACE` | 否 | — | Nacos 命名空间（缺省 public） |
 | | `CONFIG_CENTER_NACOS_USERNAME` / `CONFIG_CENTER_NACOS_PASSWORD` | 条件 | — | Nacos 鉴权凭据（服务端开启鉴权时必填；密码属敏感键不入日志） |
+| | `CONFIG_CENTER_HISTORY_MAX` | 否 | 20 | 配置历史保留版本数（M10/E-16，1~1000）：回滚候选集与环形表淘汰条数，超出淘汰最旧；boot 键不入热更白名单 |
 | 任务中心（M10/E-01） | `JOB_CENTER_DRIVER` | 否 | memory | 异步任务中心驱动：`memory` 进程内（N-02 原行为，多副本下任务面跨实例 404）/ `db` `jobs` 表登记 + 派发实例执行 / `bullmq` `jobs` 表登记 + 队列分发（消费 handler `job-center.execute`，执行实例随 `MQ_DRIVER`）。**多副本部署必须 db 或 bullmq**；boot 键不入热更白名单；db/bullmq 要求任务类型登记 `JobRunnerRegistry` 执行体工厂 |
+| | `JOB_ARTIFACT_MAX_MB` | 否 | 20 | 任务产物体积上限（M10/E-16，MB，1~1024）：memory / db / bullmq 三驱动同口径注入，超出即失败终态；boot 键不入热更白名单 |
 | 限流（M10/E-03） | `RATE_LIMIT_CAPACITY` | 否 | 600 | 令牌桶容量（每 IP 突发上限），超出即 `429/9003`；**默认开启且不可整体关闭**——豁免走 `RATE_LIMIT_WHITELIST`，灰度观测走 `RATE_LIMIT_DRY_RUN` |
 | | `RATE_LIMIT_REFILL_PER_SECOND` | 否 | 10 | 每秒补充令牌数（稳态吞吐上限）；boot 键不入热更白名单 |
 | | `RATE_LIMIT_WHITELIST` | 否 | `/api/v1/health,/api/v1/ready,/api/v1/metrics` | 豁免路径前缀（逗号分隔，严格路径段匹配）；健康探针与 metrics 必须豁免 |
 | | `RATE_LIMIT_FAIL_OPEN` | 否 | true | 限流存储故障时放行（与 cache 三防护同构）；false = fail-closed 全拒绝 |
 | | `RATE_LIMIT_DRY_RUN` | 否 | false | 灰度模式：true = 超限仅计数告警不拦截（桶与计数照常运转，计数进 `/metrics` 的 `fw_rate_limit_*` 段） |
+| 审计归档（M10/E-10） | `AUDIT_ARCHIVE_RETENTION_DAYS` | 否 | 180 | 审计在线表保留天数（1~3650）：定时任务 `audit.archive`（每天 02:00，`MQ_CRON_ENABLED` + 分布式锁多副本单执行）把 `created_at` 早于保留线的记录迁入 `audit_log_archives` 冷存表（先写归档后删在线，失败不删）；在线表行数持续有界，冷数据经 `/audit-archives` 查询/导出 |
+| | `AUDIT_ARCHIVE_BATCH_SIZE` | 否 | 1000 | 归档单批条数（1~100000）：每批「先写归档（幂等 upsert）后删在线」，控制单批事务压力与长占锁时间；大批量存量首次归档可调大 |
+| 文件存储（M10/E-09） | `STORAGE_DRIVER` | 否 | local | 文件存储驱动（PRD-010 E-09）：`local` 本地磁盘（零依赖）/ `s3` S3 兼容对象存储（`@aws-sdk/client-s3` 为 optional peer，启用前安装）；非法取值启动即失败；boot 键不入热更白名单（切换属进程形态变更，须重启） |
+| | `STORAGE_LOCAL_ROOT` | 否 | ./uploads | local 驱动存储根目录：对象 key 为其下相对路径（`<yyyyMM>/<uuid><ext>`，服务端生成，免疫路径穿越）；多副本部署时 local 驱动须挂共享卷或改 s3，否则下载只在写入实例可达 |
+| | `STORAGE_S3_ENDPOINT` | 否 | — | S3 兼容端点（MinIO / COS / OSS 等）；缺省走 AWS 原生寻址 |
+| | `STORAGE_S3_REGION` | 否 | us-east-1 | S3 区域 |
+| | `STORAGE_S3_BUCKET` | s3 时必填 | — | S3 桶名；`STORAGE_DRIVER=s3` 且缺失时**启动即失败**（不猜默认桶） |
+| | `STORAGE_S3_ACCESS_KEY_ID` | 否 | — | S3 访问密钥 ID（未配置时回退节点 IAM / 环境链路） |
+| | `STORAGE_S3_SECRET_ACCESS_KEY` | 否 | — | S3 访问密钥（敏感键不入日志） |
+| | `STORAGE_S3_FORCE_PATH_STYLE` | 否 | true | path-style 寻址：MinIO 必须 `true`；AWS 原生建议 `false` |
+| | `STORAGE_MAX_MB` | 否 | 20 | 单文件大小上限（MB，1~1024）：超出 `400/1001` 拒绝（不静默截断），multer 层与 `@fw/storage` 业务校验同口径；扩展名白名单默认收紧（`.png/.jpg/.jpeg/.gif/.webp/.pdf/.txt/.csv/.xlsx/.docx/.zip`），放宽改 `STORAGE_ALLOWED_EXTS` |
 | 前端（admin-web） | `VITE_API_BASE_URL` | 是 | — | 管理后台 API 基址（如 `https://api.example.com/api/v1`）；**构建期注入**，改值需重新构建 |
 | | `VITE_APP_TITLE` | 否 | 通用应用框架 | 站点标题 |
 | | `VITE_LOGIN_CAPTCHA` | 否 | false | 登录页验证码开关（true 时需接入验证码服务） |
 | | `VITE_USE_MOCK` | 否 | 随 mode | 是否挂载 mock server（`true`/`false`）；**生产构建不引入任何 mock 代码**，切真实后端只改此项与 `VITE_API_BASE_URL` |
+| | `WEB_KEEP_ALIVE_MAX` | 否 | 12 | 前端 keep-alive 条数上限（M10/E-16，1~1000）：`<keep-alive :max>` 钳制值；**入热更白名单**（`web.keepAliveMax`），`GET /configs` 可查、`PUT /configs/web.keepAliveMax` 可在线改（前端下一会话加载生效） |
+| | `VITE_RUM_ENABLED` | 否 | true | 前端错误监控 RUM 开关（M10/E-17）：`false` 时整体关闭采集（零开销）；开启时异常经 `POST /api/v1/telemetry/client-errors` 上报（sendBeacon fire-and-forget，不影响业务）。**构建期注入**，改值需重新构建 |
 
 **密钥管理**：生产禁止把密钥写进镜像或仓库；用 K8s Secret / 环境变量注入 / 密钥管理服务，定期轮换并保留 `*_PREV` 过渡值。
 
