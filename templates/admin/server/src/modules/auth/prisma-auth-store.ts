@@ -119,6 +119,7 @@ interface RefreshTokenRow extends Omit<BaseEntity, 'id'> {
   replacementCipher?: string | null;
   replacementKeyId?: string | null;
   replacementExpiresAt?: Date | null;
+  rotatedFingerprint?: string | null;
 }
 
 /** user_role 行 */
@@ -388,6 +389,7 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
       replacementCipher: record.replacementCipher ?? null,
       replacementKeyId: record.replacementKeyId ?? null,
       replacementExpiresAt: record.replacementExpiresAt ?? null,
+      rotatedFingerprint: record.rotatedFingerprint ?? null,
     } as Partial<RefreshTokenRow>);
     return this.toRefreshToken(row);
   }
@@ -452,6 +454,7 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
               replacementCipher: input.replacementCipher,
               replacementKeyId: input.replacementKeyId,
               replacementExpiresAt: input.replacementRecoverableUntil,
+              rotatedFingerprint: input.fingerprint,
             },
           });
           if (cas.count !== 1) throw new CasLostError();
@@ -500,6 +503,7 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
           keyId: a.replacementKeyId,
           recoverableUntil: a.replacementExpiresAt,
         },
+        fingerprint: a.rotatedFingerprint ?? null,
       };
     }
     return { outcome: 'replay_detected', reason: 'no_replacement' };
@@ -694,6 +698,7 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
       replacementCipher: row.replacementCipher ?? null,
       replacementKeyId: row.replacementKeyId ?? null,
       replacementExpiresAt: row.replacementExpiresAt ?? null,
+      rotatedFingerprint: row.rotatedFingerprint ?? null,
     };
   }
 

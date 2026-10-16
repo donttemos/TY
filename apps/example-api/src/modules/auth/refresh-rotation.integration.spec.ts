@@ -323,6 +323,24 @@ describe('M11.1 L3：服务层端到端（RefreshTokenService + PrismaAuthStore�
     expect(bRecord?.revokedAt).not.toBeNull();
   }, 30_000);
 
+  it('M11.3：赢家指纹落库 + 异客户端 grace 重试 → replay 族撤销（ADR-0022 真库验证）', async () => {
+    const first = await refresh.issue(userId, '1.1.1.1', 'device-1');
+    const b = await refresh.rotate(first.refreshToken, '1.1.1.1', 'device-1');
+
+    const aRecord = await prisma.refreshToken.findFirst({
+      where: { tokenHash: hashToken(first.refreshToken) },
+    });
+    expect(aRecord?.rotatedFingerprint).not.toBeNull();
+
+    await expect(
+      refresh.rotate(first.refreshToken, '2.2.2.2', 'device-2'),
+    ).rejects.toMatchObject({ code: ErrorCode.UNAUTHORIZED });
+    const bRecord = await prisma.refreshToken.findFirst({
+      where: { tokenHash: hashToken(b.refreshToken) },
+    });
+    expect(bRecord?.revokedAt).not.toBeNull();
+  });
+
   it('Case E：B 已消费（B→C）后 A replay ⇒ fail closed，整族（含 C）撤销', async () => {
     const first = await refresh.issue(userId, '1.1.1.1', 'm11-it');
     const b = await refresh.rotate(first.refreshToken, '1.1.1.1', 'm11-it');

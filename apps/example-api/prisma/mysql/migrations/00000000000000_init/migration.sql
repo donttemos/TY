@@ -165,6 +165,7 @@ CREATE TABLE `refresh_tokens` (
     `replacement_cipher` TEXT NULL,
     `replacement_key_id` VARCHAR(191) NULL,
     `replacement_expires_at` DATETIME(3) NULL,
+    `rotated_fingerprint` VARCHAR(191) NULL,
     `deleted_at` DATETIME(3) NULL,
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `updated_at` DATETIME(3) NOT NULL,
@@ -354,3 +355,4 @@ CREATE TABLE `upload_files` (
     INDEX `idx_upload_owner`(`owner_id`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
