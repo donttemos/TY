@@ -27,9 +27,16 @@ import { PrismaAuthStore } from './prisma-auth-store.js';
 
 const execFileAsync = promisify(execFile);
 
-/** 测试库路径（独立文件，避免与开发库交叉） */
+/**
+ * 运行模式：
+ * - 本地（默认）：自建独立临时 SQLite（file:${cwd}/prisma/test-rotation.db）+ beforeAll migrate deploy；
+ * - CI 矩阵（设 ROTATION_TEST_DB_URL）：直连 service DB（mysql/postgres/sqlite），
+ *   迁移由 CI 步骤以对应方言 schema 预先 deploy，本 spec 只建数据、只清自己的数据。
+ */
+const EXTERNAL_DB_URL = process.env.ROTATION_TEST_DB_URL ?? '';
 const DB_FILE = path.join(process.cwd(), 'prisma', 'test-rotation.db');
-const DB_URL = `file:${DB_FILE.replace(/\\/g, '/')}`;
+const LOCAL_DB_URL = `file:${DB_FILE.replace(/\\/g, '/')}`;
+const TARGET_DB_URL = EXTERNAL_DB_URL || LOCAL_DB_URL;
 
 let prisma: PrismaClient;
 let store: PrismaAuthStore;
@@ -56,11 +63,13 @@ async function migrateDeployWithRetry(): Promise<void> {
 }
 
 beforeAll(async () => {
-  fs.rmSync(DB_FILE, { force: true });
-  // Prisma 6 migrate deploy 在 Windows 上要求 SQLite 文件已存在
-  fs.closeSync(fs.openSync(DB_FILE, 'w'));
-  await migrateDeployWithRetry();
-  prisma = new PrismaClient({ datasources: { db: { url: DB_URL } } });
+  if (!EXTERNAL_DB_URL) {
+    fs.rmSync(DB_FILE, { force: true });
+    // Prisma 6 migrate deploy 在 Windows 上要求 SQLite 文件已存在
+    fs.closeSync(fs.openSync(DB_FILE, 'w'));
+    await migrateDeployWithRetry();
+  }
+  prisma = new PrismaClient({ datasources: { db: { url: TARGET_DB_URL } } });
   store = new PrismaAuthStore(prisma);
   const tokens = new TokenService({
     secret: 'm11-integration-secret-0123456789abcdef0123456789abcdef',
@@ -80,7 +89,7 @@ afterAll(async () => {
     await prisma.user.deleteMany({ where: { id: userId } });
     await prisma.$disconnect();
   }
-  fs.rmSync(DB_FILE, { force: true });
+  if (!EXTERNAL_DB_URL) fs.rmSync(DB_FILE, { force: true });
 });
 
 /** 直接经 Prisma 插入一条刷新令牌记录（存储层用例构造） */

@@ -285,3 +285,38 @@ jobs:
           else
             pnpm exec vitest run src/__tests__/prisma-repository.matrix.test.ts
           fi
+
+      # ---- M11.1（ADR-0020）：refresh rotation CAS 真库集成（MySQL/PG 腿）----
+      # rotation spec（单进程三态/回滚/故障注入）+ 双实例脚本（N 进程 × M 并发 ⇒ exactly 1 replacement）。
+      # SQLite 腿由 base 作业的 example-api 单测覆盖（自建临时库），此处只跑真实 service DB。
+      - name: 生成 example-api ${{ matrix.db }} 客户端并部署迁移
+        if: ${{ matrix.db != 'sqlite' }}
+        working-directory: apps/example-api
+        env:
+          DB_URL: ${{ matrix.url }}
+        run: |
+          if [ "${{ matrix.db }}" = "postgres" ]; then
+            SCHEMA=prisma/pg/schema.prisma
+          else
+            SCHEMA=prisma/mysql/schema.prisma
+          fi
+          pnpm exec prisma generate --schema "$SCHEMA"
+          pnpm exec prisma migrate deploy --schema "$SCHEMA"
+
+      - name: 构建 example-api 依赖链（rotation 集成依赖其 dist）
+        if: ${{ matrix.db != 'sqlite' }}
+        run: pnpm --filter "example-api..." run build
+
+      - name: M11.1 rotation 集成测试 / ${{ matrix.db }}
+        if: ${{ matrix.db != 'sqlite' }}
+        working-directory: apps/example-api
+        env:
+          ROTATION_TEST_DB_URL: ${{ matrix.url }}
+        run: pnpm exec vitest run src/modules/auth/refresh-rotation.integration.spec.ts
+
+      - name: M11.1 双实例 CAS 验证 / ${{ matrix.db }}
+        if: ${{ matrix.db != 'sqlite' }}
+        working-directory: apps/example-api
+        env:
+          ROTATION_TEST_DB_URL: ${{ matrix.url }}
+        run: node scripts/dual-instance-rotation.mjs
