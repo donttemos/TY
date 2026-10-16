@@ -23,7 +23,35 @@ M11.0a baseline 在不修改生产代码的前提下冻结了 `RefreshTokenServi
 5. **Rule 5（唯一 replacement）**：一次成功 rotation 恰好创建一个 replacement B；B 自身只存 `tokenHash`（SHA-256），明文不落库（既有 hash-only 不变量保持）。
 6. **Rule 6（grace 语义重定义）**：grace 不是「旧 token A 在窗口内仍然有效」，而是「rotation 完成后，同一客户端在窗口内重试时**返回已持久化的同一个 B**（解密 `replacementCipher`），绝不生成新 token」。grace 窗口默认 10s、上限 30s（配置约束 `0 < grace ≤ 30`）。
 7. **Rule 7（存储最小暴露）**：A 行暂存 `replacementCipher`（AES-256-GCM 密文）仅供 grace 恢复，除此之外任何明文/可逆形式不得持久化；`AuthStore` 不感知 JWT/SHA-256/AES——服务层传入即用的不透明串。
-8. **Rule 8（副作用编排）**：replay 副作用（revoke family + revoke 用户全部 refresh + 审计/告警日志）由 **TokenService（RefreshTokenService）** 编排，`AuthStore` 保持纯持久化抽象，不在存储层内部触发业务副作用。
+8. **Rule 8（副作用编排 / 组件归属）**：replay 副作用（revoke family + revoke 用户全部 refresh + 审计/告警日志）由 **`RefreshTokenService`（`handleReplay()`）** 编排；**`TokenService` 不参与编排**，仅负责 JWT 签发/验签与 replacement 加解密；`AuthStore` 保持纯持久化抽象（persistence + CAS + 事实返回），不在存储层内部触发业务副作用。
+   （原表述「由 TokenService（RefreshTokenService）编排」把编排者误记为 `TokenService`，2026-10-16 按实现澄清——见下方「组件职责边界」。）
+
+### 组件职责边界（Rule 8 精确化）
+
+Rule 8 的编排者**只有一个**：`RefreshTokenService`。三组件单一分层，为 M11.4 Key Ring 预留清晰切口：
+
+```text
+TokenService（packages/auth/src/token.service.ts）—— 纯计算：无状态、不落库、不编排
+├── JWT 签发/验签（HS256；JWT_SECRET + JWT_SECRET_PREV 双密钥过渡期回退）
+├── replacement 加解密（AES-256-GCM，encryptReplacement / decryptReplacement）
+└── 密钥派生（HKDF-SHA256 域分离出独立 replacement 密钥域）
+
+RefreshTokenService（packages/auth/src/refresh-token.service.ts）—— 唯一的编排者与策略持有者
+├── rotation orchestration（rotate / rotateWithCas：事务外生成 B，再交存储层裁决）
+├── grace policy（now <= replacement.recoverableUntil + 族存活前置校验）
+├── family policy（revokeFamily / revokeAllForUser / cleanup）
+├── replay handling（handleReplay：族撤销 + 用户全部 refresh 作废 + 告警日志）
+├── error mapping（BizError 3001 未授权 / 3003 过期）
+└── 令牌哈希（hashToken：SHA-256，明文 → 落库哈希的唯一入口）
+
+AuthStore（packages/auth/src/auth-store.ts；Prisma / Memory 双实现）—— 纯持久化，零业务策略
+├── persistence（create / find / purge / revoke 等 CRUD）
+├── CAS（rotateRefreshToken 的原子裁决，affectedRows 语义，Rule 1/2）
+└── state facts（只返回 rotated / already_rotated / replay_detected 事实，不返回策略）
+```
+
+- **SHA-256 的归属澄清**：令牌哈希（`hashToken`，SHA-256）在 `RefreshTokenService`，**不在** `TokenService`——`TokenService` 内出现的 SHA 仅为 HKDF 密钥派生。存储层收到的永远是已哈希的不透明 `tokenHash` 串（Rule 7）；
+- **切口理由**：编排/策略耦合在服务层，密钥材料全部封在 `TokenService` ⇒ M11.4 Key Ring 只需替换 `TokenService` 的密钥来源（多 `keyId` + JWT TTL 级 / replacement grace 级双生命周期），`RefreshTokenService` 与 `AuthStore` 的编排、持久化契约**零改动**（`keyId` 已是 `already_rotated` 结果字段的一部分，见「接口契约」）。
 
 ### 状态机
 
@@ -100,19 +128,21 @@ type RefreshRotationResult =
 
 - `rotated` —— CAS 赢家，B 已由存储层原子写入；
 - `already_rotated` —— A 已被并发请求轮换；`userId` **不进结果**（服务层已从旧记录获得，结果不重复承担业务语义）；grace 窗口与族存活评估由服务层完成；
-- `replay_detected` —— `not_found / expired / no_replacement` 三种**存储层可判定**的事实；`grace_expired` 由服务层基于 `already_rotated.oldToken.revokedAt` / `replacement.expiresAt` 与族存活状态判定后走同一 replay 副作用路径（存储层不持 grace 策略，故该 reason 不在存储层契约内）。服务层统一执行副作用后抛 3001/3003（Rule 8）。
+- `replay_detected` —— `not_found / expired / no_replacement` 三种**存储层可判定**的事实；`grace_expired` 由服务层基于 `already_rotated.oldToken.revokedAt` / `replacement.expiresAt` 与族存活状态判定后走同一 replay 副作用路径（存储层不持 grace 策略，故该 reason 不在存储层契约内）。`RefreshTokenService` 统一执行副作用后抛 3001/3003（Rule 8）。
 
 ### 加密方案（Commit 1 即生效）
 
 - AES-256-GCM，密文格式 `v1:{keyId}:{iv}:{ciphertext}:{tag}`（Base64URL 段），version 段为 M11.4 Key Ring 平滑升级预留；
-- M11.1 单密钥：`keyId = replacement-v1`，密钥经 **HKDF-SHA256(jwtSecret, salt="fw/replacement/v1")** 域分离派生——与 JWT 签名密钥同一来源但独立密钥域。**偏离方案原文**（原文要求独立 `REPLACEMENT_ENCRYPTION_KEY` 配置）：避免引入新配置键造成既有部署/测试破坏；HKDF 域分离在密码学上等效于独立密钥，显式独立密钥与环境变量登记留到 M11.4 Key Ring 一并落地；
+- M11.1 单密钥：`keyId = replacement-v1`，密钥经 **HKDF-SHA256(jwtSecret, salt="fw/auth/replacement/v1")** 域分离派生（2026-10-16 勘误：本文原写作 `fw/replacement/v1`，实现 `token.service.ts` 的 `REPLACEMENT_HKDF_SALT = 'fw/auth/replacement/v1'`，以实现为准）——与 JWT 签名密钥同一来源但独立密钥域。**偏离方案原文**（原文要求独立 `REPLACEMENT_ENCRYPTION_KEY` 配置）：避免引入新配置键造成既有部署/测试破坏；HKDF 域分离在密码学上等效于独立密钥，显式独立密钥与环境变量登记留到 M11.4 Key Ring 一并落地；
+- **轮换窗口已知限制（2026-10-16 评审登记 → M11.4 prerequisite，M11.1 不返工）**：replacement 密钥只从**当前** `jwtSecret` 派生，`decryptReplacement` 只持这一把派生密钥（`keyId` 恒为 `replacement-v1`，不标识密钥代际；JWT 验签侧的 `JWT_SECRET_PREV` 双密钥回退**不覆盖** replacement 解密）。`JWT_SECRET` 轮换部署（`JWT_SECRET=NEW` + `JWT_SECRET_PREV=OLD`）后：旧实例在轮换前写入的密文由 `HKDF(OLD)` 派生密钥加密，新实例验签旧 A 可经 PREV 回退放行，但解密只试 `HKDF(NEW)` → GCM 认证失败 → 按 Security Invariant fail closed 触发族撤销 → **误杀一个合法的并发 retry**（A→B 跨部署代际 + 客户端 grace 重试重叠的极端窗口）。**不为此推翻 HKDF 方案**——解决方案由 M11.4 Key Ring 承担，本条登记为其 prerequisite，要求与验收判据见下方「已知留白」。
 - 解密失败（密文损坏 / keyId 未知）**必须报错并触发族撤销，绝不能生成新 token C**（否则重新打开 rotation race，对应故障注入 Case C）。
 
-## 对方案原文的三点修正（评审结论，已并入本 ADR）
+## 对方案原文的四点修正（评审结论，已并入本 ADR）
 
 1. **grace 单位统一为秒**：方案原文提出 `REFRESH_ROTATION_GRACE_MS`（毫秒），但既有配置链路（`AUTH_REFRESH_GRACE_SECONDS` / `AuthOptions.refreshGraceSeconds` / test-helpers）全为秒——维持秒，不新增毫秒键，杜绝一套代码两套单位。
 2. **B.tokenHash 唯一索引入 schema**（Commit 2）：主表 `token_hash @unique` 已存在，migration 同步给 `replaced_by_id` 建索引（family 撤销与 grace 恢复的查询路径）；幂等防线优先数据库唯一约束（本仓既定经验），CAS 之外加一层兜底。
 3. **迁移与发布兼容**：新列（`replaced_by_id / replacement_cipher / replacement_key_id / replacement_expires_at`）全部 **nullable**，旧代码（未升级的 PrismaAuthStore 走 legacy 路径）与新 schema 互相兼容；发布顺序 = 先 migration 后发版；回滚 = 旧版本代码可直接跑在新 schema 上（新列被忽略），无需数据回填。三库矩阵（main + pg 变体 + matrix mysql/postgresql + test sqlite）与模板 schema 同步加列，migration SQL 三方言各一份且语义一致。
+4. **Rule 8 组件归属澄清**：方案原文 `M11(PRD1-10善后).txt` 的 Rule 8 写作 "Replay side effects are orchestrated by **TokenService**, not AuthStore"——组件名不准确：编排者是 `RefreshTokenService.handleReplay()`，`TokenService` 仅做 JWT 签发/验签与 replacement 加解密。结论实质不变（副作用**绝不**进 `AuthStore`），此处仅登记命名澄清，防止 M11.4 做 Key Ring 时沿用「TokenService 负责编排」的错误前提去拆改造面。
 
 ## 测试分层（完成标准）
 
@@ -136,6 +166,7 @@ CI 门禁最低线（合并前必须全绿）：baseline = PASS、100 并发 = P
 - 不做 fingerprint（M11.3）：持有 A 的任意方（含攻击者）在 grace 内都能拿回 B——这是 M11.1 的显式取舍，baseline-009 冻结该现状，M11.3 引入客户端指纹后翻转为拒绝；
 - 族存活检查与 grace 判定在服务层、CAS 在存储层，两层之间存在毫秒级 TOCTOU 窗口（登出瞬间恰好 grace 重试可能拿到已撤销前的 B）——窗口远小于网络往返，接受并记录；
 - known-keyId 单密钥：密钥泄露需全量轮换，M11.4 Key Ring（JWT TTL 级 / Replacement grace 级双生命周期）解决；
+- **JWT Secret 轮换窗口（2026-10-16 评审登记 → M11.4 prerequisite，M11.1 不返工）**：轮换过渡期（`JWT_SECRET=NEW` + `JWT_SECRET_PREV=OLD`）内，旧实例写入的 replacement 密文（`HKDF(OLD)` 派生密钥加密）在新实例解密必失败——解密无 PREV 回退路径，`keyId` 又不标识代际（详见「加密方案」末条）→ fail closed 族撤销 → 误杀合法并发 retry。M11.4 Key Ring 因此增加一条 **prerequisite**：① replacement 密文必须能在 `JWT_SECRET` / `JWT_SECRET_PREV` 双来源间回退解密（密文 version / keyId 段携带派生代际标识）；② replacement key 退役条件覆盖 `max(grace, 轮换重叠期)`，不得早于旧密文可恢复期终点；③ **验收判据**：双 secret 部署下旧密文在 grace 内可恢复原 B 且不触发族撤销（反向验证：回退缺失时 fail closed 族撤销仍然成立——Security Invariant 不因轮换兼容而松动）。
 - 时钟策略：grace 比较用应用时间，多实例依赖 NTP 同步（部署环境 SHOULD NTP）；不为 10s 窗口引入 DB 时钟接口。
 
 ## Definition of Done（M11.1 封板清单，全部勾选才可合并）
@@ -155,7 +186,7 @@ CI 门禁最低线（合并前必须全绿）：baseline = PASS、100 并发 = P
 [x] DB 无明文 replacement token；token_hash 保持 hash-only
 [x] 不存在任何「从已轮换的 A 再生成 replacement」的路径（Security Invariant，Case C/E 证明）
 [x] CAS 失败后绝不从原事务快照读状态（Rule 4，事务外重读路径已测）
-[x] replay 副作用留在服务层（Rule 8，AuthStore 无业务副作用）
+[x] replay 副作用留在 `RefreshTokenService`（Rule 8；AuthStore 零业务副作用，TokenService 零编排）
 [x] CI green（run 38862407905：4/4 job 全绿——构建/单测(SQLite)/静态 + 集成 mysql/postgres/sqlite）
 ```
 
