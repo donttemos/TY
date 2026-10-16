@@ -20,6 +20,7 @@
  */
 
 import { Inject, Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { DB_CLIENT, PrismaRepository, type ModelDelegate, type PrismaClientLike } from '@fw/db';
 import type { PageResult } from '@fw/db';
@@ -39,7 +40,9 @@ import type {
   NewAuditLog,
   NewRefreshToken,
   PermissionType,
+  RefreshRotationResult,
   RefreshTokenRecord,
+  RotateRefreshTokenInput,
   UserListItem,
   UserQuery,
 } from '@fw/auth';
@@ -102,7 +105,7 @@ interface MenuRow extends Omit<BaseEntity, 'id'> {
   sort: number;
 }
 
-/** refresh_tokens 表行 */
+/** refresh_tokens 表行（M11.1 起含 replacement 四列；旧库未迁移前列不存在 → optional） */
 interface RefreshTokenRow extends Omit<BaseEntity, 'id'> {
   id: string;
   userId: string;
@@ -112,6 +115,10 @@ interface RefreshTokenRow extends Omit<BaseEntity, 'id'> {
   revokedAt: Date | null;
   loginIp: string | null;
   userAgent: string | null;
+  replacedById?: string | null;
+  replacementCipher?: string | null;
+  replacementKeyId?: string | null;
+  replacementExpiresAt?: Date | null;
 }
 
 /** user_role 行 */
@@ -157,6 +164,14 @@ interface AuditLogRow {
 
 /** 单页条数上限（与 @fw/db 对齐） */
 const PAGE_SIZE_MAX = 100;
+
+/** rotation CAS 失败哨兵：仅用于触发事务回滚，由 catch 区分（真实存储错误原样上抛） */
+class CasLostError extends Error {
+  constructor() {
+    super('rotation CAS lost');
+    this.name = 'CasLostError';
+  }
+}
 
 /**
  * AuthStore 的 Prisma 实现；同时实现 DataScopeOrgPort（M8 组织架构数据范围）
@@ -404,6 +419,87 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
     return result.count;
   }
 
+  /**
+   * 轮换 CAS（ADR-0020 Rule 1/3/4）：
+   *
+   * 事务内只做两条持久化操作——CAS 更新 A（affectedRows===1 即 rotation 权）+ 插入 B；
+   * CAS 谓词含未撤销 + 未软删 + 未过期（Rule 2，消除 TOCTOU）。
+   * CAS 失败抛 CasLostError 回滚整个事务，随后**在事务外**做判定性重读（Rule 4：
+   * MySQL REPEATABLE READ 快照陷阱——任何 already_rotated/replay 的区分都不得复用
+   * CAS 事务的快照）。生成 B / 签名 / 加密已在服务层事务外完成。
+   */
+  async rotateRefreshToken(input: RotateRefreshTokenInput): Promise<RefreshRotationResult> {
+    const replacementId = randomUUID();
+    try {
+      // 显式放宽交互式事务超时：CAS 本身极短，但 SQLite 单写者下排队事务会顶到
+      // Prisma 默认 5s 上限（MySQL/PG 行锁 + busy 重试无此约束）
+      await this.client.$transaction(
+        async (tx) => {
+          const cas = await tx.refreshToken.updateMany({
+            where: {
+              id: input.oldTokenId,
+              revokedAt: null,
+              deletedAt: null,
+              expireAt: { gt: input.now },
+            },
+            data: {
+              revokedAt: input.now,
+              replacementCipher: input.replacementCipher,
+              replacementKeyId: input.replacementKeyId,
+              replacementExpiresAt: input.replacementRecoverableUntil,
+            },
+          });
+          if (cas.count !== 1) throw new CasLostError();
+
+          // 赢家：同一事务内读 A（可见本事务已写入的值）取归属，插入 B 并回填 replacedById
+          const a = (await tx.refreshToken.findUnique({ where: { id: input.oldTokenId } })) as RefreshTokenRow | null;
+          if (!a) throw new CasLostError();
+          await tx.refreshToken.create({
+            data: {
+              id: replacementId,
+              userId: a.userId,
+              familyId: a.familyId,
+              tokenHash: input.replacementTokenHash,
+              expireAt: input.replacementTokenExpiresAt,
+              revokedAt: null,
+              loginIp: input.replacementLoginIp,
+              userAgent: input.replacementUserAgent,
+            },
+          });
+          await tx.refreshToken.update({
+            where: { id: input.oldTokenId },
+            data: { replacedById: replacementId },
+          });
+        },
+        { maxWait: 5_000, timeout: 15_000 },
+      );
+      return { outcome: 'rotated', replacementId };
+    } catch (error) {
+      if (!(error instanceof CasLostError)) throw error;
+    }
+
+    // Rule 4：以下判定性读取全部发生在 CAS 事务之外（新查询）
+    const a = (await this.delegate('refreshToken').findUnique({
+      where: { id: input.oldTokenId },
+    })) as RefreshTokenRow | null;
+    if (!a || a.deletedAt) return { outcome: 'replay_detected', reason: 'not_found' };
+    if (a.expireAt.getTime() <= input.now.getTime()) {
+      return { outcome: 'replay_detected', reason: 'expired' };
+    }
+    if (a.revokedAt && a.replacementCipher && a.replacementKeyId && a.replacementExpiresAt) {
+      return {
+        outcome: 'already_rotated',
+        oldToken: { revokedAt: a.revokedAt, familyId: a.familyId },
+        replacement: {
+          cipher: a.replacementCipher,
+          keyId: a.replacementKeyId,
+          recoverableUntil: a.replacementExpiresAt,
+        },
+      };
+    }
+    return { outcome: 'replay_detected', reason: 'no_replacement' };
+  }
+
   async purgeExpiredRefreshTokens(before: Date): Promise<number> {
     const result = await this.delegate('refreshToken').deleteMany({ where: { expireAt: { lt: before } } });
     return result.count;
@@ -558,6 +654,7 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
   }
 
   private toRefreshToken(row: RefreshTokenRow): RefreshTokenRecord {
+    // M11.1（ADR-0020）：replacement 四列随 20261016140000 migration 落库；旧库无列时 → null
     return {
       id: row.id,
       userId: row.userId,
@@ -567,6 +664,10 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
       revokedAt: row.revokedAt,
       loginIp: row.loginIp,
       userAgent: row.userAgent,
+      replacedById: row.replacedById ?? null,
+      replacementCipher: row.replacementCipher ?? null,
+      replacementKeyId: row.replacementKeyId ?? null,
+      replacementExpiresAt: row.replacementExpiresAt ?? null,
     };
   }
 

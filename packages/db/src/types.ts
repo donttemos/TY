@@ -26,7 +26,13 @@ export interface PrismaClientLike {
   [modelName: string]: unknown;
   $transaction<R>(
     fn: (tx: Record<string, ModelDelegate>) => Promise<R>,
-    options?: { isolationLevel?: string },
+    options?: {
+      isolationLevel?: string;
+      /** 事务获取连接的最大等待（Prisma 交互式事务默认 2s，排队场景需放宽） */
+      maxWait?: number;
+      /** 事务整体超时（Prisma 交互式事务默认 5s，SQLite 单写者排队场景需放宽） */
+      timeout?: number;
+    },
   ): Promise<R>;
   $queryRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<unknown>;
   $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<number>;
