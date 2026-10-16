@@ -110,11 +110,11 @@ M11.1（ADR-0020）落地后，rotation 的并发正确性已闭环（N × A ⇒
 ## Definition of Done（M11.2 封板清单）
 
 ```text
-[ ] ADR-0021 adopted
-[ ] AuthStore.clearExpiredReplacementCiphers 三实现（Memory + example-api/模板 Prisma）
-[ ] cron 两级清理 + 快照/端点 ciphersCleared 字段
-[ ] L5 生命周期测试层全绿（全链 / 组合撤销 / 孤儿 / 清空后语义）
-[ ] 本地三件套（auth / example-api / db）回归全绿 + tsc 0
-[ ] CI 全绿（含 rotation spec 三方言腿）
-[ ] CHANGELOG 登记
+[x] ADR-0021 adopted（2026-10-16 评审通过，9 条意见全落实）
+[x] AuthStore.clearExpiredReplacementCiphers 三实现（Memory + example-api/模板 Prisma；判据单一化 + 幂等由置 NULL 自然保证）
+[x] cron 两级清理 + 快照/端点 lastCiphersCleared / lastDurationMs 字段
+[x] L5 生命周期测试层全绿（L5-01~09：全链 / 组合撤销 / 孤儿 / 清空后语义 / 清理不碰 B / 幂等 / 三列一致性 / 脏数据回收）
+[x] 本地三件套回归全绿 + tsc 0（auth 174/174、example-api 105/105、db 83+12skip）
+[x] CI 全绿（run 38894384566，4/4 job——含 rotation spec 三方言腿与双实例）
+[x] CHANGELOG 登记（[Unreleased] M11.2 段）
 ```
