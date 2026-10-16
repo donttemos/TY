@@ -6,6 +6,8 @@
  *   本服务不落库、不缓存，纯函数式；refresh 的存储与轮换在 RefreshTokenService。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-16 donttemo M11.4（ADR-0023）：JwtKeyRing 成为实际 JWT key source
+ *   （sign 经 Ring current、verify kid 路由经 Ring keyFor）；replacement 解密走 Rule 6 路由
  * @module @fw/auth
  */
 
@@ -162,7 +164,7 @@ export class TokenService {
       .setJti(jti)
       .setIssuedAt()
       .setExpirationTime(exp)
-      .sign(this.key);
+      .sign(this.jwtRing.keyFor(JWT_CURRENT_KID) as Uint8Array);
     return { token, jti, expiresIn: this.options.accessTtlSeconds, exp };
   }
 
@@ -182,7 +184,7 @@ export class TokenService {
       .setJti(jti)
       .setIssuedAt()
       .setExpirationTime(exp)
-      .sign(this.key);
+      .sign(this.jwtRing.keyFor(JWT_CURRENT_KID) as Uint8Array);
     return { token, jti, expiresIn: this.options.refreshTtlSeconds, exp };
   }
 
@@ -199,15 +201,17 @@ export class TokenService {
     // kid 路由（ADR-0023 决策 4）：kid 指向 previous 时先试 prev；其余（含无 kid 存量）维持 current→prev 双试。
     // kid 仅是角色路由提示，正确性由双试兜底保证（已知限制见 ADR-0023 决策 4）。
     const kid = decodeProtectedHeader(token).kid;
-    const preferPrev = kid === JWT_PREVIOUS_KID && this.prevKey;
+    const preferPrev = kid === JWT_PREVIOUS_KID && this.jwtRing.hasPrevious();
     const attempts: Array<{ key: Uint8Array; prev: boolean }> = preferPrev
       ? [
-          { key: this.prevKey!, prev: true },
-          { key: this.key, prev: false },
+          { key: this.jwtRing.keyFor(JWT_PREVIOUS_KID) as Uint8Array, prev: true },
+          { key: this.jwtRing.keyFor(JWT_CURRENT_KID) as Uint8Array, prev: false },
         ]
       : [
-          { key: this.key, prev: false },
-          ...(this.prevKey ? [{ key: this.prevKey, prev: true }] : []),
+          { key: this.jwtRing.keyFor(JWT_CURRENT_KID) as Uint8Array, prev: false },
+          ...(this.jwtRing.hasPrevious()
+            ? [{ key: this.jwtRing.keyFor(JWT_PREVIOUS_KID) as Uint8Array, prev: true }]
+            : []),
         ];
     let lastError: unknown;
     for (const attempt of attempts) {

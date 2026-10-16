@@ -31,13 +31,24 @@ describe('M11.4 解析规则冻结（ADR-0023 决策 1，启动即校验）', ()
     const ring = new ReplacementKeyRing(entries);
     expect(ring.currentKeyId).toBe('k2');
     expect(ring.has('k1')).toBe(true);
-    // Ring 密钥经 HKDF 派生到 32 字节（AES-256 要求；同 secret 不同 keyId = 同密钥不同标签）
+    // Ring 密钥经 HKDF 派生到 32 字节（AES-256 要求）
     const derived = ring.keyFor('k2');
     expect(derived).not.toBeNull();
     expect(derived?.length).toBe(32);
-    // 同 secret 不同 keyId 派生出相同密钥（info 不含 keyId——Rule 6④ 可验证的前提）
-    expect(Buffer.compare(derived as Buffer, ring.keyFor('k1') as Buffer)).not.toBe(0); // secret 不同 → 密钥不同
     expect(ring.keyFor('unknown')).toBeNull();
+
+    // KDF 语义（ADR-0023）：派生 info 不含 keyId——keyId 是路由标签，不是密码学域。
+    // 同 secret + 不同 keyId ⇒ 派生出**相同**密钥（这正是 Rule 6④「显式命中失败不试其它 key」可验证的前提）
+    const sameRing = new ReplacementKeyRing([
+      { keyId: 'k1', secret: OK_SECRET },
+      { keyId: 'k2', secret: OK_SECRET },
+    ]);
+    expect(Buffer.compare(sameRing.keyFor('k1') as Buffer, sameRing.keyFor('k2') as Buffer)).toBe(0);
+
+    // 不同 secret ⇒ 不同密钥
+    expect(
+      Buffer.compare(ring.keyFor('k1') as Buffer, ring.keyFor('k2') as Buffer),
+    ).not.toBe(0);
   });
 
   it('规则①：keyId 含 : 由首段切分天然排除；含 | 被 split 成多 entry——两种形态都不会产生含 : 或 | 的 keyId', () => {

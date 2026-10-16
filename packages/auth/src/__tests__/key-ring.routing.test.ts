@@ -131,7 +131,7 @@ describe('M11.4 L7：代际回退（prerequisite ③ 验收判据）', () => {
     expect(retry.refreshToken).toBe(b.refreshToken);
   });
 
-  it('反向：回退链全失败（NEW 无 prev）→ fail closed 族撤销（Security Invariant 不松动）', async () => {
+  it('反向 A：回退链全失败（NEW 无 prev）→ fail closed 族撤销（Security Invariant 不松动）', async () => {
     const h = makeHarnessWithTokens(SECRET_OLD);
     const user = h.user;
     const first = await h.refresh.issue(user.id, '1.1.1.1', 'device-1');
@@ -145,6 +145,36 @@ describe('M11.4 L7：代际回退（prerequisite ③ 验收判据）', () => {
 
     const bRecord = await h.refresh.find(b.refreshToken);
     expect(bRecord?.revokedAt).not.toBeNull();
+  });
+
+  it('反向 B（WRONG prev）：NEW + PREV=WRONG 双代都解不开 OLD 密文 → fail closed 族撤销 + 无新 refresh token', async () => {
+    const h = makeHarnessWithTokens(SECRET_OLD);
+    const user = h.user;
+    const first = await h.refresh.issue(user.id, '1.1.1.1', 'device-1');
+    const b = await h.refresh.rotate(first.refreshToken, '1.1.1.1', 'device-1');
+
+    const rowsBefore = await h.store.pageAuditLogs({ page: 1, pageSize: 1, action: 'security' });
+
+    // 轮换部署误配：PREV 不是真 OLD 而是无关密钥 → current(NEW)/prev(WRONG) 双代都解不开
+    const wrongPrevSvc = new RefreshTokenService(
+      h.store,
+      makeService(SECRET_NEW, { prev: 'wrong-prev-secret-0123456789abcdef012345' }),
+      10,
+      true,
+    );
+    await expect(
+      wrongPrevSvc.rotate(first.refreshToken, '1.1.1.1', 'device-1'),
+    ).rejects.toMatchObject({ code: ErrorCode.UNAUTHORIZED });
+
+    // Security Invariant：绝不从 A 重新签发 replacement——族内行集合不变（A/B 两行，无 C）
+    const rows = (h.store as unknown as { refreshTokens: Map<string, Record<string, unknown>> }).refreshTokens;
+    expect(rows.size).toBe(2);
+
+    // 族撤销 + audit security 事件落库
+    const bRecord = await h.refresh.find(b.refreshToken);
+    expect(bRecord?.revokedAt).not.toBeNull();
+    const audits = await h.store.pageAuditLogs({ page: 1, pageSize: 10, action: 'security' });
+    expect(audits.total).toBe(rowsBefore.total + 1);
   });
 });
 
