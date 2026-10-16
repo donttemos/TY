@@ -147,6 +147,8 @@ export class RefreshTokenService {
     const { cipher, keyId } = this.tokens.encryptReplacement(signed.token);
     const input: RotateRefreshTokenInput = {
       oldTokenId: record.id,
+      replacementUserId: record.userId,
+      replacementFamilyId: record.familyId,
       replacementTokenHash: hashToken(signed.token),
       replacementCipher: cipher,
       replacementKeyId: keyId,

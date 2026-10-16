@@ -125,6 +125,8 @@ describe('M11.1 L3：存储层 CAS 三态（真实 SQLite 事务）', () => {
     const now = new Date();
     const result = await store.rotateRefreshToken({
       oldTokenId: a.id,
+      replacementUserId: userId,
+      replacementFamilyId: familyId,
       replacementTokenHash: `hash-b-${familyId}`,
       replacementCipher: 'v1:replacement-v1:iv:ct:tag',
       replacementKeyId: 'replacement-v1',
@@ -162,6 +164,8 @@ describe('M11.1 L3：存储层 CAS 三态（真实 SQLite 事务）', () => {
 
     const result = await store.rotateRefreshToken({
       oldTokenId: a.id,
+      replacementUserId: userId,
+      replacementFamilyId: familyId,
       replacementTokenHash: `hash-b2-${familyId}`,
       replacementCipher: 'v1:replacement-v1:x:y:z',
       replacementKeyId: 'replacement-v1',
@@ -193,6 +197,8 @@ describe('M11.1 L3：存储层 CAS 三态（真实 SQLite 事务）', () => {
     });
 
     const base = {
+      replacementUserId: userId,
+      replacementFamilyId: familyId,
       replacementTokenHash: 'hash-any',
       replacementCipher: 'v1:replacement-v1:x:y:z',
       replacementKeyId: 'replacement-v1',
@@ -245,6 +251,8 @@ describe('M11.1 L3：存储层 CAS 三态（真实 SQLite 事务）', () => {
     await expect(
       store.rotateRefreshToken({
         oldTokenId: a.id,
+        replacementUserId: userId,
+        replacementFamilyId: familyId,
         replacementTokenHash: duplicateHash,
         replacementCipher: 'v1:replacement-v1:x:y:z',
         replacementKeyId: 'replacement-v1',
@@ -266,6 +274,8 @@ describe('M11.1 L3：存储层 CAS 三态（真实 SQLite 事务）', () => {
     // A 保持 active ⇒ 立即用不冲突的 hash 重新轮换仍成功
     const retry = await store.rotateRefreshToken({
       oldTokenId: a.id,
+      replacementUserId: userId,
+      replacementFamilyId: familyId,
       replacementTokenHash: `hash-casea-b2-${familyId}`,
       replacementCipher: 'v1:replacement-v1:x2:y2:z2',
       replacementKeyId: 'replacement-v1',

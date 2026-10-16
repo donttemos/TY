@@ -442,6 +442,12 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
       // Prisma 默认 5s 上限（MySQL/PG 行锁 + busy 重试无此约束）
       await this.client.$transaction(
         async (tx) => {
+          // Rule 3 严格两条持久化语句：
+          // ① CAS UPDATE A——一次性写入撤销/归属链/三列/指纹（replacedById 即本方法
+          //    生成的 replacementId，不依赖读 A；B 的归属由服务层经 input 传入）；
+          // ② INSERT B。
+          // 事务内零 SELECT：归属字段 userId/familyId 轮换期内不可变，无 stale 风险；
+          // 判定权只在 CAS 的 affectedRows（Rule 1），重读一律在事务外（Rule 4）。
           const cas = await tx.refreshToken.updateMany({
             where: {
               id: input.oldTokenId,
@@ -451,6 +457,7 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
             },
             data: {
               revokedAt: input.now,
+              replacedById: replacementId,
               replacementCipher: input.replacementCipher,
               replacementKeyId: input.replacementKeyId,
               replacementExpiresAt: input.replacementRecoverableUntil,
@@ -459,24 +466,17 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
           });
           if (cas.count !== 1) throw new CasLostError();
 
-          // 赢家：同一事务内读 A（可见本事务已写入的值）取归属，插入 B 并回填 replacedById
-          const a = (await tx.refreshToken.findUnique({ where: { id: input.oldTokenId } })) as RefreshTokenRow | null;
-          if (!a) throw new CasLostError();
           await tx.refreshToken.create({
             data: {
               id: replacementId,
-              userId: a.userId,
-              familyId: a.familyId,
+              userId: input.replacementUserId,
+              familyId: input.replacementFamilyId,
               tokenHash: input.replacementTokenHash,
               expireAt: input.replacementTokenExpiresAt,
               revokedAt: null,
               loginIp: input.replacementLoginIp,
               userAgent: input.replacementUserAgent,
             },
-          });
-          await tx.refreshToken.update({
-            where: { id: input.oldTokenId },
-            data: { replacedById: replacementId },
           });
         },
         { maxWait: 5_000, timeout: 15_000 },

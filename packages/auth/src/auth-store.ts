@@ -36,6 +36,10 @@ export type NewRefreshToken = Omit<RefreshTokenRecord, 'id'>;
 export interface RotateRefreshTokenInput {
   /** 旧记录（A）主键 */
   oldTokenId: ID;
+  /** A 的归属用户（服务层已从 A 行取得；userId/familyId 轮换期内不可变，无 stale 风险）——传入后事务内零 SELECT（Rule 3 严格两条持久化语句） */
+  replacementUserId: ID;
+  /** A 的轮换族 ID（同上） */
+  replacementFamilyId: string;
   /** replacement（B）的 sha256 哈希 */
   replacementTokenHash: string;
   /** replacement（B）明文的 AES-256-GCM 密文（grace 恢复用） */
@@ -147,7 +151,9 @@ export interface AuthStore {
   /** 撤销某用户全部刷新令牌（改密 / 踢下线），返回受影响条数 */
   revokeUserRefreshTokens(userId: ID, at: Date): Promise<number>;
   /**
-   * 轮换 CAS（ADR-0020 Rule 1/3，必选）：原子地「CAS 更新 A + 插入 B」。
+   * 轮换 CAS（ADR-0020 Rule 1/3，必选）：原子地「CAS 更新 A + 插入 B」两条持久化语句——
+   * UPDATE 一次性写入 revoked/replacedById/三列/指纹（replacedById 即本方法生成的
+   * replacementId，不依赖读 A）；B 的归属由服务层经 input 传入，事务内零 SELECT。
    * CAS 谓词必须含未撤销 + 未软删 + 未过期；失败路径的判定性重读必须在事务外（Rule 4）。
    * 事务外的生成/签名/加密由服务层完成，存储层只持久化不透明串（Rule 7）。
    */
