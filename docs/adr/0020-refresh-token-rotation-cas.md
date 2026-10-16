@@ -179,9 +179,10 @@ CI 门禁最低线（合并前必须全绿）：baseline = PASS、100 并发 = P
 [x] Prisma CAS PASS
 [x] SQLite integration PASS（独立临时库 + migrate deploy；注：SQLite 单写者 + 连接器超时，
     本地并发容量实测稳定上限 10——store 已放宽事务超时 15s；下方三库与容量线以 CI 为准）
-[ ] PostgreSQL integration PASS（CI service DB 待跑）
-[ ] MySQL integration PASS（CI service DB 待跑；REPEATABLE READ 快照陷阱专项）
-[ ] dual-instance 100 concurrency PASS（106 测试机 / CI，待）
+[x] PostgreSQL integration PASS（run 38866505347，service DB 独立库 fw_rotation）
+[x] MySQL integration PASS（run 38866505347；RR 快照陷阱由 Rule 4「事务外重读」结构性消除并经真库回归）
+[x] dual-instance 100 concurrency PASS（CI run 38866505347：2 独立进程 × 50 并发打同一 MySQL/PG，
+    进程间唯一共享状态 = 数据库；脚本 scripts/dual-instance-rotation.mjs）
 [x] Case A–F PASS（A/C 在 L3 集成，B/D/E/F 在 L4 注入，L2 并发补充 Case B）
 [x] DB 无明文 replacement token；token_hash 保持 hash-only
 [x] 不存在任何「从已轮换的 A 再生成 replacement」的路径（Security Invariant，Case C/E 证明）
@@ -190,6 +191,8 @@ CI 门禁最低线（合并前必须全绿）：baseline = PASS、100 并发 = P
 [x] CI green（run 38862407905：4/4 job 全绿——构建/单测(SQLite)/静态 + 集成 mysql/postgres/sqlite）
 ```
 
-> **CI 收口注记（2026-10-16）**：L3 rotation 集成 spec 目前随单测 job 在 SQLite 上运行；
-> MySQL/PostgreSQL 上的 rotation CAS 验证需把该 spec 挂进 CI 集成矩阵（service DB），与
-> 双实例（106 测试机）验证一并列为 M11.1 收尾的后续项——DoD 对应两条保持未勾。
+> **CI 收口注记（2026-10-16 终态）**：rotation spec 与双实例脚本已挂进 CI 集成矩阵 MySQL/PG 腿
+> （独立库 fw_rotation 与 packages/db 矩阵库隔离；run 38866505347 全绿）。**MySQL 踩坑记录**：
+> `String` 默认 VARCHAR(191) 装不下真实密文（JWT≈460B → base64url≈620C），mysql 变体
+> replacement_cipher 须标 @db.Text（SQLite/PG 的 String 本为无限文本，故仅 mysql 变体有此差异）。
+> M11.1 至此 DoD 全项达成。另修独立小缺陷：issue() 返回 jti 与 JWT 载荷内 jti 背离（bf2055d）。
