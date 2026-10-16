@@ -145,6 +145,7 @@ erDiagram
         text replacement_cipher "AES-GCM 密文 grace 恢复 M11.1"
         varchar replacement_key_id "密钥标识 M11.1"
         datetime replacement_expires_at "密文可恢复期终点 M11.1"
+        varchar rotated_fingerprint "轮换赢家 UA 指纹 M11.3"
     }
 ```
 
@@ -332,6 +333,7 @@ erDiagram
 | `replacement_cipher` | text | 否 | NULL | replacement 明文的 AES-256-GCM 密文 `v1:keyId:iv:ct:tag`（grace 恢复专用，明文永不落库；M11.1） | — |
 | `replacement_key_id` | varchar(64) | 否 | NULL | replacement 密钥标识（M11.1 单密钥 `replacement-v1`，M11.4 Key Ring 扩展） | — |
 | `replacement_expires_at` | datetime(3) | 否 | NULL | replacement 密文可恢复期终点（= 轮换时刻 + 宽限窗口，与 `revoked_at` 同一时间基准） | — |
+| `rotated_fingerprint` | varchar(64) | 否 | NULL | 轮换赢家客户端指纹 SHA-256(normalizeUserAgent)（M11.3，ADR-0022；IP 不参与）；grace 重试比对，不匹配判泄漏族撤销；NULL 仅存量/off 来源 | — |
 | 通用字段 | — | — | — | 同上 | — |
 
 > 清理策略：过期 30 天以上的记录由定时任务清理。

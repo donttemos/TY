@@ -16,6 +16,10 @@
 
 ## [Unreleased]
 
+### Added（M11.3 · Client Fingerprint，ADR-0022）
+
+- **ADR-0022 落地**：[docs/adr/0022-client-fingerprint.md](./docs/adr/0022-client-fingerprint.md)——grace 重试绑定轮换赢家指纹：**同客户端 → 返回同一个 B；异客户端 → replay 安全事件**（Rule 8 全链：族撤销 + 会话撤销 + audit `security` 事件 + 3001；M11.1 时仅 logger，本次补审计落库）。指纹 = `SHA-256(normalizeUserAgent(ua))`，**IP 不参与**（漂移误杀）；`normalizeUserAgent` 规则冻结（仅 trim，null→""，固定测试向量进 ADR）。**原子性**：赢家指纹由 CAS 同一 UPDATE 写入 `rotated_fingerprint` 新列（禁止二次补写）；**NULL 放行仅限 M11.1 存量行与 `AUTH_FINGERPRINT=off`**，新 rotation 产生 NULL 即缺陷（契约测试锁死）。新增配置键 `AUTH_FINGERPRINT`（on/off，默认 on，已登记 env-schema + ENV_KEY_PATHS + .env.example + docs/60）；`refresh_tokens` 加列 `rotated_fingerprint`，migration `20261016193000` 三方言 + 模板同构（mysql 变体重生成 init）。**baseline-009 翻转**：异客户端 grace 重试从 observation 改为断言拒绝（ADR-0020 预告项兑现）。L6 指纹测试层 8 条（向量/匹配/不匹配+审计/存量 NULL/off 模式/IP 漂移/全链撤销）。回归：auth **182/182**、example-api **106/106**。
+
 ### Added（M11.2 · Refresh Token 生命周期完整性，ADR-0021）
 
 - **ADR-0021 落地**：[docs/adr/0021-refresh-token-lifecycle.md](./docs/adr/0021-refresh-token-lifecycle.md)——replacement 密文可恢复期从「最长 ≈37 天」收缩到 **grace 窗口 + 一个调度周期**。核心：`AuthStore.clearExpiredReplacementCiphers(now)`（判据 = `replacement_expires_at < now` 唯一化，脏数据同样回收；`NOT(三列全 NULL)` 仅保证幂等；只置三列 NULL 保留 `revokedAt/replacedById` 历史链）；`auth.refresh-cleanup` cron 扩展为**两级清理**（密文回收每次跑 + 30 天删行），快照/运维端点加 `lastCiphersCleared`/`lastDurationMs`；`cleanupReplacements()` 为编排门面（清库动作在 Store，Rule 8）。**Replacement metadata invariant**：三列全 NULL 或全 NON-NULL（契约测试锁死，M11.4 Key Ring 数据基础）；清空后 A 复用 → `no_replacement` → 泄漏族撤销（fail closed 与 M11.1 一致）。L5 生命周期回归 8 条：A→B→C→D 全链 / 中途 logout / logout-all / 孤儿 replacement / 清空后语义 / 清理不碰 B / 幂等 / 三列一致性。不新增任何状态枚举（全部派生状态）。回归：auth **173/173**、example-api **104/104**。
