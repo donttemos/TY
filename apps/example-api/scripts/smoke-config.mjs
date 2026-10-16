@@ -114,8 +114,8 @@ async function phaseEnabled(runtimeFile) {
   console.log('\n—— 阶段 A：启动加载与越权面 ——');
   const list = await call('/api/v1/configs', { headers: auth(admin) });
   const configs = list.body?.data?.configs ?? [];
-  check('GET /configs（admin）返回白名单 11 键',
-    list.status === 200 && configs.length === 11 && configs.every((c) => c.hot === true),
+  check('GET /configs（admin）返回白名单 12 键（PRD-009 首版 11 + E-16 web.keepAliveMax）',
+    list.status === 200 && configs.length === 12 && configs.every((c) => c.hot === true),
     `http=${list.status} count=${configs.length}`);
   const logEntry = configs.find((c) => c.key === 'log.level');
   check('事实源初值已加载：log.level=debug 且 source=runtime（启动覆盖，未逐键通知）',
@@ -277,9 +277,9 @@ async function phaseDisabled() {
   const server = await startServer({ CONFIG_CENTER_ENABLED: 'false', CONFIG_CENTER_FILE: path.join(os.tmpdir(), 'fw-config-smoke-disabled.json') });
   const admin = await login('admin', 'Admin@123456');
   const list = await call('/api/v1/configs', { headers: { authorization: `Bearer ${admin}` } });
-  check('未启用：GET /configs 仍提供 env 视图（11 键，source=env）',
+  check('未启用：GET /configs 仍提供 env 视图（12 键，source=env）',
     list.status === 200
-    && (list.body?.data?.configs ?? []).length === 11
+    && (list.body?.data?.configs ?? []).length === 12
     && (list.body?.data?.configs ?? []).every((c) => c.source === 'env'),
     `count=${(list.body?.data?.configs ?? []).length}`);
   const put = await call('/api/v1/configs/cache.ttl', {
