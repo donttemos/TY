@@ -16,6 +16,10 @@
 
 ## [Unreleased]
 
+### Added（M11.4 · 双 Key Ring，ADR-0023）
+
+- **ADR-0023 落地**：[docs/adr/0023-key-ring.md](./docs/adr/0023-key-ring.md)——解 ADR-0020 登记的 JWT_SECRET 轮换误杀 prerequisite。核心：① 统一 KeyRing 抽象（`key-ring.ts`：ReplacementKeyRing + JwtKeyRing，密钥材料仍封 TokenService，rotation 核心零改动）；② **Rule 6 路由优先级**（禁全 Ring brute-force）：显式命中仅试该 key 失败即 fail closed / legacy `replacement-v1` 且 Ring 不含 → HKDF(current)→HKDF(prev) 回退链 / 未知 keyId fail closed；③ 新配置键 `AUTH_REPLACEMENT_KEYS`（`<keyId>:<secret>` 列表，解析规则冻结：keyId 禁 `:`/`|`、secret 禁 `|` 且 ≥32 UTF-8 bytes、空 entry/重复 keyId 启动即失败；Ring 密钥经 HKDF 派生到 32 字节）；④ **代际回退验收**：轮换部署（OLD→NEW+PREV）下 legacy 密文 grace 内恢复原 B 不触发族撤销（真库用例 + 跨代显式 Ring 场景），反向回退全失败仍 fail closed；⑤ JWT kid：sign 带 `jwt-current`（角色路由标识，稳定 kid 留 M11.5），verify kid 路由 + 无 kid 存量双试兼容；⑥ 退役窗口规则文档化（retire ≥ max(grace, 调度周期)+重叠期，判据 = keyId 名下未过期 cipher 行数为 0，M11.2 清理衔接）。红线验证：rotation 核心（baseline/L5/L6/集成 spec/CAS 收敛事务体）零改动全绿。回归：auth **199/199**（含 L7 17 条）、example-api **108/108**、config 16/16。
+
 ### Added（M11.3 · Client Fingerprint，ADR-0022）
 
 - **ADR-0022 落地**：[docs/adr/0022-client-fingerprint.md](./docs/adr/0022-client-fingerprint.md)——grace 重试绑定轮换赢家指纹：**同客户端 → 返回同一个 B；异客户端 → replay 安全事件**（Rule 8 全链：族撤销 + 会话撤销 + audit `security` 事件 + 3001；M11.1 时仅 logger，本次补审计落库）。指纹 = `SHA-256(normalizeUserAgent(ua))`，**IP 不参与**（漂移误杀）；`normalizeUserAgent` 规则冻结（仅 trim，null→""，固定测试向量进 ADR）。**原子性**：赢家指纹由 CAS 同一 UPDATE 写入 `rotated_fingerprint` 新列（禁止二次补写）；**NULL 放行仅限 M11.1 存量行与 `AUTH_FINGERPRINT=off`**，新 rotation 产生 NULL 即缺陷（契约测试锁死）。新增配置键 `AUTH_FINGERPRINT`（on/off，默认 on，已登记 env-schema + ENV_KEY_PATHS + .env.example + docs/60）；`refresh_tokens` 加列 `rotated_fingerprint`，migration `20261016193000` 三方言 + 模板同构（mysql 变体重生成 init）。**baseline-009 翻转**：异客户端 grace 重试从 observation 改为断言拒绝（ADR-0020 预告项兑现）。L6 指纹测试层 8 条（向量/匹配/不匹配+审计/存量 NULL/off 模式/IP 漂移/全链撤销）。回归：auth **182/182**、example-api **106/106**。

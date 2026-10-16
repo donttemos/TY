@@ -30,7 +30,8 @@
 | [0016](./0016-storage-port-fw-storage.md) | 文件存储端口 @fw/storage：端口 + local/s3 双驱动，S3 走 optional peer 结构化最小接口；附件字段约定 `*FileId` 由 codegen 识别 | 已采纳 | 后端 |
 | [0020](./0020-refresh-token-rotation-cas.md) | Refresh Token Rotation CAS：单 replacement 不变量 + AES-GCM 加密 grace 恢复 + replay 族撤销（编号 0017–0019 已由 PRD-011 预留，跳号） | 已采纳 | 后端 |
 | [0021](./0021-refresh-token-lifecycle.md) | Refresh Token 生命周期完整性：replacement 密文 grace 级清空（cipher 三列置 NULL）+ 两级清理接线 + L5 全链生命周期回归 | 已采纳 | 后端 |
-| [0022](./0022-client-fingerprint.md) | M11.3 Client Fingerprint：grace 恢复绑定轮换发起方（UA 指纹起步，provider 接口预留 deviceId/clientId），异端重试升级为 replay | 提议（待评审） | 后端 |
+| [0022](./0022-client-fingerprint.md) | M11.3 Client Fingerprint：grace 恢复绑定轮换发起方（UA 指纹起步，provider 接口预留 deviceId/clientId），异端重试升级为 replay | 已采纳 | 后端 |
+| [0023](./0023-key-ring.md) | M11.4 双 Key Ring：Replacement 密钥代际回退（HKDF legacy 回退链，解 JWT_SECRET 轮换误杀）+ JWT kid 路由 + 退役窗口规则 | 提议（待评审） | 后端 |
 
 ## 模板
 
