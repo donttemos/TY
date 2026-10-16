@@ -333,6 +333,71 @@ describe('M11.1 L3：服务层端到端（RefreshTokenService + PrismaAuthStore�
     expect(bRecord?.revokedAt).not.toBeNull();
   }, 30_000);
 
+  it('M11.4：轮换部署（OLD→NEW+PREV）下 legacy 密文 grace 内恢复原 B 不触发族撤销（ADR-0023 prerequisite ③ 真库验证）', async () => {
+    // 旧实例：secret=OLD（legacy HKDF 派生 replacement-v1）
+    const oldTokens = new TokenService({
+      secret: 'old-secret-0123456789abcdef0123456789abcdef',
+      accessTtlSeconds: 900,
+      refreshTtlSeconds: 7 * 24 * 3600,
+    });
+    const oldRefresh = new RefreshTokenService(store, oldTokens, 10, true);
+    const first = await oldRefresh.issue(userId, '1.1.1.1', 'device-1');
+    const b = await oldRefresh.rotate(first.refreshToken, '1.1.1.1', 'device-1');
+
+    // 新实例：secret=NEW + prev=OLD（轮换部署形态）——legacy 密文走 HKDF(NEW)失败→HKDF(OLD)成功
+    const newTokens = new TokenService({
+      secret: 'new-secret-0123456789abcdef0123456789abcdef',
+      secretPrev: 'old-secret-0123456789abcdef0123456789abcdef',
+      accessTtlSeconds: 900,
+      refreshTtlSeconds: 7 * 24 * 3600,
+    });
+    const newRefresh = new RefreshTokenService(store, newTokens, 10, true);
+    const retry = await newRefresh.rotate(first.refreshToken, '1.1.1.1', 'device-1');
+    expect(retry.refreshToken).toBe(b.refreshToken);
+    expect(retry.outcome.withinGrace).toBe(true);
+    const bRecord = await prisma.refreshToken.findFirst({
+      where: { tokenHash: hashToken(b.refreshToken) },
+    });
+    expect(bRecord?.revokedAt).toBeNull();
+  });
+
+  it('M11.4：key retirement 判据——replacement_key_id 未过期行数为 0 即可退役（ADR-0021/0023 衔接）', async () => {
+    // 构造两个 keyId：v1 已过期（可退役）、v2 未过期（不可退役）
+    const future = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+    const past = new Date(Date.now() - 60_000);
+    await prisma.refreshToken.create({
+      data: {
+        userId,
+        tokenHash: `retire-v1-${Date.now()}`,
+        familyId: 'fam-retire',
+        expireAt: future,
+        revokedAt: new Date(),
+        replacementCipher: 'v1:replacement-v1:iv:ct:tag',
+        replacementKeyId: 'replacement-v1',
+        replacementExpiresAt: past,
+      },
+    });
+    await prisma.refreshToken.create({
+      data: {
+        userId,
+        tokenHash: `retire-v2-${Date.now()}`,
+        familyId: 'fam-retire',
+        expireAt: future,
+        revokedAt: new Date(),
+        replacementCipher: 'v1:replacement-v2:iv:ct:tag',
+        replacementKeyId: 'replacement-v2',
+        replacementExpiresAt: future,
+      },
+    });
+    // 退役判据：该 keyId 名下未过期 cipher 行数（按本用例 family 过滤——其它用例的同 keyId 行不参与判定）
+    const activeRows = async (keyId: string) =>
+      prisma.refreshToken.count({
+        where: { replacementKeyId: keyId, familyId: 'fam-retire', replacementExpiresAt: { gt: new Date() } },
+      });
+    expect(await activeRows('replacement-v1')).toBe(0); // 可退役
+    expect(await activeRows('replacement-v2')).toBe(1); // 不可退役
+  });
+
   it('M11.3：赢家指纹落库 + 异客户端 grace 重试 → replay 族撤销（ADR-0022 真库验证）', async () => {
     const first = await refresh.issue(userId, '1.1.1.1', 'device-1');
     const b = await refresh.rotate(first.refreshToken, '1.1.1.1', 'device-1');
