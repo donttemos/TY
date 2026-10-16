@@ -28,6 +28,7 @@
 | [0014](./0014-i18n-frontend-locale.md) | i18n 骨架：错误码文案前端接管，locale 运行时自研不引 vue-i18n | 已采纳 | 前端 |
 | [0015](./0015-dark-mode-tokens.md) | 暗色模式：令牌层双列落地 + 派生档静态预计算（弃 color-mix）+ 主题三态默认跟随系统 | 已采纳 | 前端 |
 | [0016](./0016-storage-port-fw-storage.md) | 文件存储端口 @fw/storage：端口 + local/s3 双驱动，S3 走 optional peer 结构化最小接口；附件字段约定 `*FileId` 由 codegen 识别 | 已采纳 | 后端 |
+| [0020](./0020-refresh-token-rotation-cas.md) | Refresh Token Rotation CAS：单 replacement 不变量 + AES-GCM 加密 grace 恢复 + replay 族撤销（编号 0017–0019 已由 PRD-011 预留，跳号） | 已采纳 | 后端 |
 
 ## 模板
 

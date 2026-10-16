@@ -146,9 +146,10 @@ describe('AuthService · 刷新 / 登出 / 改密', () => {
     const oldRecord = await h.store.findRefreshTokenByHash(hashToken(login.refreshToken));
     expect(oldRecord?.revokedAt).not.toBeNull();
 
-    // 宽限窗口内（默认 10s）复用旧 refresh：按并发刷新处理，返回同族新令牌
+    // 宽限窗口内（默认 10s）复用旧 refresh：返回同一个已持久化的 replacement（ADR-0020 Rule 6，
+    // M11.1 语义变更——旧实现在此重新签发新令牌，正是 baseline 证明的 N × A ⇒ N × replacement race）
     const concurrent = await h.service.refreshSession(login.refreshToken, '10.0.0.1', 'jest');
-    expect(concurrent.refreshToken).not.toBe(refreshed.refreshToken);
+    expect(concurrent.refreshToken).toBe(refreshed.refreshToken);
   });
 
   it('刷新时账号被禁用则终止该用户全部刷新令牌', async () => {

@@ -58,7 +58,13 @@ export { parseDurationSeconds } from './duration.js';
 export { MemoryAuthCache } from './auth-cache.js';
 export type { AuthCachePort } from './auth-cache.js';
 export { MemoryAuthStore } from './memory-auth-store.js';
-export type { AuthStore, NewAuditLog, NewRefreshToken } from './auth-store.js';
+export type {
+  AuthStore,
+  NewAuditLog,
+  NewRefreshToken,
+  RefreshRotationResult,
+  RotateRefreshTokenInput,
+} from './auth-store.js';
 
 // ---------- 策略 ----------
 export {

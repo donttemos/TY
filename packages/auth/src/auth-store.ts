@@ -27,6 +27,57 @@ import type {
 /** 新增刷新令牌入参（id 由存储层生成） */
 export type NewRefreshToken = Omit<RefreshTokenRecord, 'id'>;
 
+/**
+ * 轮换 CAS 入参（ADR-0020 Rule 1/3）
+ *
+ * replacement 的生成、签名、哈希、加密全部在**事务外**由服务层完成；
+ * 存储层只做原子 CAS（更新 A + 插入 B）——不感知 JWT/SHA-256/AES（Rule 7）。
+ */
+export interface RotateRefreshTokenInput {
+  /** 旧记录（A）主键 */
+  oldTokenId: ID;
+  /** replacement（B）的 sha256 哈希 */
+  replacementTokenHash: string;
+  /** replacement（B）明文的 AES-256-GCM 密文（grace 恢复用） */
+  replacementCipher: string;
+  /** replacement 密钥标识 */
+  replacementKeyId: string;
+  /** replacement（B）自身的过期时间（refreshTtl，非 grace 窗口） */
+  replacementTokenExpiresAt: Date;
+  /**
+   * replacement 密文可恢复期终点 = 轮换时刻 + graceSeconds（ADR-0020「时间基准」）。
+   * 与 revokedAt 同源同一个 `now`，grace 评估收敛为 `now <= replacementRecoverableUntil` 一次列比较。
+   */
+  replacementRecoverableUntil: Date;
+  /** replacement 记录的登录 IP（赢家请求上下文） */
+  replacementLoginIp: string | null;
+  /** replacement 记录的客户端标识（赢家请求上下文） */
+  replacementUserAgent: string | null;
+  /** CAS 谓词用当前时间（expires_at > now） */
+  now: Date;
+}
+
+/**
+ * 轮换 CAS 三态结果（ADR-0020）
+ *
+ * 结果只携带**事实**，不携带业务策略：
+ *
+ * - `rotated`：CAS 赢家，A 更新与 B 插入已原子提交；
+ * - `already_rotated`：A 已被并发请求轮换，携带 grace 恢复所需事实——
+ *   `userId` 不进结果（服务层已从旧记录获得）；grace 窗口与族存活评估由服务层完成；
+ * - `replay_detected`：存储层可判定的不可恢复事实（`not_found` / `expired` /
+ *   `no_replacement`）；`grace_expired` 由服务层基于窗口终点与族存活判定后
+ *   走同一 replay 副作用路径（存储层不持 grace 策略，Rule 8）。
+ */
+export type RefreshRotationResult =
+  | { outcome: 'rotated'; replacementId: ID }
+  | {
+      outcome: 'already_rotated';
+      oldToken: { revokedAt: Date; familyId: string };
+      replacement: { cipher: string; keyId: string; recoverableUntil: Date };
+    }
+  | { outcome: 'replay_detected'; reason: 'not_found' | 'expired' | 'no_replacement' };
+
 /** 新增审计日志入参（id 由存储层生成） */
 export type NewAuditLog = Omit<AuditLogRecord, 'id'>;
 
@@ -88,6 +139,12 @@ export interface AuthStore {
   hasActiveRefreshTokenInFamily(familyId: string, now: Date): Promise<boolean>;
   /** 撤销某用户全部刷新令牌（改密 / 踢下线），返回受影响条数 */
   revokeUserRefreshTokens(userId: ID, at: Date): Promise<number>;
+  /**
+   * 轮换 CAS（ADR-0020 Rule 1/3，必选）：原子地「CAS 更新 A + 插入 B」。
+   * CAS 谓词必须含未撤销 + 未软删 + 未过期；失败路径的判定性重读必须在事务外（Rule 4）。
+   * 事务外的生成/签名/加密由服务层完成，存储层只持久化不透明串（Rule 7）。
+   */
+  rotateRefreshToken(input: RotateRefreshTokenInput): Promise<RefreshRotationResult>;
   /** 清理过期记录（保留期由定时任务决定），返回清理条数 */
   purgeExpiredRefreshTokens(before: Date): Promise<number>;
 

@@ -22,6 +22,10 @@
  */
 
 import type { PageResult } from '@fw/db';
+import type {
+  RotateRefreshTokenInput,
+  RefreshRotationResult,
+} from './auth-store.js';
 import type { AuthStore, NewAuditLog, NewRefreshToken } from './auth-store.js';
 import type {
   AuditLogRecord,
@@ -339,6 +343,60 @@ export class MemoryAuthStore implements AuthStore {
       }
     }
     return affected;
+  }
+
+  /**
+   * 轮换 CAS（ADR-0020 Rule 1/5）。
+   *
+   * 内存实现的单线程语义下，「A 判断 → A 更新 → B 写入」处于同一个连续同步临界段
+   * （中间无 await，等价于数据库事务的原子性）；CAS 谓词 = 未撤销 + 未过期。
+   * grace 窗口与族存活评估不在这里——存储层只返回事实（ADR-0020 接口契约）。
+   */
+  async rotateRefreshToken(input: RotateRefreshTokenInput): Promise<RefreshRotationResult> {
+    const old = this.refreshTokens.get(input.oldTokenId);
+    if (!old) return { outcome: 'replay_detected', reason: 'not_found' };
+    if (old.expireAt.getTime() <= input.now.getTime()) {
+      return { outcome: 'replay_detected', reason: 'expired' };
+    }
+    if (old.revokedAt) {
+      if (!old.replacementCipher || !old.replacementKeyId || !old.replacementExpiresAt) {
+        return { outcome: 'replay_detected', reason: 'no_replacement' };
+      }
+      return {
+        outcome: 'already_rotated',
+        oldToken: { revokedAt: old.revokedAt, familyId: old.familyId },
+        replacement: {
+          cipher: old.replacementCipher,
+          keyId: old.replacementKeyId,
+          recoverableUntil: old.replacementExpiresAt,
+        },
+      };
+    }
+    // CAS 赢家：更新 A + 写入 B 必须在同一同步临界段内完成（中间不得出现 await）
+    const replacement: RefreshTokenRecord = {
+      id: this.nextId(),
+      userId: old.userId,
+      tokenHash: input.replacementTokenHash,
+      familyId: old.familyId,
+      expireAt: input.replacementTokenExpiresAt,
+      revokedAt: null,
+      loginIp: input.replacementLoginIp,
+      userAgent: input.replacementUserAgent,
+      replacedById: null,
+      replacementCipher: null,
+      replacementKeyId: null,
+      replacementExpiresAt: null,
+    };
+    this.refreshTokens.set(old.id, {
+      ...old,
+      revokedAt: input.now,
+      replacedById: replacement.id,
+      replacementCipher: input.replacementCipher,
+      replacementKeyId: input.replacementKeyId,
+      replacementExpiresAt: input.replacementRecoverableUntil,
+    });
+    this.refreshTokens.set(replacement.id, replacement);
+    return { outcome: 'rotated', replacementId: replacement.id };
   }
 
   async purgeExpiredRefreshTokens(before: Date): Promise<number> {

@@ -101,6 +101,17 @@ export interface RefreshTokenRecord {
   revokedAt: Date | null;
   loginIp: string | null;
   userAgent: string | null;
+  /**
+   * 本记录轮换出的 replacement 记录 ID（ADR-0020 Rule 5）。
+   * 仅「已被 CAS 轮换」的记录持有；明文令牌永不落库，grace 恢复靠 replacementCipher。
+   */
+  replacedById: string | null;
+  /** replacement 明文的 AES-256-GCM 密文（ADR-0020 Rule 7，grace 恢复专用；未轮换为 null） */
+  replacementCipher: string | null;
+  /** replacement 密文所用密钥标识（M11.1 单密钥 `replacement-v1`；M11.4 Key Ring 扩展） */
+  replacementKeyId: string | null;
+  /** replacement 密文可恢复期终点（= 轮换时刻 + grace，ADR-0020 时间基准；未轮换为 null） */
+  replacementExpiresAt: Date | null;
 }
 
 /** 审计动作 */

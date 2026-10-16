@@ -9,13 +9,22 @@
  * @module @fw/auth
  */
 
-import { randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, hkdfSync, randomBytes, randomUUID } from 'node:crypto';
 import { SignJWT, errors as joseErrors, jwtVerify, type JWTPayload } from 'jose';
 import { JWT_ALG, JWT_ISSUER } from './constants.js';
 import type { AuthRole, TokenPair, TokenType } from './types.js';
 
 /** 密钥最小长度（弱密钥告警阈值） */
 const MIN_SECRET_LENGTH = 32;
+
+/** replacement 密文当前版本段（AES-256-GCM，ADR-0020；M11.4 Key Ring 升级时递增） */
+const REPLACEMENT_CIPHER_VERSION = 'v1';
+
+/** replacement 当前密钥标识（M11.1 单密钥；M11.4 Key Ring 扩展为多 keyId） */
+export const REPLACEMENT_KEY_ID = 'replacement-v1';
+
+/** HKDF salt：把 JWT 签名密钥域分离出独立的 replacement 加密密钥域 */
+const REPLACEMENT_HKDF_SALT = 'fw/auth/replacement/v1';
 
 /** access token 载荷 */
 export interface AccessClaims extends JWTPayload {
@@ -77,6 +86,8 @@ export interface IssuedToken {
 export class TokenService {
   private readonly key: Uint8Array;
   private readonly prevKey?: Uint8Array;
+  /** replacement 加密密钥（AES-256-GCM，32 字节；HKDF 从 jwtSecret 域分离派生，ADR-0020） */
+  private readonly replacementKey: Buffer;
 
   /**
    * @param options 密钥与有效期
@@ -91,6 +102,9 @@ export class TokenService {
     }
     this.key = new TextEncoder().encode(options.secret);
     if (options.secretPrev) this.prevKey = new TextEncoder().encode(options.secretPrev);
+    this.replacementKey = Buffer.from(
+      hkdfSync('sha256', options.secret, REPLACEMENT_HKDF_SALT, REPLACEMENT_KEY_ID, 32),
+    );
   }
 
   /** 当前 access 有效期（秒） */
@@ -208,6 +222,50 @@ export class TokenService {
     if (error instanceof joseErrors.JWTExpired) return true;
     const code = (error as { code?: string } | undefined)?.code;
     return code === 'ERR_JWT_EXPIRED';
+  }
+
+  /**
+   * 加密 replacement 明文（ADR-0020 Rule 7：明文不落库，A 行只存密文供 grace 恢复）
+   *
+   * AES-256-GCM，密文格式 `v1:{keyId}:{iv}:{ciphertext}:{tag}`（Base64URL 段）；
+   * version 段为 M11.4 Key Ring 平滑升级预留。
+   *
+   * @param plaintext replacement 令牌明文
+   * @returns 密文与密钥标识
+   */
+  encryptReplacement(plaintext: string): { cipher: string; keyId: string } {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', this.replacementKey, iv);
+    const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    const b64u = (buffer: Buffer) => buffer.toString('base64url');
+    return {
+      cipher: `${REPLACEMENT_CIPHER_VERSION}:${REPLACEMENT_KEY_ID}:${b64u(iv)}:${b64u(encrypted)}:${b64u(tag)}`,
+      keyId: REPLACEMENT_KEY_ID,
+    };
+  }
+
+  /**
+   * 解密 replacement 密文（grace 恢复路径专用）
+   *
+   * @param cipher 密文（encryptReplacement 产出）
+   * @param keyId 存储层返回的密钥标识
+   * @returns replacement 明文
+   * @throws Error 密文损坏 / keyId 未知 / GCM 认证失败——调用方必须 fail closed
+   *   并触发族撤销，绝不能从 A 生成第二个 replacement（Security Invariant）
+   */
+  decryptReplacement(cipher: string, keyId: string): string {
+    if (keyId !== REPLACEMENT_KEY_ID) {
+      throw new Error(`未知的 replacement 密钥标识: ${keyId}`);
+    }
+    const parts = cipher.split(':');
+    if (parts.length !== 5 || parts[0] !== REPLACEMENT_CIPHER_VERSION || parts[1] !== keyId) {
+      throw new Error('replacement 密文格式非法');
+    }
+    const [, , ivPart, dataPart, tagPart] = parts;
+    const decipher = createDecipheriv('aes-256-gcm', this.replacementKey, Buffer.from(ivPart, 'base64url'));
+    decipher.setAuthTag(Buffer.from(tagPart, 'base64url'));
+    return Buffer.concat([decipher.update(Buffer.from(dataPart, 'base64url')), decipher.final()]).toString('utf8');
   }
 }
 
