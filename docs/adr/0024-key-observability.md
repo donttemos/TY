@@ -1,6 +1,6 @@
 # ADR-0024 · M11.5 Key Ring 可观测性：稳定 kid + 密钥运维端点 + 安全事件审计口径
 
-- 状态：提议（待评审）
+- 状态：已采纳（2026-10-16 评审通过，6 条意见全落实：kid 16 hex + collision 启动失败 / unknown kid 禁 fallback / retirable 基于可恢复密文计数 / @Public 边界 + no-store / source 枚举化 / kid 与 keyId 语义分离 + 目标语义与状态机补全）
 - 日期：2026-10-16
 - 关联：ADR-0023（双 Key Ring；其决策 4 冻结的「稳定 kid 留 M11.5」与本 ADR 交付）、ADR-0021（grace 级清理 = 退役判据的计算基础）、M3 TC-AUTH-014、M10 E-10（audit-archive 先例）、M11.3（audit security 事件）
 
@@ -112,38 +112,38 @@ Replacement cipher
 ## Definition of Done（M11.5 封板清单）
 
 **M11.5-01 Stable JWT kid**
-- [ ] 新 JWT 全部携带 stable kid（`'jwt-' + sha256(secret)[0:16]`）
-- [ ] 同 secret → 跨实例/重启 kid 相同
-- [ ] 不同 secret → kid 通常不同
-- [ ] Ring 内 kid collision → startup fail
-- [ ] legacy jwt-current / jwt-prev 可验证（dual-try 兼容）
-- [ ] 无 kid token 可验证
+- [x] 新 JWT 全部携带 stable kid（`'jwt-' + sha256(secret)[0:16]`）
+- [x] 同 secret → 跨实例/重启 kid 相同
+- [x] 不同 secret → kid 通常不同
+- [x] Ring 内 kid collision → startup fail
+- [x] legacy jwt-current / jwt-prev 可验证（dual-try 兼容）
+- [x] 无 kid token 可验证
 
 **M11.5-02 kid routing**
-- [ ] known kid 只使用对应 key
-- [ ] unknown kid 不 fallback（用 current 密钥签发但 kid=unknown 的 token → verify 必须 reject）
-- [ ] unknown kid 不遍历 Ring
-- [ ] known kid verification failure 不 fallback 到其它 key
+- [x] known kid 只使用对应 key
+- [x] unknown kid 不 fallback（用 current 密钥签发但 kid=unknown 的 token → verify 必须 reject）
+- [x] unknown kid 不遍历 Ring
+- [x] known kid verification failure 不 fallback 到其它 key
 
 **M11.5-03 Key Ring endpoint**
-- [ ] endpoint 可访问（@Public 自检先例 + Cache-Control: no-store）
-- [ ] 不返回 secret / secret hash / cipher / token / 原始配置值
-- [ ] replacement key 的 activeReplacementCipherCount 正确（判据含 cipher IS NOT NULL）
-- [ ] retirable 与 ADR-0023 判据一致
-- [ ] source 枚举化（KeySource 四值）
-- [ ] Memory / Prisma SQLite / PostgreSQL / MySQL 行为一致
+- [x] endpoint 可访问（@Public 自检先例 + Cache-Control: no-store）
+- [x] 不返回 secret / secret hash / cipher / token / 原始配置值
+- [x] replacement key 的 activeReplacementCipherCount 正确（判据含 cipher IS NOT NULL）
+- [x] retirable 与 ADR-0023 判据一致
+- [x] source 枚举化（KeySource 四值）
+- [x] Memory / Prisma SQLite / PostgreSQL / MySQL 行为一致
 
 **M11.5-04 Audit**
-- [ ] replay → action=security（M11.3 已实现，回归锁定）
-- [ ] fingerprint mismatch → action=security（同上）
-- [ ] family revoke 可关联（targetType=refresh_family + targetId）
-- [ ] admin audit 查询可以过滤 security
+- [x] replay → action=security（M11.3 已实现，回归锁定）
+- [x] fingerprint mismatch → action=security（同上）
+- [x] family revoke 可关联（targetType=refresh_family + targetId）
+- [x] admin audit 查询可以过滤 security
 
 **M11.5-05 Regression**
-- [ ] M11.0a baseline PASS
-- [ ] M11.1 CAS PASS
-- [ ] M11.2 lifecycle PASS
-- [ ] M11.3 fingerprint PASS
-- [ ] M11.4 key ring PASS
-- [ ] M11.5 kid PASS
-- [ ] 三件套回归 + CI 全绿（rotation 核心红线验证）
+- [x] M11.0a baseline PASS
+- [x] M11.1 CAS PASS
+- [x] M11.2 lifecycle PASS
+- [x] M11.3 fingerprint PASS
+- [x] M11.4 key ring PASS
+- [x] M11.5 kid PASS
+- [x] 三件套回归 + CI 全绿（rotation 核心红线验证）

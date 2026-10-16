@@ -16,6 +16,10 @@
 
 ## [Unreleased]
 
+### Added（M11.5 · Key Ring 可观测性，ADR-0024）
+
+- **ADR-0024 落地**：[docs/adr/0024-key-observability.md](./docs/adr/0024-key-observability.md)——兑现 ADR-0023 决策 4 冻结项。核心：① **稳定 kid**：`'jwt-' + sha256(secret)[0:16]`（64 bit，同 secret 跨部署/实例/重启稳定；同 Ring 内 kid collision 启动即失败；sign 全量携带）；② **verify kid 四分支路由**：absent / legacy 角色标识（jwt-current/jwt-prev）→ dual-try 兼容、known stable kid → 精确单 key、**unknown kid → 直接拒绝不尝试任何 Ring key**（测试锁死：current 可验但 kid=unknown 的 token 必须 reject）；③ **Key Ring 运维端点** `GET /api/v1/auth-maintenance/key-ring`（沿 @Public 自检先例 + `Cache-Control: no-store`）：JWT Ring 稳定 kid + Replacement Ring 各 keyId 的 activeReplacementCipherCount 与 **retirable 判据**（基于「仍存在可恢复密文」计数，cipher 已清空的历史行不计入），source 枚举化（KeySource 四值）；`AuthStore.countReplacementCiphersByKeyId` 三实现；④ 安全事件审计口径文档化（action=security 复用既有审计面）。**不做**：rotation 核心/grace 状态机零改动（红线）、无前端新页面、无轮换自动化、无 KMS。回归：auth **210/210**（含 L8 9 条）、example-api **108/108**、config 16/16。**M11 系列五个阶段全部完成**。
+
 ### Added（M11.4 · 双 Key Ring，ADR-0023）
 
 - **ADR-0023 落地**：[docs/adr/0023-key-ring.md](./docs/adr/0023-key-ring.md)——解 ADR-0020 登记的 JWT_SECRET 轮换误杀 prerequisite。核心：① 统一 KeyRing 抽象（`key-ring.ts`：ReplacementKeyRing + JwtKeyRing，密钥材料仍封 TokenService，rotation 核心零改动）；② **Rule 6 路由优先级**（禁全 Ring brute-force）：显式命中仅试该 key 失败即 fail closed / legacy `replacement-v1` 且 Ring 不含 → HKDF(current)→HKDF(prev) 回退链 / 未知 keyId fail closed；③ 新配置键 `AUTH_REPLACEMENT_KEYS`（`<keyId>:<secret>` 列表，解析规则冻结：keyId 禁 `:`/`|`、secret 禁 `|` 且 ≥32 UTF-8 bytes、空 entry/重复 keyId 启动即失败；Ring 密钥经 HKDF 派生到 32 字节）；④ **代际回退验收**：轮换部署（OLD→NEW+PREV）下 legacy 密文 grace 内恢复原 B 不触发族撤销（真库用例 + 跨代显式 Ring 场景），反向回退全失败仍 fail closed；⑤ JWT kid：sign 带 `jwt-current`（角色路由标识，稳定 kid 留 M11.5），verify kid 路由 + 无 kid 存量双试兼容；⑥ 退役窗口规则文档化（retire ≥ max(grace, 调度周期)+重叠期，判据 = keyId 名下未过期 cipher 行数为 0，M11.2 清理衔接）。红线验证：rotation 核心（baseline/L5/L6/集成 spec/CAS 收敛事务体）零改动全绿。回归：auth **199/199**（含 L7 17 条）、example-api **108/108**、config 16/16。
