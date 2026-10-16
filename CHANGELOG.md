@@ -16,6 +16,13 @@
 
 ## [Unreleased]
 
+### Added（M11.1 · Refresh Token Rotation CAS，Commit 1）
+
+- **ADR-0020 立项并落地 Commit 1（Memory 侧垂直切片）**：[docs/adr/0020-refresh-token-rotation-cas.md](./docs/adr/0020-refresh-token-rotation-cas.md)——M11.0a baseline（5 failed 实测）钉死的「N × A ⇒ N × replacement」并发 race 修为存储层 CAS 三态裁决（`rotated / already_rotated / replay_detected`）：grace 内重试解密返回**同一个**已持久化 replacement（AES-256-GCM 密文存于 A 行，HKDF 从 JWT_SECRET 域分离派生密钥，明文永不落库），grace 外/族死/B 已失效一律 fail closed（族撤销 + 3001），Security Invariant 禁止从已轮换的 A 再生成第二个 replacement。含 8 条锁死规则 + 时间基准（单次 rotation 单一 `now`）+ DoD 清单（编号 0017–0019 已由 PRD-011 预留故跳号）。`AuthStore` 新增 `rotateRefreshToken?`（Commit 2 定稿必选，Prisma 实现前服务层走 legacy 兼容路径）；`RefreshTokenRecord` 扩 4 列（`replacedById / replacementCipher / replacementKeyId / replacementExpiresAt`，schema/migration 随 Commit 2）。基线测试 `refresh-token.m11-0a-baseline.test.ts` **10/10 全绿**（5 failed → 10 passed，断言零改动）；TC-AUTH-008 断言按新语义翻转（宽限复用返回同 token）；auth 155/155、example-api 97/97。
+- **M11.1 Commit 2（Prisma 侧，ADR-0020 收口）**：`refresh_tokens` 加 4 列（`replaced_by_id / replacement_cipher / replacement_key_id / replacement_expires_at`，全 nullable 保旧代码兼容，回滚 = 旧版本直接跑新库）+ `idx_rt_replaced_by` 索引；migration `20261016140000_add_refresh_replacement` 三份同构（example-api SQLite / example-api PG 变体 / admin 模板 SQLite）。`PrismaAuthStore.rotateRefreshToken`（example-api + 模板双份）：交互式事务内 CAS `updateMany`（谓词含未撤销+未软删+未过期，ADR-0020 Rule 2）+ 插入 B + 回填 `replacedById` 原子提交；CAS 失败抛哨兵回滚后**事务外**判定性重读（Rule 4，MySQL REPEATABLE READ 快照陷阱防呆）。`AuthStore.rotateRefreshToken` 转必选方法，服务层 legacy 路径已删除。SQLite 端到端实测 5/5：rotated 语义/并发 10 ⇒ exactly 1 replacement/族死 fail closed/grace 过期 replay/DB 无明文（`token_hash` 保持 hash-only、密文 5 段格式）。
+- **M11.1 Commit 3（L2/L3/L4 测试分层落地，ADR-0020 DoD 本地项全勾）**：L2 内存并发回归（`packages/auth/__tests__/refresh-token.m11-concurrency.test.ts`，2/10/100 并发 exactly 1 + grace 重试同一 B）；L4 故障注入（`refresh-token.m11-fault.test.ts`，Case B–F：密文损坏/keyId 失配/grace 过期/B 已消费后 A replay 全部 fail closed 族撤销、A 过期仅拒绝 3003 无副作用；注入点在 store↔service 边界模拟位腐与密钥失配）；L3 Prisma 真库集成（`apps/example-api/src/modules/auth/refresh-rotation.integration.spec.ts`，独立临时 SQLite + beforeAll migrate deploy：存储层 CAS 三态 + **Case A 唯一约束注入 INSERT B 失败 ⇒ 事务回滚 A 保持 active 可重新轮换** + 服务层 10 并发 exactly 1 + Case C 直接改库模拟位腐 + Case E）。配套：`@fw/db` `PrismaClientLike.$transaction` 选项补 `maxWait/timeout`（Prisma 交互式事务 2s/5s 默认在 SQLite 单写者排队场景不足，store 显式放宽 5s/15s）；SQLite 本地并发容量实测稳定上限 10（exactly-100 归 CI MySQL/PG 矩阵）。DoD 15/16 项已勾，剩 PostgreSQL/MySQL 集成、双实例、CI green 三项待推送后 CI 验证。全量回归：auth **164/164**、db 83+12skip、example-api **104/104**。
+
+
 ## [0.5.5] - 2026-10-16
 
 ### Added（文档：PRD-011 SaaS 运营能力与生态扩展，2026-10-17）

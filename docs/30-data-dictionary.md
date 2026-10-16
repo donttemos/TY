@@ -141,6 +141,10 @@ erDiagram
         datetime expire_at
         datetime revoked_at
         varchar login_ip
+        varchar replaced_by_id "replacement 记录 ID M11.1"
+        text replacement_cipher "AES-GCM 密文 grace 恢复 M11.1"
+        varchar replacement_key_id "密钥标识 M11.1"
+        datetime replacement_expires_at "密文可恢复期终点 M11.1"
     }
 ```
 
@@ -324,9 +328,16 @@ erDiagram
 | `revoked_at` | datetime(3) | 否 | NULL | 撤销时间（登出/轮换/踢下线） | — |
 | `login_ip` | varchar(45) | 否 | NULL | 登录 IP | — |
 | `user_agent` | varchar(255) | 否 | NULL | 客户端标识 | — |
+| `replaced_by_id` | varchar(36) | 否 | NULL | 本记录轮换出的 replacement 记录 ID（M11.1，ADR-0020） | `idx_rt_replaced_by` |
+| `replacement_cipher` | text | 否 | NULL | replacement 明文的 AES-256-GCM 密文 `v1:keyId:iv:ct:tag`（grace 恢复专用，明文永不落库；M11.1） | — |
+| `replacement_key_id` | varchar(64) | 否 | NULL | replacement 密钥标识（M11.1 单密钥 `replacement-v1`，M11.4 Key Ring 扩展） | — |
+| `replacement_expires_at` | datetime(3) | 否 | NULL | replacement 密文可恢复期终点（= 轮换时刻 + 宽限窗口，与 `revoked_at` 同一时间基准） | — |
 | 通用字段 | — | — | — | 同上 | — |
 
 > 清理策略：过期 30 天以上的记录由定时任务清理。
+> M11.1（ADR-0020）：轮换经存储层 CAS 原子裁决（`UPDATE ... WHERE revoked_at IS NULL AND deleted_at IS NULL AND expires_at > now`，
+> affectedRows===1 即赢家，同事务插入 replacement），并发/重试路径解密 `replacement_cipher` 返回同一个 B，绝不二次签发；
+> grace 外复用判定为泄漏并整族撤销。migration：`20261016140000_add_refresh_replacement`（SQLite/PG 双方言同构）。
 
 ### 3.10 `tenants` 租户（M8）
 
