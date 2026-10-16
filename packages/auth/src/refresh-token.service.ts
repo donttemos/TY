@@ -11,6 +11,9 @@
  * @modified 2026-10-13 donttemo 宽限通道增加「族仍存活」前置校验：整族撤销后旧令牌不得再借窗口换发
  * @modified 2026-10-16 donttemo M11.1（ADR-0020）：rotation 改为存储层 CAS 三态裁决 + grace 解密恢复
  *   + replay 副作用统一编排；Prisma/Memory 双实现均走 CAS 三态裁决（legacy 路径已移除）
+ * @modified 2026-10-16 donttemo M11.3（ADR-0022）：grace 重试绑定轮换赢家指纹——CAS 写入
+ *   rotated_fingerprint（同一 UPDATE），重试方指纹不匹配 → replay（安全事件，Rule 8 全链）；
+ *   IP 不参与指纹；NULL 仅存量/off 来源
  * @module @fw/auth
  */
 
@@ -67,6 +70,8 @@ export class RefreshTokenService {
     private readonly store: AuthStore,
     private readonly tokens: TokenService,
     private readonly graceSeconds: number = DEFAULT_REFRESH_GRACE_SECONDS,
+    /** 指纹绑定开关（ADR-0022，AUTH_FINGERPRINT）：off 时新轮换不写指纹且重试不比对 */
+    private readonly fingerprintEnabled: boolean = true,
   ) {}
 
   /**
@@ -93,6 +98,7 @@ export class RefreshTokenService {
       revokedAt: null,
       loginIp: ip,
       userAgent,
+      rotatedFingerprint: null,
       replacedById: null,
       replacementCipher: null,
       replacementKeyId: null,
@@ -148,6 +154,7 @@ export class RefreshTokenService {
       replacementRecoverableUntil: new Date(now.getTime() + this.graceSeconds * 1000),
       replacementLoginIp: ip,
       replacementUserAgent: userAgent,
+      fingerprint: this.fingerprintEnabled ? computeFingerprint(userAgent) : null,
       now,
     };
 
@@ -163,7 +170,7 @@ export class RefreshTokenService {
     }
 
     if (result.outcome === 'already_rotated') {
-      return this.recoverReplacement(record, result, now);
+      return this.recoverReplacement(record, result, ip, userAgent, now);
     }
 
     // replay_detected（存储层可判定的事实）
@@ -184,9 +191,24 @@ export class RefreshTokenService {
   private async recoverReplacement(
     record: RefreshTokenRecord,
     result: Extract<Awaited<ReturnType<typeof this.store.rotateRefreshToken>>, { outcome: 'already_rotated' }>,
+    ip: string | null,
+    userAgent: string | null,
     now: Date,
   ): Promise<RotationIssued> {
     const familyId = result.oldToken.familyId;
+
+    // 指纹比对（ADR-0022 决策 5/7）：A 行指纹非 NULL 且与重试方不一致 ⇒ replay（安全事件）。
+    // NULL 仅来自 M11.1 存量行或 off 模式 → 放行（存量迁移兼容，非常态旁路）。
+    const retryFingerprint = this.fingerprintEnabled ? computeFingerprint(userAgent) : null;
+    if (
+      result.fingerprint !== null &&
+      retryFingerprint !== null &&
+      retryFingerprint !== result.fingerprint
+    ) {
+      await this.handleReplay(familyId, record.userId, now, 'grace 重试客户端指纹不匹配', ip, userAgent);
+      throw new BizError(ErrorCode.UNAUTHORIZED, '刷新令牌已被使用，疑似泄漏，已终止全部会话，请重新登录');
+    }
+
     const graceOk = now.getTime() <= result.replacement.recoverableUntil.getTime();
     const familyAlive = graceOk
       ? await this.store.hasActiveRefreshTokenInFamily(familyId, now)
@@ -240,9 +262,37 @@ export class RefreshTokenService {
    * replay 副作用编排（ADR-0020 Rule 8）：整族撤销 + 用户全部 refresh 作废 + 告警日志。
    * 存储层保持纯持久化，业务副作用一律在本服务层。
    */
-  private async handleReplay(familyId: string, userId: ID, now: Date, detail: string): Promise<void> {
+  private async handleReplay(
+    familyId: string,
+    userId: ID,
+    now: Date,
+    detail: string,
+    ip: string | null = null,
+    userAgent: string | null = null,
+  ): Promise<void> {
     const revoked = await this.store.revokeRefreshFamily(familyId, now);
     const others = await this.store.revokeUserRefreshTokens(userId, now);
+    // ADR-0022 决策 7：replay / 指纹不匹配是安全事件，落审计（不阻塞主流程）
+    try {
+      await this.store.writeAuditLog({
+        userId,
+        module: 'auth',
+        action: 'security',
+        targetType: 'refresh_family',
+        targetId: familyId,
+        beforeValue: null,
+        afterValue: { detail },
+        ip,
+        userAgent,
+        traceId: null,
+        createdAt: now,
+      });
+    } catch (error) {
+      logger.warn('replay 安全事件审计落库失败（不阻塞主流程）', {
+        familyId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     logger.error('检测到 refresh 令牌复用，已终止该用户全部会话', {
       userId,
       familyId,
@@ -296,6 +346,22 @@ export class RefreshTokenService {
   async find(refreshToken: string): Promise<RefreshTokenRecord | null> {
     return this.store.findRefreshTokenByHash(hashToken(refreshToken));
   }
+}
+
+/**
+ * UA 规范化（ADR-0022 决策 3a：规则冻结，刻意最保守——仅去首尾空白，
+ * 不做去版本号/大小写/品牌归并等模糊规则，杜绝行为漂移）；null/undefined → ""。
+ */
+export function normalizeUserAgent(userAgent: string | null | undefined): string {
+  return (userAgent ?? '').trim();
+}
+
+/**
+ * 客户端指纹 = SHA-256(normalizeUserAgent(userAgent)) 十六进制串（IP 不参与）。
+ * 输出恒为非空字符串（null/空 UA 得到 SHA-256("") 的固定值）。
+ */
+export function computeFingerprint(userAgent: string | null | undefined): string {
+  return createHash('sha256').update(normalizeUserAgent(userAgent)).digest('hex');
 }
 
 /** 从 replacement 明文 JWT 中取出 jti（自有令牌，decode 不验签——验签在此前 rotate 入口已完成语义校验） */

@@ -139,6 +139,7 @@ export const envSchema = z.object({
   AUTH_LOCK_MINUTES: z.coerce.number().int().min(1).max(1440).default(15).describe('账号锁定时长（分钟）'),
   /** refresh 轮换并发宽限窗口（秒）：窗口内同一 refresh 并发使用不判泄漏（TC-AUTH-008） */
   AUTH_REFRESH_GRACE_SECONDS: z.coerce.number().int().min(0).max(120).default(10).describe('refresh 并发宽限窗口（秒）'),
+  AUTH_FINGERPRINT: z.enum(['on', 'off']).default('on').describe('refresh grace 指纹绑定开关（ADR-0022）：off 时新轮换不写指纹且重试不比对'),
   /** 密码强度策略 */
   AUTH_PASSWORD_POLICY: z.enum(AUTH_PASSWORD_POLICY_VALUES).default('medium').describe('密码强度策略'),
   /** 是否开放自助注册 */
@@ -345,6 +346,7 @@ export const ENV_KEY_PATHS = {
   AUTH_MAX_FAILED: 'auth.maxFailed',
   AUTH_LOCK_MINUTES: 'auth.lockMinutes',
   AUTH_REFRESH_GRACE_SECONDS: 'auth.refreshGraceSeconds',
+  AUTH_FINGERPRINT: 'auth.fingerprintEnabled',
   AUTH_PASSWORD_POLICY: 'auth.passwordPolicy',
   AUTH_ALLOW_REGISTER: 'auth.allowRegister',
   AUTH_API_KEYS: 'auth.apiKeys',

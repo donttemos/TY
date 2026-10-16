@@ -18,10 +18,13 @@
  *
  * @author donttemo
  * @created 2026-10-16
+ * @modified 2026-10-16 donttemo ADR-0022（M11.3）：BASELINE-009 翻转——异客户端 grace 重试
+ *   从「放行」改为 replay 判泄漏（UA 指纹不匹配），其余九条基线断言保持零改动
  * @module @fw/auth
  */
 
 import { describe, expect, it } from 'vitest';
+import { ErrorCode } from '@fw/core';
 import { createHarness } from './test-helpers.js';
 import { hashToken } from '../refresh-token.service.js';
 
@@ -317,38 +320,20 @@ describe('M11.0a RefreshToken rotation baseline', () => {
     const user = seedUser(h);
 
     const first = await h.refresh.issue(user.id, '1.1.1.1', 'client-A');
-
-    await h.refresh.rotate(first.refreshToken, '1.1.1.1', 'client-A');
-
-    /*
-     * 当前 RefreshTokenService 的公开接口只有 ip + userAgent，
-     * 还没有真正的 clientId/deviceId fingerprint contract。
-     *
-     * 因此这里明确记录 M11 目标：
-     * 不同客户端身份不能共享 A 的 grace replacement。
-     *
-     * 当前版本暂不把这个断言写成可通过的 production contract，
-     * 避免 baseline 在 fingerprint contract 尚不存在时伪造成功。
-     */
-    const differentClient = await h.refresh.rotate(
-      first.refreshToken,
-      '2.2.2.2',
-      'client-B',
-    );
+    const rotated = await h.refresh.rotate(first.refreshToken, '1.1.1.1', 'client-A');
 
     /*
-     * 这是一个 baseline observation：
-     * 当前实现很可能仍然走 grace，而不是 replay。
-     *
-     * M11 完成后这里应该改成：
-     *
-     *   expect(...).rejects.toMatchObject({
-     *     code: ErrorCode.UNAUTHORIZED,
-     *   })
-     *
-     * 并触发 family/session revoke。
+     * @modified 2026-10-16 ADR-0022（M11.3）：本条从 baseline observation 翻转为
+     * production contract——异客户端 grace 重试按 UA 指纹不匹配判 replay，
+     * 走 ADR-0020 Rule 8 全链（族撤销 + 3001），绝不返回 B。
      */
-    expect(differentClient.outcome.withinGrace).toBe(true);
+    await expect(
+      h.refresh.rotate(first.refreshToken, '2.2.2.2', 'client-B'),
+    ).rejects.toMatchObject({ code: ErrorCode.UNAUTHORIZED });
+
+    // replay 副作用：族撤销波及 B
+    const bRecord = await h.refresh.find(rotated.refreshToken);
+    expect(bRecord?.revokedAt).not.toBeNull();
   });
 
   it('BASELINE-010：refresh record 必须保持 hash-only，baseline 不允许明文 token 字段', async () => {

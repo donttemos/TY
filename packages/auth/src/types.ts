@@ -112,10 +112,16 @@ export interface RefreshTokenRecord {
   replacementKeyId: string | null;
   /** replacement 密文可恢复期终点（= 轮换时刻 + grace，ADR-0020 时间基准；未轮换为 null） */
   replacementExpiresAt: Date | null;
+  /**
+   * 轮换赢家指纹（ADR-0022：SHA-256(normalizeUserAgent(userAgent))，IP 不参与）。
+   * grace 重试时比对重试方指纹，不匹配 → replay（安全事件）；
+   * NULL 仅来自 M11.1 存量行或 AUTH_FINGERPRINT=off（决策 3：新 rotation 产生 NULL 即缺陷）。
+   */
+  rotatedFingerprint: string | null;
 }
 
 /** 审计动作 */
-export type AuditAction = 'create' | 'update' | 'delete' | 'login' | 'logout' | 'export' | 'grant';
+export type AuditAction = 'create' | 'update' | 'delete' | 'login' | 'logout' | 'export' | 'grant' | 'security';
 
 /** 审计日志记录（数据字典 §3.13） */
 export interface AuditLogRecord {
@@ -272,6 +278,8 @@ export interface AuthOptions {
   lockMinutes: number;
   /** refresh 并发宽限窗口（秒，AUTH_REFRESH_GRACE_SECONDS） */
   refreshGraceSeconds: number;
+  /** 客户端指纹绑定开关（AUTH_FINGERPRINT，ADR-0022）：grace 重试比对轮换赢家指纹，不匹配判泄漏 */
+  fingerprintEnabled: boolean;
   /** 密码强度策略（AUTH_PASSWORD_POLICY） */
   passwordPolicy: PasswordPolicy;
   /** 是否开放自助注册（AUTH_ALLOW_REGISTER） */

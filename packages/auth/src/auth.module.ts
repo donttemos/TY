@@ -64,6 +64,8 @@ export interface AuthEnvLike {
   AUTH_MAX_FAILED?: number;
   AUTH_LOCK_MINUTES?: number;
   AUTH_REFRESH_GRACE_SECONDS?: number;
+  /** grace 指纹绑定开关（ADR-0022）：on（默认）/ off */
+  AUTH_FINGERPRINT?: string;
   AUTH_PASSWORD_POLICY?: PasswordPolicy;
   AUTH_ALLOW_REGISTER?: boolean;
   JWT_SECRET?: string;
@@ -125,6 +127,7 @@ export function buildAuthOptions(env: AuthEnvLike, overrides: Partial<AuthOption
     maxFailed: overrides.maxFailed ?? env.AUTH_MAX_FAILED ?? DEFAULT_MAX_FAILED,
     lockMinutes: overrides.lockMinutes ?? env.AUTH_LOCK_MINUTES ?? DEFAULT_LOCK_MINUTES,
     refreshGraceSeconds: overrides.refreshGraceSeconds ?? env.AUTH_REFRESH_GRACE_SECONDS ?? DEFAULT_REFRESH_GRACE_SECONDS,
+    fingerprintEnabled: overrides.fingerprintEnabled ?? (env.AUTH_FINGERPRINT ?? 'on') !== 'off',
     passwordPolicy: overrides.passwordPolicy ?? env.AUTH_PASSWORD_POLICY ?? DEFAULT_PASSWORD_POLICY,
     allowRegister: overrides.allowRegister ?? env.AUTH_ALLOW_REGISTER ?? false,
     jwtSecret,
@@ -192,7 +195,7 @@ export class AuthModule {
       {
         provide: RefreshTokenService,
         useFactory: (store: AuthStore, tokens: TokenService, config: AuthOptions) =>
-          new RefreshTokenService(store, tokens, config.refreshGraceSeconds),
+          new RefreshTokenService(store, tokens, config.refreshGraceSeconds, config.fingerprintEnabled),
         inject: [AUTH_STORE, TokenService, AUTH_OPTIONS],
       },
       {

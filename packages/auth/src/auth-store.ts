@@ -53,6 +53,11 @@ export interface RotateRefreshTokenInput {
   replacementLoginIp: string | null;
   /** replacement 记录的客户端标识（赢家请求上下文） */
   replacementUserAgent: string | null;
+  /**
+   * 赢家指纹（ADR-0022：SHA-256(normalizeUserAgent(ua))，服务层算好传入；IP 不参与）。
+   * 与 rotation 同一 UPDATE 原子写入（禁止二次补写）；开关关闭时为 null。
+   */
+  fingerprint: string | null;
   /** CAS 谓词用当前时间（expires_at > now） */
   now: Date;
 }
@@ -75,6 +80,8 @@ export type RefreshRotationResult =
       outcome: 'already_rotated';
       oldToken: { revokedAt: Date; familyId: string };
       replacement: { cipher: string; keyId: string; recoverableUntil: Date };
+      /** A 行赢家指纹（ADR-0022）：服务层比对重试方指纹；NULL = 存量行/off 模式 → 放行 */
+      fingerprint: string | null;
     }
   | { outcome: 'replay_detected'; reason: 'not_found' | 'expired' | 'no_replacement' };
 

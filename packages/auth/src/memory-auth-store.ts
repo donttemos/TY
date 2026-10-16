@@ -370,6 +370,7 @@ export class MemoryAuthStore implements AuthStore {
           keyId: old.replacementKeyId,
           recoverableUntil: old.replacementExpiresAt,
         },
+        fingerprint: old.rotatedFingerprint ?? null,
       };
     }
     // CAS 赢家：更新 A + 写入 B 必须在同一同步临界段内完成（中间不得出现 await）
@@ -382,6 +383,7 @@ export class MemoryAuthStore implements AuthStore {
       revokedAt: null,
       loginIp: input.replacementLoginIp,
       userAgent: input.replacementUserAgent,
+      rotatedFingerprint: input.fingerprint,
       replacedById: null,
       replacementCipher: null,
       replacementKeyId: null,
@@ -394,6 +396,7 @@ export class MemoryAuthStore implements AuthStore {
       replacementCipher: input.replacementCipher,
       replacementKeyId: input.replacementKeyId,
       replacementExpiresAt: input.replacementRecoverableUntil,
+      rotatedFingerprint: input.fingerprint,
     });
     this.refreshTokens.set(replacement.id, replacement);
     return { outcome: 'rotated', replacementId: replacement.id };
