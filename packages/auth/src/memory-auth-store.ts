@@ -410,6 +410,28 @@ export class MemoryAuthStore implements AuthStore {
     return removed;
   }
 
+  /**
+   * replacement 密文 grace 级清空（ADR-0021 决策 1/2）。
+   * 判据 = replacementExpiresAt < now（唯一判据，脏数据同样回收）；
+   * 幂等 = 三列已全 NULL 的行不计入；同步临界段遍历（无 await）。
+   */
+  async clearExpiredReplacementCiphers(now: Date): Promise<number> {
+    let cleared = 0;
+    for (const [id, record] of this.refreshTokens) {
+      const hasMaterial = record.replacementCipher !== null || record.replacementKeyId !== null;
+      if (record.replacementExpiresAt !== null && record.replacementExpiresAt < now && hasMaterial) {
+        this.refreshTokens.set(id, {
+          ...record,
+          replacementCipher: null,
+          replacementKeyId: null,
+          replacementExpiresAt: null,
+        });
+        cleared += 1;
+      }
+    }
+    return cleared;
+  }
+
   // ---------- 审计 ----------
 
   async writeAuditLog(record: NewAuditLog): Promise<void> {

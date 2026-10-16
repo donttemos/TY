@@ -147,6 +147,14 @@ export interface AuthStore {
   rotateRefreshToken(input: RotateRefreshTokenInput): Promise<RefreshRotationResult>;
   /** 清理过期记录（保留期由定时任务决定），返回清理条数 */
   purgeExpiredRefreshTokens(before: Date): Promise<number>;
+  /**
+   * replacement 密文 grace 级清空（ADR-0021 决策 1）：
+   * `replacement_expires_at < now` 且三列未全 NULL 的行，三列统一置 NULL——
+   * `replacement_expires_at` 是唯一判据（部分写入/脏数据同样回收）；
+   * `NOT (cipher IS NULL AND keyId IS NULL)` 仅保证幂等（重复执行 count = 0）；
+   * 保留 revokedAt / replacedById（历史链），返回清空条数。
+   */
+  clearExpiredReplacementCiphers(now: Date): Promise<number>;
 
   // ---------- 审计 ----------
 

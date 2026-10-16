@@ -280,6 +280,16 @@ export class RefreshTokenService {
   }
 
   /**
+   * replacement 密文 grace 级清空（ADR-0021 决策 4：编排门面）。
+   * 清库动作全部在 Store（纯持久化）；本方法只承担编排语义（供 cleanup cron 调用）。
+   * @param now 清理判据时间（默认当前时间；判据 = replacement_expires_at < now）
+   * @returns 清空条数
+   */
+  async cleanupReplacements(now: Date = new Date()): Promise<number> {
+    return this.store.clearExpiredReplacementCiphers(now);
+  }
+
+  /**
    * 查询令牌记录（测试与排障用）
    * @param refreshToken 明文
    */
