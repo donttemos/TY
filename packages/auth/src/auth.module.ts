@@ -55,6 +55,7 @@ import { TokenService } from './token.service.js';
 import { TokenBlacklist } from './token-blacklist.js';
 import { AUTH_CACHE, AUTH_OAUTH2_FLOW, AUTH_OAUTH2_HANDLERS, AUTH_OPTIONS, AUTH_SESSION_STORE, AUTH_STORE, AUTH_STRATEGY_REGISTRY } from './tokens.js';
 import type { AuthOptions, AuthStrategyName, PasswordPolicy } from './types.js';
+import { parseReplacementKeys } from './key-ring.js';
 
 /** 环境变量结构子集（真实 Env 天然满足；测试可传桩对象） */
 export interface AuthEnvLike {
@@ -66,6 +67,8 @@ export interface AuthEnvLike {
   AUTH_REFRESH_GRACE_SECONDS?: number;
   /** grace 指纹绑定开关（ADR-0022）：on（默认）/ off */
   AUTH_FINGERPRINT?: string;
+  /** Replacement 密钥环显式条目（ADR-0023）：<keyId>:<secret> 列表，| 分隔；空 = legacy HKDF 派生 */
+  AUTH_REPLACEMENT_KEYS?: string;
   AUTH_PASSWORD_POLICY?: PasswordPolicy;
   AUTH_ALLOW_REGISTER?: boolean;
   JWT_SECRET?: string;
@@ -128,6 +131,7 @@ export function buildAuthOptions(env: AuthEnvLike, overrides: Partial<AuthOption
     lockMinutes: overrides.lockMinutes ?? env.AUTH_LOCK_MINUTES ?? DEFAULT_LOCK_MINUTES,
     refreshGraceSeconds: overrides.refreshGraceSeconds ?? env.AUTH_REFRESH_GRACE_SECONDS ?? DEFAULT_REFRESH_GRACE_SECONDS,
     fingerprintEnabled: overrides.fingerprintEnabled ?? (env.AUTH_FINGERPRINT ?? 'on') !== 'off',
+    replacementKeys: overrides.replacementKeys ?? parseReplacementKeys(env.AUTH_REPLACEMENT_KEYS),
     passwordPolicy: overrides.passwordPolicy ?? env.AUTH_PASSWORD_POLICY ?? DEFAULT_PASSWORD_POLICY,
     allowRegister: overrides.allowRegister ?? env.AUTH_ALLOW_REGISTER ?? false,
     jwtSecret,

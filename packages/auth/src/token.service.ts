@@ -10,7 +10,15 @@
  */
 
 import { createCipheriv, createDecipheriv, hkdfSync, randomBytes, randomUUID } from 'node:crypto';
-import { SignJWT, errors as joseErrors, jwtVerify, type JWTPayload } from 'jose';
+import { SignJWT, decodeProtectedHeader, errors as joseErrors, jwtVerify, type JWTPayload } from 'jose';
+import {
+  JwtKeyRing,
+  JWT_CURRENT_KID,
+  JWT_PREVIOUS_KID,
+  KeyRingEntry,
+  REPLACEMENT_HKDF_SALT,
+  ReplacementKeyRing,
+} from './key-ring.js';
 import { JWT_ALG, JWT_ISSUER } from './constants.js';
 import type { AuthRole, TokenPair, TokenType } from './types.js';
 
@@ -24,7 +32,7 @@ const REPLACEMENT_CIPHER_VERSION = 'v1';
 export const REPLACEMENT_KEY_ID = 'replacement-v1';
 
 /** HKDF salt：把 JWT 签名密钥域分离出独立的 replacement 加密密钥域 */
-const REPLACEMENT_HKDF_SALT = 'fw/auth/replacement/v1';
+// HKDF salt 已统一移至 key-ring.ts 导出（ADR-0023：Ring 与 legacy 派生共用同一域分离 salt）
 
 /** access token 载荷 */
 export interface AccessClaims extends JWTPayload {
@@ -68,6 +76,8 @@ export interface TokenServiceOptions {
   accessTtlSeconds: number;
   /** refresh 有效期（秒） */
   refreshTtlSeconds: number;
+  /** Replacement 密钥环显式条目（ADR-0023）；未配置 → legacy HKDF(JWT_SECRET) 单代派生 */
+  replacementKeys?: KeyRingEntry[];
 }
 
 /** 签发结果 */
@@ -88,6 +98,12 @@ export class TokenService {
   private readonly prevKey?: Uint8Array;
   /** replacement 加密密钥（AES-256-GCM，32 字节；HKDF 从 jwtSecret 域分离派生，ADR-0020） */
   private readonly replacementKey: Buffer;
+  /** legacy 代际的 prev 派生密钥（JWT_SECRET_PREV 存在时启用，ADR-0023 回退链第二跳） */
+  private readonly replacementPrevKey: Buffer | null;
+  /** 显式 Replacement Ring（AUTH_REPLACEMENT_KEYS）；null = legacy HKDF 单代模式 */
+  private readonly replacementRing: ReplacementKeyRing | null;
+  /** JWT Ring（current/previous 角色路由，kid 语义见 ADR-0023 决策 4） */
+  private readonly jwtRing: JwtKeyRing;
 
   /**
    * @param options 密钥与有效期
@@ -105,6 +121,14 @@ export class TokenService {
     this.replacementKey = Buffer.from(
       hkdfSync('sha256', options.secret, REPLACEMENT_HKDF_SALT, REPLACEMENT_KEY_ID, 32),
     );
+    this.replacementPrevKey = options.secretPrev
+      ? Buffer.from(hkdfSync('sha256', options.secretPrev, REPLACEMENT_HKDF_SALT, REPLACEMENT_KEY_ID, 32))
+      : null;
+    this.replacementRing =
+      options.replacementKeys && options.replacementKeys.length > 0
+        ? new ReplacementKeyRing(options.replacementKeys)
+        : null;
+    this.jwtRing = new JwtKeyRing(options.secret, options.secretPrev);
   }
 
   /** 当前 access 有效期（秒） */
@@ -132,7 +156,7 @@ export class TokenService {
       typ: 'access' satisfies TokenType,
       ...(familyId ? { fam: familyId } : {}),
     })
-      .setProtectedHeader({ alg: JWT_ALG })
+      .setProtectedHeader({ alg: JWT_ALG, kid: JWT_CURRENT_KID })
       .setIssuer(JWT_ISSUER)
       .setSubject(user.id)
       .setJti(jti)
@@ -152,7 +176,7 @@ export class TokenService {
   async signRefresh(userId: string, familyId: string, jti: string = randomUUID()): Promise<IssuedToken> {
     const exp = Math.floor(Date.now() / 1000) + this.options.refreshTtlSeconds;
     const token = await new SignJWT({ typ: 'refresh' satisfies TokenType, fam: familyId })
-      .setProtectedHeader({ alg: JWT_ALG })
+      .setProtectedHeader({ alg: JWT_ALG, kid: JWT_CURRENT_KID })
       .setIssuer(JWT_ISSUER)
       .setSubject(userId)
       .setJti(jti)
@@ -172,22 +196,30 @@ export class TokenService {
     if (!token || typeof token !== 'string') {
       throw new TokenVerifyError('missing', '令牌缺失');
     }
-    try {
-      const { payload } = await jwtVerify(token, this.key, { algorithms: [JWT_ALG], issuer: JWT_ISSUER });
-      return { claims: payload as AccessClaims | RefreshClaims, usedPrevSecret: false };
-    } catch (error) {
-      if (this.isExpired(error)) throw new TokenVerifyError('expired', '令牌已过期');
-      if (this.prevKey) {
-        try {
-          const { payload } = await jwtVerify(token, this.prevKey, { algorithms: [JWT_ALG], issuer: JWT_ISSUER });
-          return { claims: payload as AccessClaims | RefreshClaims, usedPrevSecret: true };
-        } catch (prevError) {
-          if (this.isExpired(prevError)) throw new TokenVerifyError('expired', '令牌已过期');
-          throw new TokenVerifyError('invalid', '令牌无效');
-        }
+    // kid 路由（ADR-0023 决策 4）：kid 指向 previous 时先试 prev；其余（含无 kid 存量）维持 current→prev 双试。
+    // kid 仅是角色路由提示，正确性由双试兜底保证（已知限制见 ADR-0023 决策 4）。
+    const kid = decodeProtectedHeader(token).kid;
+    const preferPrev = kid === JWT_PREVIOUS_KID && this.prevKey;
+    const attempts: Array<{ key: Uint8Array; prev: boolean }> = preferPrev
+      ? [
+          { key: this.prevKey!, prev: true },
+          { key: this.key, prev: false },
+        ]
+      : [
+          { key: this.key, prev: false },
+          ...(this.prevKey ? [{ key: this.prevKey, prev: true }] : []),
+        ];
+    let lastError: unknown;
+    for (const attempt of attempts) {
+      try {
+        const { payload } = await jwtVerify(token, attempt.key, { algorithms: [JWT_ALG], issuer: JWT_ISSUER });
+        return { claims: payload as AccessClaims | RefreshClaims, usedPrevSecret: attempt.prev };
+      } catch (error) {
+        if (this.isExpired(error)) throw new TokenVerifyError('expired', '令牌已过期');
+        lastError = error;
       }
-      throw new TokenVerifyError('invalid', '令牌无效');
     }
+    throw new TokenVerifyError('invalid', '令牌无效');
   }
 
   /**
@@ -235,13 +267,18 @@ export class TokenService {
    */
   encryptReplacement(plaintext: string): { cipher: string; keyId: string } {
     const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', this.replacementKey, iv);
+    // Ring 显式配置 → 用 Ring.current；未配置 → legacy HKDF(current)（keyId 恒 replacement-v1）
+    const keyId = this.replacementRing ? this.replacementRing.currentKeyId : REPLACEMENT_KEY_ID;
+    const key = this.replacementRing
+      ? (this.replacementRing.keyFor(keyId) as Buffer)
+      : this.replacementKey;
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
     const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
     const tag = cipher.getAuthTag();
     const b64u = (buffer: Buffer) => buffer.toString('base64url');
     return {
-      cipher: `${REPLACEMENT_CIPHER_VERSION}:${REPLACEMENT_KEY_ID}:${b64u(iv)}:${b64u(encrypted)}:${b64u(tag)}`,
-      keyId: REPLACEMENT_KEY_ID,
+      cipher: `${REPLACEMENT_CIPHER_VERSION}:${keyId}:${b64u(iv)}:${b64u(encrypted)}:${b64u(tag)}`,
+      keyId,
     };
   }
 
@@ -255,15 +292,36 @@ export class TokenService {
    *   并触发族撤销，绝不能从 A 生成第二个 replacement（Security Invariant）
    */
   decryptReplacement(cipher: string, keyId: string): string {
-    if (keyId !== REPLACEMENT_KEY_ID) {
-      throw new Error(`未知的 replacement 密钥标识: ${keyId}`);
+    // Rule 6（ADR-0023）：严格 keyId 路由，禁止全 Ring brute-force——
+    // ① 显式命中：仅试该 key，失败即 fail closed；
+    // ② legacy replacement-v1 且 Ring 不含该 ID → HKDF(current) → HKDF(prev) 回退链；
+    // ③ 其它 → fail closed。
+    if (this.replacementRing?.has(keyId)) {
+      const key = this.replacementRing.keyFor(keyId) as Buffer;
+      return this.decryptWithKey(cipher, keyId, key);
     }
+    if (keyId === REPLACEMENT_KEY_ID) {
+      // legacy 回退链：current → prev（轮换部署下旧实例密文由 HKDF(OLD) 加密）
+      try {
+        return this.decryptWithKey(cipher, keyId, this.replacementKey);
+      } catch (error) {
+        if (this.replacementPrevKey) {
+          return this.decryptWithKey(cipher, keyId, this.replacementPrevKey);
+        }
+        throw error;
+      }
+    }
+    throw new Error(`未知的 replacement 密钥标识: ${keyId}`);
+  }
+
+  /** 按指定密钥解密单条密文（格式校验 + GCM 认证；失败抛错由路由层决定 fail closed） */
+  private decryptWithKey(cipher: string, keyId: string, key: Buffer): string {
     const parts = cipher.split(':');
     if (parts.length !== 5 || parts[0] !== REPLACEMENT_CIPHER_VERSION || parts[1] !== keyId) {
       throw new Error('replacement 密文格式非法');
     }
     const [, , ivPart, dataPart, tagPart] = parts;
-    const decipher = createDecipheriv('aes-256-gcm', this.replacementKey, Buffer.from(ivPart, 'base64url'));
+    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivPart, 'base64url'));
     decipher.setAuthTag(Buffer.from(tagPart, 'base64url'));
     return Buffer.concat([decipher.update(Buffer.from(dataPart, 'base64url')), decipher.final()]).toString('utf8');
   }

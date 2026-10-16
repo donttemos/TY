@@ -11,6 +11,7 @@
  */
 
 import type { PageResult, Sort } from '@fw/db';
+import type { KeyRingEntry } from './key-ring.js';
 
 /** 主键类型（框架统一字符串主键，与 M2 UUID 约定一致） */
 export type ID = string;
@@ -280,6 +281,8 @@ export interface AuthOptions {
   refreshGraceSeconds: number;
   /** 客户端指纹绑定开关（AUTH_FINGERPRINT，ADR-0022）：grace 重试比对轮换赢家指纹，不匹配判泄漏 */
   fingerprintEnabled: boolean;
+  /** Replacement 密钥环显式条目（AUTH_REPLACEMENT_KEYS，ADR-0023）；未配置回退 legacy HKDF 派生 */
+  replacementKeys?: KeyRingEntry[];
   /** 密码强度策略（AUTH_PASSWORD_POLICY） */
   passwordPolicy: PasswordPolicy;
   /** 是否开放自助注册（AUTH_ALLOW_REGISTER） */
