@@ -49,6 +49,9 @@
 #   （setWithTags/invalidateByTag 的 Lua）、锁 CAS、真服务器端 TTL、故障路径（WRONGTYPE / 连接中断
 #   fail-open 与 fail-closed / 外部 kill 重连）。Fake 客户端测试不能替代本步骤——它只验证驱动调用映射。
 #   redis-cluster 跨 slot 限制（CROSSSLOT）无法在单实例上验证，策略与限制登记见 ADR-0028。
+# @modified 2026-10-18 donttemo 新增双进程（双节点）一致性冒烟（smoke-dual-node.mjs）：自起 A/B 两实例
+#   共享同一 Redis + 同一库 + 同一 CACHE_PREFIX，把「双节点实测方案」的 T2~T5.1 固化为 CI 门禁；
+#   真机 Windows↔云同用例 30/30 通过（记录见根目录《Redis 多实例测试.md》§10）。
 # @module ci
 
 name: CI
@@ -175,6 +178,16 @@ jobs:
       - name: M4 缓存层端到端冒烟（SQLite）
         working-directory: apps/example-api
         run: node scripts/smoke-cache.mjs
+
+      # 双进程（双节点）冒烟：自起 A/B 两个实例（3100/3101）共享同一 Redis 与同一 SQLite 库、
+      # 同一 CACHE_PREFIX，验证跨实例缓存共享/标签失效、锁互斥、旧令牌隔离、并发刷新唯一 replacement。
+      # 复用 M3 已迁移+播种的库与上方 redis service；`DUAL_INCLUDE_REPLAY=1` 可加跑过期 replay（+11s）。
+      - name: 双进程缓存与令牌一致性冒烟（真实 Redis）
+        working-directory: apps/example-api
+        env:
+          DUAL_REDIS_URL: redis://127.0.0.1:6379
+          DUAL_INCLUDE_REPLAY: ${{ vars.DUAL_INCLUDE_REPLAY || '' }}
+        run: node scripts/smoke-dual-node.mjs
 
       # M7 队列与定时任务端到端冒烟：入队/重试退避/死信重放/幂等/cron/并发/限速/配置守卫（PRD-007 AC）
       # 脚本自带服务生命周期（端口 3200，分阶段以不同 MQ_* 配置起停）；bullmq 阶段需 SMOKE_REDIS_URL，未设置则跳过

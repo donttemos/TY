@@ -18,6 +18,11 @@
 
 ## [Unreleased]
 
+### Added（双进程双节点一致性冒烟入 CI，2026-10-18）
+
+- **`smoke-dual-node.mjs` 进 CI base 作业**：把《Redis 多实例测试.md》真机方案（Windows↔云 30/30）的协议层断言固化为门禁——脚本自起 A/B 两个实例（3100/3101，可 `DUAL_PORT_A/B` 改），共享同一 Redis service、同一 SQLite 库与同一 `CACHE_PREFIX`，验证：T2 缓存跨实例读写与标签失效（B 命中 A 写入的缓存、B 失效后 A 回源、重建后键↔索引无孤儿）；T3 跨实例锁互斥；T4 锁 TTL 过期与旧令牌保护（旧句柄 renew/release 不伤害新持有者）；T5.1 同一旧 refresh token 经 A/B 并发刷新 ⇒ 唯一 replacement（grace + 同 UA 指纹）；`DUAL_INCLUDE_REPLAY=1` 追加 T5.2 过期 replay → family revoke（含 11s grace 等待）。未设 `DUAL_REDIS_URL` 时整脚本 SKIP；`DUAL_A/DUAL_B` 可切换为「驱动既有实例」模式（真机跨机器复跑用，不再需要本地专属 harness）。本地实测 17/17 通过。
+- 顺带修正：`@fw/cache` 的 `exports` 仅声明 `import` 条件，跨包脚本须走 `import.meta.resolve` + 动态 import（CJS `require.resolve` 不可用）；ioredis 以其入口为基准 `createRequire` 解析，脚本内零硬编码绝对路径。
+
 ### Added（真实 Redis 单实例集成验证 + Cluster 兼容策略，2026-10-17）
 
 - **Redis 单实例集成测试进 CI（回归测试设计 §9.4 落地）**：新增 `packages/cache/src/__tests__/redis-integration.test.ts`——连真实 Redis 单实例验证 Fake 客户端无法证明的服务端契约：① 标签原子协议（`setWithTags` 写值+登记 / `invalidateByTag` 读成员+删成员+删索引的 Lua 真实执行、双客户端「失效×写入」并发不变式——无孤儿键无幽灵索引）；② 锁 CAS 与 SET NX 竞争（两客户端单胜者、令牌隔离、释放幂等）；③ **真服务器端 TTL 过期**（非驱动惰性删除）；④ 故障路径（WRONGTYPE 类型错误显式抛错且原数据不覆盖、连接被外部 kill 后自动重连、**关停后 fail-open 降级返回空 / fail-closed 抛 9002**）。CI base 作业新增 `redis:7-alpine` service 容器与独立步骤；门控 `CACHE_REDIS_INTEGRATION_URL`（未设置整体 skip，本地默认无 Redis），破坏性关停用例另需 `CACHE_REDIS_INTEGRATION_ALLOW_SHUTDOWN=true`（保护共享本地实例）。**本地实测 Redis 8.4 9/9 通过**。

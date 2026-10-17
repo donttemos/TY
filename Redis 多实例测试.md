@@ -686,3 +686,16 @@ Refresh grace:        10s（默认）
 - B 进程已停；测试 Redis **DB 15 已 FLUSHDB**；隧道已关闭；本地临时凭据文件已删除。
 - 测试库 `fw_dual_test` 与服务器 `~/fw-dual` 检出**保留**（便于复跑；不想要可 `DROP DATABASE fw_dual_test` 与 `rm -rf ~/fw-dual`）。
 - 生产 fw-api 全程未重启（实测前后 `uptime` 连续、health=ok）。
+
+---
+
+## 11. 仓库化收口（2026-10-18）：双进程一致性冒烟进 CI
+
+§9/§10 用的本地 harness（`scripts/.dual-node-harness.mjs`，点号文件名 + `.git/info/exclude`）已**退役并删除**，能力以正式脚本收编：
+
+- **`apps/example-api/scripts/smoke-dual-node.mjs`** —— CI base 作业新增步骤「双进程缓存与令牌一致性冒烟（真实 Redis）」，与 `redis:7-alpine` service 同作业。
+  - 默认**自起**两个实例（3100/3101，`DUAL_PORT_A/B` 可改），共享同一 Redis / 同一库 / 同一 `CACHE_PREFIX`，跑 T2/T3/T4/T5.1（17 断言）；`DUAL_INCLUDE_REPLAY=1` 追加 T5.2（+11s）。
+  - **`DUAL_A`/`DUAL_B` 复用模式**：指向已在运行的两个实例即不再自起——真机跨机器复跑用同一脚本（`DUAL_A=http://127.0.0.1:3000 DUAL_B=http://127.0.0.1:13001 DUAL_REDIS=redis://:密码@127.0.0.1:16379/15`）。
+  - 门控：未设 `DUAL_REDIS_URL` 整脚本 SKIP（本地默认形态）。
+- 依赖解析改为零硬编码：`@fw/cache` 走 `import.meta.resolve` + 动态 import（其 `exports` 只有 `import` 条件，CJS `require.resolve` 不可用），`ioredis` 以其入口为基准 `createRequire`。
+- 本机验证：17/17 通过（20 并发刷新 394ms、唯一 replacement）。
