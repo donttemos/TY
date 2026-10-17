@@ -121,6 +121,19 @@ jobs:
             pnpm --filter $pkg run test:coverage
           done
 
+      # 双进程（双节点）冒烟：自起 A/B 两实例（3120/3121），共享同一 Redis service + 同一 SQLite 库
+      # + 同一 CACHE_PREFIX，验证 T2 跨实例缓存读写与标签失效 / T3 锁互斥 / T4 TTL 过期与旧令牌保护 /
+      # T5.1 并发刷新唯一 replacement（17 断言）。**必须排在下方「Redis 单实例集成验证」之前**——
+      # 该步骤末尾的 SHUTDOWN 故障路径用例会把 redis service 容器关停。库自行 migrate+seed（幂等）。
+      - name: 双进程缓存与令牌一致性冒烟（真实 Redis）
+        working-directory: apps/example-api
+        env:
+          DUAL_REDIS_URL: redis://127.0.0.1:6379
+        run: |
+          pnpm exec prisma migrate deploy --schema prisma/schema.prisma
+          pnpm exec tsx prisma/seed.ts
+          node scripts/smoke-dual-node.mjs
+
       # Redis 单实例集成验证（M12 收尾 / 回归测试设计 §9.4）：真实服务端验证标签原子协议、锁 CAS、
       # 真服务器端 TTL 与故障路径。与上方单测步骤分离：门控变量只在步骤作用域设置，本地/其他作业
       # 无 Redis 时该文件整体 skip（CACHE_REDIS_INTEGRATION_URL 未设置）。ALLOW_SHUTDOWN 仅在
@@ -178,16 +191,6 @@ jobs:
       - name: M4 缓存层端到端冒烟（SQLite）
         working-directory: apps/example-api
         run: node scripts/smoke-cache.mjs
-
-      # 双进程（双节点）冒烟：自起 A/B 两个实例（3100/3101）共享同一 Redis 与同一 SQLite 库、
-      # 同一 CACHE_PREFIX，验证跨实例缓存共享/标签失效、锁互斥、旧令牌隔离、并发刷新唯一 replacement。
-      # 复用 M3 已迁移+播种的库与上方 redis service；`DUAL_INCLUDE_REPLAY=1` 可加跑过期 replay（+11s）。
-      - name: 双进程缓存与令牌一致性冒烟（真实 Redis）
-        working-directory: apps/example-api
-        env:
-          DUAL_REDIS_URL: redis://127.0.0.1:6379
-          DUAL_INCLUDE_REPLAY: ${{ vars.DUAL_INCLUDE_REPLAY || '' }}
-        run: node scripts/smoke-dual-node.mjs
 
       # M7 队列与定时任务端到端冒烟：入队/重试退避/死信重放/幂等/cron/并发/限速/配置守卫（PRD-007 AC）
       # 脚本自带服务生命周期（端口 3200，分阶段以不同 MQ_* 配置起停）；bullmq 阶段需 SMOKE_REDIS_URL，未设置则跳过
