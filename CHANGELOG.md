@@ -18,6 +18,12 @@
 
 ## [Unreleased]
 
+### Added（真实 Redis 单实例集成验证 + Cluster 兼容策略，2026-10-17）
+
+- **Redis 单实例集成测试进 CI（回归测试设计 §9.4 落地）**：新增 `packages/cache/src/__tests__/redis-integration.test.ts`——连真实 Redis 单实例验证 Fake 客户端无法证明的服务端契约：① 标签原子协议（`setWithTags` 写值+登记 / `invalidateByTag` 读成员+删成员+删索引的 Lua 真实执行、双客户端「失效×写入」并发不变式——无孤儿键无幽灵索引）；② 锁 CAS 与 SET NX 竞争（两客户端单胜者、令牌隔离、释放幂等）；③ **真服务器端 TTL 过期**（非驱动惰性删除）；④ 故障路径（WRONGTYPE 类型错误显式抛错且原数据不覆盖、连接被外部 kill 后自动重连、**关停后 fail-open 降级返回空 / fail-closed 抛 9002**）。CI base 作业新增 `redis:7-alpine` service 容器与独立步骤；门控 `CACHE_REDIS_INTEGRATION_URL`（未设置整体 skip，本地默认无 Redis），破坏性关停用例另需 `CACHE_REDIS_INTEGRATION_ALLOW_SHUTDOWN=true`（保护共享本地实例）。**本地实测 Redis 8.4 9/9 通过**。
+- **ADR-0028（缓存标签索引的 Redis Cluster 兼容策略）**：slot 约束分析——值键 ↔ 标签索引键为 N:M，**必须全部同 slot，只给标签键加 hash tag 不满足约束**；四方案评估（A 单全局 tag 分片归零 / **B prefix 作用域 tag【定案，键格式版本化+双读迁移，列入后续版本】** / C tenant 作用域（键无 tenant 上下文，改动面最大）/ D 重设计放弃多键原子性（回归 C-01/C-03 要消灭的孤儿键，不采纳））。当前版本限制四路登记：`store.port.ts` / `docs/contracts/cache.ts` / **驱动构造期 cluster 客户端告警**（`isCluster` 检测）/ ADR 本文档。
+- **发布验证矩阵三档区分**（`docs/90-release-v0.6.0.md` §7）：**Fake 驱动测试通过**（调用映射，149 例常驻）≠ **单实例 Redis 验证通过**（CI service 门禁）≠ **Redis Cluster 验证通过**（未验证，CROSSSLOT 限制 + ADR-0028）；表述纪律入档。
+
 ### Fixed（发布后真机验证补丁，2026-10-17）
 
 - **demo 自检面在 prod 未真正关闭（OBS-16，真机实测发现）**：`DemoController` 只 `import` 了 `DemoEndpointsGuard` 却**未加 `@UseGuards`**——`APP_ENV=prod` 且未设 `DEMO_ENDPOINTS_ENABLED` 时，`/api/v1/demo/*`（`/demo/ok`、`/demo/boom`、`/demo/items` CRUD、`/demo/log-sensitive`）仍**公网 200**，与 `docs/46` §4「四控制器 404」漂移（demo-queue / demo-transport / cache-demo 三个控制器守卫正常）。修复：补类级 `@UseGuards(DemoEndpointsGuard)`（commit `0944864`）；`demo-endpoints.guard.spec.ts` 增**四控制器 guard 挂载元数据断言**（修复前必红，修复后 4 passed）。真机重建重发后四端点与公网入口均 **404**。

@@ -102,3 +102,15 @@
 | 3 | 线上 Nginx 实例仍是 v0.2.0 手写 `fw-locations.inc`（仅 `/health`、`/ready`；`/metrics` 落 SPA 回退返回 index.html），与仓库 `deploy/nginx` 模板的内网 allow/deny 漂移 | **未在窗口内改线上配置**（影响探针/排障面），登记为 OBS-19 部署侧对齐项 |
 
 > 补丁 `0944864` 未进入 `v0.6.0` tag，属「发布后真机验证补丁」；tag 语义与发布产物不变，升级到 `main`（或 cherry-pick 该提交）即获得修复。
+
+## 7. Redis 验证矩阵：三档区分（Fake / 单实例 / Cluster）
+
+**原则（store-contract.test.ts 同款口径）：Fake 客户端测试只验证「驱动调用映射与内存模型语义」，不能替代真实 Redis 服务端原子性验证。** 缓存标签能力按三档分别登记，禁止把任一档的通过表述为另一档的结论：
+
+| 档位 | 环境 | 覆盖范围 | 状态（v0.6.0 发版后） |
+|---|---|---|---|
+| **① Fake 驱动测试** | vitest + FakeRedisClient（`store-contract.test.ts` 双驱动共享契约 11 组 + 驱动单测） | 端口契约可观察语义：读写/TTL/集合/条件操作/WRONGTYPE 对齐/原子标签方法的**调用映射与内存模型** | ✅ 随单测常驻（cache 149 例） |
+| **② 单实例真实 Redis** | CI base 作业 `redis:7-alpine` service 容器（`redis-integration.test.ts`，门控 `CACHE_REDIS_INTEGRATION_URL`） | 真服务端才能证明的契约：Lua 脚本真实执行、标签原子协议（setWithTags/invalidateByTag）、失效×写入并发不变式（双客户端交错）、锁 CAS 与 SET NX 竞争、**真服务器端 TTL 过期**、故障路径（WRONGTYPE / 外部 kill 重连韧性 / 关停后 fail-open 降级与 fail-closed 抛 9002） | ✅ CI 门禁（本地实测 Redis 8.4 亦 9/9 通过） |
+| **③ Redis Cluster** | 无集群环境 | Cluster 形态下的 slot 分片、多键 Lua 跨 slot 行为 | ❌ **未验证**——标签原子协议的多键 Lua 跨 slot 被拒（CROSSSLOT），驱动构造期对 cluster 客户端显式告警；兼容策略（约束分析 + hash tag 四方案 + prefix 作用域定案）与后续验证要求见 **ADR-0028** |
+
+**表述纪律**：「Fake 通过」≠「单实例通过」≠「Cluster 通过」；任一提及 Cluster 支持必须同时引用 CROSSSLOT 限制与 ADR-0028。

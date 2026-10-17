@@ -17,6 +17,10 @@
  *   失效故障时整体未发生（fail-open 不再误删索引）；② C-05——close() 超时分支改为真正触发
  *   disconnect()（原实现超时仅 resolve，与注释「超时即强制断开」不符），并对 quit() 挂接兜底
  *   catch 防止超时先行返回后的 unhandled rejection。
+ * @modified 2026-10-17 donttemo A-01 跨驱动语义对齐 + Cluster 兼容告警：get/smembers/sadd/CAS
+ *   类型不符显式抛错（对齐 Redis WRONGTYPE）；构造期检测 `isCluster` 客户端并告警——多键 Lua 在
+ *   Cluster 跨 slot 时被拒（CROSSSLOT），策略与限制登记见 ADR-0028；单实例真实 Redis 由 CI
+ *   redis:7 service 容器验证（`__tests__/redis-integration.test.ts`）。
  * @module @fw/cache
  */
 
@@ -24,6 +28,9 @@ import type { CacheStorePort, TokenBucketTakeResult } from '../store.port.js';
 import type { CacheDriverName } from '../types.js';
 import type { RedisClientLike } from './redis-client.js';
 import { BizError, ErrorCode } from '@fw/core';
+import { Logger } from '@fw/logger';
+
+const logger = Logger.for('cache.redis');
 
 /** 条件删除脚本：值匹配才删除（锁释放） */
 const COMPARE_DELETE_LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
@@ -119,7 +126,14 @@ export class RedisCacheStore implements CacheStorePort {
   constructor(
     private readonly client: RedisClientLike,
     readonly kind: CacheDriverName = 'redis',
-  ) {}
+  ) {
+    // cluster 兼容性告警（ADR-0028）：多键 Lua（setWithTags / invalidateByTag）在跨 slot 时会被
+    // Redis Cluster 以 CROSSSLOT 拒绝——标签原子协议当前只保证单实例/同 slot 语义。单实例 Redis
+    // 无此限制（CI redis:7 service 已验证）；指向 Cluster 时显式告警，避免线上才踩。
+    if (client.isCluster === true) {
+      logger.warn('redis 客户端为集群实例：标签原子操作（setWithTags / invalidateByTag）的多键 Lua 在跨 slot 时将被拒绝（CROSSSLOT）；兼容策略与限制登记见 ADR-0028');
+    }
+  }
 
   async get(key: string): Promise<string | undefined> {
     const raw = await this.client.get(key);

@@ -26,6 +26,8 @@ const WARN_THROTTLE_MS = 5000;
 
 /** 框架使用到的 Redis 命令子集（ioredis 天然满足；测试用 fake 实现） */
 export interface RedisClientLike {
+  /** 是否为集群客户端（ioredis Cluster 实例为 true；用于 cluster 兼容性告警，见 ADR-0028） */
+  readonly isCluster?: boolean;
   /** 读取单键，不存在返回 null */
   get(key: string): Promise<string | null>;
   /** SET 支持 `PX <ms>` 与 `NX` 选项 */

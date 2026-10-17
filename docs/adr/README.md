@@ -36,6 +36,7 @@
 | [0025](./0025-unified-error-audit-contract.md) | M12 W1 统一错误与审计事件契约：错误三类治理（①继承 BizError / ②内部信号禁上浮 / ③fail-fast）+ 判别符≠错误码 + `audit_logs` 软增列六列（category/event/result/family_id/jti/request_id）+ replay 安全事件九要素 | 已采纳（2026-10-17） | 后端 / 前端契约 |
 | [0026](./0026-observability-id-layering.md) | M12 W2 可观测 ID 分层与贯穿：requestId(单请求) vs traceId(跨服务) 分层 / ALS 扩展（familyId/jti）+ logger 自动身份 / fw_auth_*·fw_security_* 指标段与基数护栏 / 审计检索键扩展 | 已采纳（2026-10-17） | 后端 / 前端契约 |
 | [0027](./0027-ops-endpoints-boundary.md) | M12 W3 运维端点安全边界：三层模型（Public 自检 / Protected maintenance / 业务公开面）+ 默认受保护原则 + OQ-4 定案权限码 ops:read（OPS_TOKEN 备选未启用）+ demo 自检面非 dev 404 + Nginx 三份一致性轴 | 已采纳（2026-10-17） | 后端 / 部署 |
+| [0028](./0028-cache-tag-index-cluster-compatibility.md) | 缓存标签索引的 Redis Cluster 兼容策略：多键 Lua 的 slot 约束分析（值键 ↔ 标签键 N:M，必须全部同 slot）+ hash tag 四方案评估（A 全局 / B prefix 作用域【推荐】/ C tenant / D 重设计放弃原子性）+ 当前版本限制登记与方案 B 键格式版本化演进 + 单实例/Cluster 验证矩阵 | 已采纳（2026-10-17） | 后端 / 缓存 |
 
 ## 模板
 

@@ -44,6 +44,11 @@
 # @modified 2026-10-17 donttemo 新增三方一致性门禁步骤（check-triway-consistency.mjs）：框架包 ↔ example-api ↔
 #   admin 模板六轴对撞（路由面子集 / 权限码同源 / Prisma 共有模型字段 / 框架依赖规格 / 配置键登记），
 #   模板侧（E-08 起）此前无任何对撞，「模板前端调了模板后端没有的端点」类漂移只在生成项目联调时才暴露
+# @modified 2026-10-17 donttemo 新增 Redis 单实例集成验证（M12 收尾 / 回归测试设计 §9.4）：base 作业挂
+#   redis:7-alpine service 容器，@fw/cache 的 redis-integration.test.ts 连真实服务端验证标签原子协议
+#   （setWithTags/invalidateByTag 的 Lua）、锁 CAS、真服务器端 TTL、故障路径（WRONGTYPE / 连接中断
+#   fail-open 与 fail-closed / 外部 kill 重连）。Fake 客户端测试不能替代本步骤——它只验证驱动调用映射。
+#   redis-cluster 跨 slot 限制（CROSSSLOT）无法在单实例上验证，策略与限制登记见 ADR-0028。
 # @module ci
 
 name: CI
@@ -58,10 +63,22 @@ env:
   PRISMA_TELEMETRY_DISABLED: '1'
 
 jobs:
-  # ---------- 基础门禁：构建 + 单测（SQLite）+ 静态检查 ----------
+  # ---------- 基础门禁：构建 + 单测（SQLite）+ Redis 单实例集成 + 静态检查 ----------
   base:
     name: 构建 / 单测(SQLite) / 静态检查
     runs-on: ubuntu-latest
+    # Redis 单实例服务：@fw/cache 真实服务端集成验证用（redis-integration.test.ts，M12 收尾）。
+    # 容器与 runner 同生命周期，用完即弃；SHUTDOWN 故障路径用例仅在本作业执行（ALLOW_SHUTDOWN）。
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - '6379:6379'
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v4
       # 不指定 version：由根 package.json 的 packageManager 决定（避免与 action 的 version 冲突）
@@ -100,6 +117,16 @@ jobs:
           for pkg in @fw/config @fw/logger @fw/core @fw/config-center @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/tenant @fw/transport @fw/telemetry @fw/storage; do
             pnpm --filter $pkg run test:coverage
           done
+
+      # Redis 单实例集成验证（M12 收尾 / 回归测试设计 §9.4）：真实服务端验证标签原子协议、锁 CAS、
+      # 真服务器端 TTL 与故障路径。与上方单测步骤分离：门控变量只在步骤作用域设置，本地/其他作业
+      # 无 Redis 时该文件整体 skip（CACHE_REDIS_INTEGRATION_URL 未设置）。ALLOW_SHUTDOWN 仅在
+      # 本作业（service 容器一次性）放开——SHUTDOWN 用例会关停目标实例。
+      - name: Redis 单实例集成验证（真实服务端）
+        run: pnpm --filter @fw/cache exec vitest run --no-file-parallelism src/__tests__/redis-integration.test.ts
+        env:
+          CACHE_REDIS_INTEGRATION_URL: redis://127.0.0.1:6379
+          CACHE_REDIS_INTEGRATION_ALLOW_SHUTDOWN: 'true'
 
       # M5 管理后台前端：单测（happy-dom）+ mock 全链路冒烟（PRD-005 AC / TC-WEB）
       # 冒烟脚本自管理 vite dev server 生命周期（端口 5199，strictPort），dist 存在时附带 bundle 门禁

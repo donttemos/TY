@@ -15,6 +15,8 @@
  *   且故障时整体未发生——fail-open 降级不再误删索引）。两个方法均为**多键操作**：
  *   redis-cluster 模式下跨 slot 的多键 Lua 会被拒绝（CROSSSLOT），标签能力在 cluster 下
  *   需 hash-tag 同 slot 或退化为不可用（已知限制，与 size() 观测限制同级登记）。
+ *   Cluster 兼容策略（约束分析 / hash tag 方案评估 / prefix 作用域定案）见 **ADR-0028**；
+ *   单实例真实 Redis 验证见 `__tests__/redis-integration.test.ts`（CI service）。
  * @module @fw/cache
  */
 

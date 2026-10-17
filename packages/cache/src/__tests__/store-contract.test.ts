@@ -3,7 +3,9 @@
  * @description 同一组断言对 memory 与 redis（Fake 客户端）两个驱动运行，锁定端口契约的可观察
  *   语义一致性：读写/TTL/集合/条件操作/类型冲突（WRONGTYPE 对齐）/原子标签方法。
  *   注意（设计 §9.4 / 最后四点之 3）：Fake 只验证驱动调用映射与内存模型语义，不能替代
- *   真实 Redis 的服务端原子性验证——真 Redis 单实例集成测试另行挂 CI（暂缓，见 CHANGELOG）。
+ *   真实 Redis 的服务端原子性验证——真 Redis 单实例集成测试已由 `redis-integration.test.ts`
+ *   落地并挂 CI（redis:7 service 容器，门控 CACHE_REDIS_INTEGRATION_URL）；cluster 兼容限制与
+ *   策略见 ADR-0028；三档验证矩阵见 docs/90-release-v0.6.0.md §7。
  * @author donttemo
  * @created 2026-10-17
  * @module @fw/cache
