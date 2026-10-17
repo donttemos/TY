@@ -262,13 +262,19 @@ async function phaseMemory() {
       refreshCron?.expression === '0 3 * * *' && refreshCron?.lock === true,
       `[expression=${refreshCron?.expression} lock=${refreshCron?.lock}]`,
     );
-    await post('/api/v1/demo-queue/cron-tick?name=auth.refresh-cleanup');
+    const tickResp = await post('/api/v1/demo-queue/cron-tick?name=auth.refresh-cleanup');
+    if (tickResp.status !== 200) console.log(`  [诊断] cron-tick status=${tickResp.status} body=${JSON.stringify(tickResp.body)?.slice(0, 200)}`);
+    let lastMaintenance = null;
     const refreshSnap = await waitUntil(async () => {
-      const snap = (await call('/api/v1/auth-maintenance/refresh-cleanup')).body.data;
+      const resp = await call('/api/v1/auth-maintenance/refresh-cleanup');
+      lastMaintenance = resp;
+      const snap = resp.body?.data;
       return snap?.runs >= 1 ? snap : null;
       // 20s：这是 phase A server 的第一条 DB 查询（Prisma 引擎冷启动 + 清理查询），
       // CI 冷机首跑可能超过默认 6s 窗口（v0.6.0 release CI 实测超时假红）
-    }, 'auth.refresh-cleanup 手动触发执行', 20_000);
+    }, 'auth.refresh-cleanup 手动触发执行', 20_000).catch((error) => {
+      throw new Error(`${error.message}；maintenance 响应 status=${lastMaintenance?.status} body=${JSON.stringify(lastMaintenance?.body)?.slice(0, 240)}`);
+    });
     check(
       'M3 遗留④ 手动触发清理执行成功且无错误（清理条数可见）',
       refreshSnap.lastError === null && typeof refreshSnap.lastRemoved === 'number' && refreshSnap.lastCutoff !== null,
