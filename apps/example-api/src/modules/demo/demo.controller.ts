@@ -9,8 +9,11 @@
  * @since v0.1.0
  * @modified 2026-10-14 donttemo v0.2.0 发布：/demo/ok 自报版本由 v0.1.0 更新为 v0.2.0
  * @modified 2026-10-15 donttemo v0.5.0 发布：自报版本补更至 v0.5.0（v0.3/v0.4 两轮漏更，本次一并收口）
+ * @modified 2026-10-17 donttemo 真机 W3 实测修复：本控制器**漏挂 @UseGuards(DemoEndpointsGuard)**——W3 只给
+ *   demo-queue / demo-transport / cache-demo 三个控制器加了守卫，/api/v1/demo/* 在 APP_ENV=prod 下仍返回 200
+ *   （docs/46 §4 声称四控制器均 404，属文档与实现漂移）。本次补挂守卫并补元数据契约测试锁定，自报版本随 v0.6.0。
  */
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards} from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { DemoEndpointsGuard } from '../../common/demo-endpoints.guard.js';
 import { BizError, ErrorCode } from '@fw/core';
 import { Logger } from '@fw/logger';
@@ -26,9 +29,10 @@ interface CreateItemBody {
 }
 
 /**
- * 演示控制器：路径前缀 /api/v1/demo（全局标 @Public，避免框架自检路由鉴权耦合）
+ * 演示控制器：路径前缀 /api/v1/demo（@Public 仅免除鉴权；暴露面由 DemoEndpointsGuard 按环境收敛）
  */
 @Public()
+@UseGuards(DemoEndpointsGuard)
 @Controller('/api/v1/demo')
 export class DemoController {
   constructor(private readonly items: DemoItemRepository) {}
@@ -36,7 +40,7 @@ export class DemoController {
   /** 正常请求：验证统一响应包装（code=0 + traceId） */
   @Get('ok')
   ok(): { hello: string; framework: string } {
-    return { hello: 'fw', framework: 'v0.5.0' };
+    return { hello: 'fw', framework: 'v0.6.0' };
   }
 
   /** 业务异常：验证结构化错误码（TC-CORE-004） */
