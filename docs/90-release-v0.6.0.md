@@ -3,7 +3,7 @@
 - 状态：已发布（2026-10-17）
 - 版本：`0.6.0`（全仓 16 个 `package.json` 统一，含根与全部 workspace 成员；admin 模板保持生成项目起始版本 `0.1.0` 独立演进）
 - 发布提交：`457b719`（chore(release): v0.6.0）
-- 发布 tag：`v0.6.0` → 发布提交的**直接后继**（该提交修复 smoke-queue refresh-cleanup 等待窗 6s→20s 的 CI 冷机假红，与 v0.5.5 的 tag 指向惯例一致；sha 见 `git tag --points-at v0.6.0`）
+- 发布 tag：`v0.6.0` → release 提交后的 **CI 收口终提交**（`7c3d1ff`：smoke-queue refresh-cleanup 等待窗放宽 + 诊断增强 + maintenance 端点 ops:read 守卫化后的冒烟持令牌修复，对应 CI run base + 集成矩阵全绿；与 v0.5.5「tag 指向 release 后继」惯例一致）
 - 本版定位：**M11（PRD-011）认证核心强化全五阶段成版 + M12（PRD-012）可观测与运维边界 W1~W3 全部交付 + @fw/cache 缺陷清单 13 项修复与跨驱动契约测试基建**
 
 ## 1. 交付范围
