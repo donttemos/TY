@@ -129,6 +129,9 @@ jobs:
         working-directory: apps/example-api
         env:
           DUAL_REDIS_URL: redis://127.0.0.1:6379
+          # CI 的 SQLite 单文件串行写 + 慢盘：20 并发轮换会把写事务拖到 ~10s（实测 5/20 成功），
+          # 故本作业降到 8 并发（仍跨两实例）；本地默认 20 由 DUAL_CONCURRENCY 控制
+          DUAL_CONCURRENCY: '8'
         run: |
           pnpm exec prisma migrate deploy --schema prisma/schema.prisma
           pnpm exec tsx prisma/seed.ts

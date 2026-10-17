@@ -220,7 +220,9 @@ async function main() {
       );
       const ok = res.filter((r) => r.status >= 200 && r.status < 300 && r.code === 0 && r.replacement);
       const unique = new Set(ok.map((r) => r.replacement));
-      check('T5.1a 并发刷新全部成功（grace 窗口内）', ok.length === CONCURRENCY, `ok=${ok.length}/${CONCURRENCY} elapsed=${Date.now() - started}ms`);
+      // 失败样例打印 http/code：CI 慢盘下 SQLite 串行写可能令部分请求超时（非契约失败），便于区分
+      const sample = res.filter((r) => !(r.status >= 200 && r.status < 300 && r.code === 0)).slice(0, 3);
+      check('T5.1a 并发刷新全部成功（grace 窗口内）', ok.length === CONCURRENCY, `ok=${ok.length}/${CONCURRENCY} elapsed=${Date.now() - started}ms${sample.length ? ` ${JSON.stringify(sample)}` : ''}`);
       check('T5.1b 唯一 replacement（不产生多个 B）', unique.size === 1, `unique=${unique.size}`);
     }
 
