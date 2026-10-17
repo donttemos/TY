@@ -63,7 +63,13 @@
 
 保留公开/受保护的相邻面（非「自检」范畴）：`demo-item`（生成器业务示例页数据源，走 RBAC）、
 `demo-tenant-items`（租户演示，走 RBAC + tenant 解析）、`open.controller`（OAuth2 回调演示，启用才可达）。
-反向验证：`demo-endpoints.guard.spec.ts`（显式开关优先 / dev 默认开 / 其余关 / 关闭 404 不暴露存在性）。
+反向验证：`demo-endpoints.guard.spec.ts`（显式开关优先 / dev 默认开 / 其余关 / 关闭 404 不暴露存在性 /
+**四控制器 guard 挂载元数据断言**）。
+
+> **2026-10-17 真机实测修正**：`DemoController` 此前只在源码里 `import` 了 `DemoEndpointsGuard` 却**未加
+> `@UseGuards`**——`APP_ENV=prod` 下 `/api/v1/demo/*` 实测仍 200，与本表第 1 行漂移。已补装饰器
+> （commit `0944864`）并以「四控制器 guard 挂载」元数据断言锁定；重发后真机四端点与公网入口均 404。
+> 实测记录见 [docs/63](./63-1panel-real-deploy-verification.md) §6。
 
 ## 5. 门禁与登记
 

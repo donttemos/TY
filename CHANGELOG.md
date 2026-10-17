@@ -16,6 +16,16 @@
 - **来源**：需求变更先记入对应 PRD 的「变更记录」，发布时汇总到本文件。本文件只记**对外可见**的变更，内部重构不在此记录。
 - **频率**：每个发布版本一条记录；`Unreleased` 区间持续累积，发布时转为版本条目并清空。
 
+## [Unreleased]
+
+### Fixed（发布后真机验证补丁，2026-10-17）
+
+- **demo 自检面在 prod 未真正关闭（OBS-16，真机实测发现）**：`DemoController` 只 `import` 了 `DemoEndpointsGuard` 却**未加 `@UseGuards`**——`APP_ENV=prod` 且未设 `DEMO_ENDPOINTS_ENABLED` 时，`/api/v1/demo/*`（`/demo/ok`、`/demo/boom`、`/demo/items` CRUD、`/demo/log-sensitive`）仍**公网 200**，与 `docs/46` §4「四控制器 404」漂移（demo-queue / demo-transport / cache-demo 三个控制器守卫正常）。修复：补类级 `@UseGuards(DemoEndpointsGuard)`（commit `0944864`）；`demo-endpoints.guard.spec.ts` 增**四控制器 guard 挂载元数据断言**（修复前必红，修复后 4 passed）。真机重建重发后四端点与公网入口均 **404**。
+
+### Docs
+
+- **真机实测记录入库（v0.6.0 部署窗口）**：`docs/63` 新增 §6（发版动作与耗时、W3 边界矩阵、OBS-13 链路实测值、真机专属缺陷与处置、回滚面）；`docs/45` §6 排障样例补 **journald 档**并注明「公共 refresh 路由 ALS 无 userId，userId 在 ctx」；`docs/46` §4 登记 DemoController 漏挂修复与四控制器元数据断言；`docs/90-release-v0.6.0` 新增 §6 并更新 §5 遗留；PRD-012 AC-OBS-13/16/19 勾选与范围边界同步（Nginx 实例对齐、K8s NetworkPolicy 仍为登记项）。
+
 ## [0.6.0] - 2026-10-17
 
 ### Added（M12 W3 · 运维端点安全边界与暴露面收敛，ADR-0027，2026-10-17）

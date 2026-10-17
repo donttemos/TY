@@ -9,7 +9,7 @@
 
 # docs/45 · 可观测与错误契约手册（M12 / PRD-012）
 
-> 状态：**正式**（2026-10-17，随 W1+W2 交付冻结）｜ 关联：ADR-0025 / ADR-0026 / `docs/40-api-spec.md` §1.3 / `docs/30-data-dictionary.md` §3.13
+> 状态：**正式**（2026-10-17，随 W1+W2 交付冻结；§6 排障命令于 2026-10-17 v0.6.0 真机逐条复测）｜ 关联：ADR-0025 / ADR-0026 / `docs/40-api-spec.md` §1.3 / `docs/30-data-dictionary.md` §3.13
 
 ## 1. 错误信封（ErrorBody，字段级冻结）
 
@@ -72,27 +72,35 @@ CSV 导出列同步：`...,traceId,requestId,familyId,category,event,before,afte
 
 ## 6. 排障样例：看到 `replay_detected`，一次拉全链（G12-3）
 
-> 以下命令已在交付验证中实测可跑（本机 SQLite 环境，`$T` 为持 `audit:read` 权限的管理员 token；
-> 一次 replay 后四要素关联路径如下）。
+> 命令按**部署档位**分两式（容器 stdout / 1Panel-systemd journald）；两式均在 **2026-10-17 v0.6.0
+> 真机（1Panel）逐条实测可跑**（记录见 [docs/63](./63-1panel-real-deploy-verification.md) §6）。
+> `$T` = 持 `audit:read` 的管理员 token；`<traceId>` / `<requestId>` 从告警、响应头或信封取。
 
 ```bash
-# ① 拿到告警里的 traceId（或直接按 event 检索），一次定位安全事件九要素：
+# ① 审计行：一次定位安全事件九要素（也可按 ?request_id=<requestId> 反查，OBS-14）
 curl -s "http://127.0.0.1:3000/api/v1/audit-logs?event=refresh.replay_detected&trace_id=<traceId>" \
   -H "Authorization: Bearer $T"
-# → items[0] 即含：requestId / traceId / userId / familyId / jti / ip / userAgent /
-#   createdAt(timestamp) / event('refresh.replay_detected') / result('denied')
+# → items[0]：requestId / traceId / userId / familyId / jti / ip / userAgent /
+#   createdAt / event('refresh.replay_detected') / result('denied') / category('security')
 
-# ② 凭 requestId 拉出这一条请求的全部日志（容器 stdout 单行 JSON，按字段 grep）：
-#    k8s: kubectl logs deploy/app | grep '"requestId":"<requestId>"'
-docker logs fw-app 2>&1 | grep '"requestId":"01ARZ3NDEKTSV4RRFFQ69G5FAV"'
-# → LogRecord 顶层自动携带 requestId / userId（LOG_IDENTITY_FIELDS 默认集）
+# ② 结构化日志：按 requestId grep——同一次请求会命中 2 行（replay 业务行 + 全局异常过滤器行）
+#    1Panel/systemd 档（journald；真机实测）：
+journalctl -u fw-api -o cat | grep '"requestId":"<requestId>"'
+#    容器档（Docker / K8s）：
+docker logs fw-app 2>&1 | grep '"requestId":"<requestId>"'
+kubectl logs deploy/app | grep '"requestId":"<requestId>"'
+# → module=auth.refresh 行：顶层 requestId + traceId；ctx.userId / ctx.familyId / ctx.jti / ctx.reason
+#   module=exception-filter 行：顶层 code=3001（错误码一等字段，OBS-05）
+#   ⚠ 公共 refresh 路由无鉴权 ⇒ ALS 无 userId：LogRecord 顶层自动身份只有 requestId，
+#     userId 在该行 ctx 内；审计行顶层 userId 始终齐全（契约不变，样例按真实形态写）。
 
-# ③ 看安全事件计数是否在涨（Prometheus 告警规则直接消费）：
+# ③ 指标：安全事件计数是否在涨（Prometheus 告警规则直接消费）
 curl -s http://127.0.0.1:3000/metrics | grep '^fw_security_replay_detected_total'
 # → fw_security_replay_detected_total{reason="fingerprint_mismatch"} 1
-#    （label 仅低基数 reason；userId/familyId 不入 metrics，回审计表查）
+#   （label 仅低基数 reason；userId/familyId 不入 metrics，回审计表查）
 
-# ④ 该请求当时的失败信封（若有对应客户端报障截图）：信封 requestId 与 ①② 三处同值。
+# ④ 响应头 / 错误信封：该请求响应头 X-Request-Id / X-Trace-Id 与信封 requestId / traceId 同值
+#   （真机实测逐字相等；additive 字段 requestId 仅在请求上下文存在时输出）
 ```
 
 关联链：**响应头 `X-Request-Id`/`X-Trace-Id` ↔ 信封 `requestId`/`traceId` ↔ 日志 `LogRecord` ↔

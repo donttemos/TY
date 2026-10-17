@@ -2,7 +2,7 @@
 
 > 本文是 [1Panel 服务器真机部署手册](./62-1panel-real-deploy.md) 的**实测记录**：所有数据来自一台真实云服务器的完整部署过程，非估算、非设计推演。手册中标注「待真机确认」的 7 项在此逐条结清。
 >
-> 验证时间：2026-10-14　·　仓库版本：v0.2.0（`9d4e5fc`）
+> 验证时间：2026-10-14（v0.2.0，§1~§5）· 2026-10-17（v0.6.0，§6）　·　仓库版本：v0.2.0（`9d4e5fc`）/ v0.6.0（`aa51b8d` → 修复重发 `0944864`）
 
 ---
 
@@ -271,7 +271,70 @@
 
 ---
 
-## 6. 相关文档
+## 6. v0.6.0 真机实测（2026-10-17）：M12 W3 边界 + OBS-13 链路 + reseed
+
+> 动作序列与 §5 一致（未新增步骤），本节只记**实测数据、边界结论与真机专属缺陷**。
+> 被测版本：`20261017200843-v0.6.0`（commit `aa51b8d`）→ 修复重发 `20261017201501-v0.6.0-fix`（commit `0944864`）。
+> 环境：Ubuntu 22.04 / Node v22.22.2 / pnpm 11.6.0 / PostgreSQL 18.6（1Panel 容器）/ OpenResty 1.31.1.1 / `APP_ENV=prod`。
+
+### 6.1 发版动作与耗时（实测）
+
+| 阶段 | 命令 | 实测 |
+|---|---|---|
+| 备份 | `docker exec … pg_dump -U fw fw \| gzip` | **17 KB**（17 表 / 13 用户 / 51 审计行 / 11 refresh；落 `/opt/fw/shared/backups/`） |
+| 构建 | `pnpm install` → `prisma generate --schema prisma/pg/schema.prisma` → `pnpm --filter "example-api..." build` → `admin-web build` → 重链 bin | **100 s**（441 包；release 639 MB；前端产物断言含 `/api/v1`） |
+| 迁移 | `fw db:migrate -- --schema=prisma/pg/schema.prisma` | 6 条新迁移一次通过：`add_audit_archives` / `add_notifications` / `add_upload_files` / `add_refresh_replacement` / `add_refresh_fingerprint` / `add_audit_event_contract`（DB 迁移记录 3→9） |
+| reseed | `fw db:seed`（先 `systemctl stop fw-api`） | **3 s**；**43 权限点**（含 `ops:read`）/ 5 角色 / 10 菜单 / 11 账号 / 4 租户；审计行 51→0（备份可回灌） |
+| 切流 | 软链原子切换 + `systemctl start` | **2 s 内** `/health` 200、`/ready` 四依赖（db/cache/queue/transport）全 ok |
+
+回滚面：旧 release `20261015224417`（v0.5.0）完整保留；本次迁移全为 additive（nullable 列 / 新表），迁移后旧代码仍可运行；`--rollback` 等价动作 = 软链切回 + restart（实测 2 s 级）。
+
+### 6.2 W3 边界（OBS-15/16/19）——真机 HTTP 实测
+
+| 用例 | 期望 | 实测（v0.6.0） |
+|---|---|---|
+| `GET /api/v1/auth-maintenance/{key-ring,refresh-cleanup,audit-archive}`，无 token（应用层 `127.0.0.1:3000`） | 401 / `3001` | **401 / 3001 ×3** |
+| 同上 + `alice` token（无 `ops:read`） | 403 / `3002` | **403 / 3002 ×3** |
+| 同上 + `admin` token（reseed 后持 `ops:read`） | 200 + `no-store` | **200 ×3，`Cache-Control: no-store` ×3** |
+| 公网 `https://cs.donttemo.top/api/v1/auth-maintenance/key-ring`（无 token） | 不裸奔 | **401 / 3001**（Nginx 未为 maintenance 建放行，应用层权限码为主） |
+| 公网 + `admin` token | 200 | **200 + `no-store`** |
+| `demo*` 四控制器（`APP_ENV=prod` 且未设 `DEMO_ENDPOINTS_ENABLED`） | 404 | 首轮 **`/demo/ok` 200（缺陷，见 6.4-1）** → 修复后 **404 ×4** |
+| 公网 `/api/v1/demo/ok` | 404 | 修复前 200 → 修复后 **404** |
+| `/health`、`/ready`（应用层与公网） | 200 | **200 / 200 ×2 入口** |
+| `/metrics`（应用层） | 200 且含 `fw_auth_*` / `fw_security_*` | **200，两段齐全**（见 6.3 计数） |
+| 公网 `/metrics` | 不应泄露指标 | **200 但返回 SPA `index.html`**（部署侧未建 metrics location）——见 6.4-3 |
+
+### 6.3 OBS-13 链路贯通（一次真实 replay）
+
+构造：`alice` 登录（UA `fw-verify-login/1.0`）→ 用 R1 轮换出 R2（同 UA）→ 再用 R1、UA `fw-replay-agent/1.0` 复用 ⇒ `401 / 3001`。
+
+| 落点 | 实测值 |
+|---|---|
+| ① 响应头 | `X-Request-Id: 01M54WNZ80JXDB0P250PMSHT3R`；`X-Trace-Id: d15fa1b0ddbd4a19807400923b5979ac` |
+| 错误信封 | `code=3001`；`requestId` / `traceId` 与响应头**逐字相等**（additive `requestId` 生效） |
+| ③ `audit_logs` 行（`?event=refresh.replay_detected&trace_id=…`） | `requestId/traceId/userId/familyId/jti/ip(::ffff:127.0.0.1)/userAgent(fw-replay-agent/1.0)/createdAt/event/result` **九要素齐全**，且 `category=security`、`result=denied` |
+| ② 结构化日志（`journalctl -u fw-api -o cat \| grep '"requestId":"…"'`） | 同一 requestId **命中 2 行**：`module=auth.refresh`（`ctx.userId/familyId/jti`，`reason=fingerprint_mismatch`）与 `module=exception-filter`（`code=3001`）——口径修正见 6.4-2 |
+| ④ `/metrics` | `fw_security_replay_detected_total{reason="fingerprint_mismatch"} 1`、`fw_security_family_revoked_total 1`；文本**不含** requestId/userId（基数护栏成立） |
+| OBS-14 审计检索 | `?request_id=` 命中 1 行；`?category=security&family_id=` 命中 1 行；白名单外参数 `bogus=1` → **400 / 1001** |
+
+汇总脚本 **40 项断言 40/40 通过**（证据目录 `/opt/fw/shared/verify-20261017-201641/`；修复前首轮 37/40，3 红 = 1 个真缺陷 + 2 个我方断言口径错误，见 6.4）。
+
+### 6.4 本轮发现与处置（真机专属：单测与 CI 都是绿的）
+
+1. **`DemoController` 漏挂 `DemoEndpointsGuard`（真缺陷，暴露面）**：W3 只给 demo-queue / demo-transport / cache-demo 三个控制器加了守卫，`/api/v1/demo/*`（`/demo/ok`、`/demo/boom`、`/demo/items` CRUD、`/demo/log-sensitive`）在 `APP_ENV=prod` 下**公网可访问**，与 `docs/46` §4「四控制器 404」漂移。修复：补 `@UseGuards(DemoEndpointsGuard)`（commit `0944864`）+ `demo-endpoints.guard.spec.ts` 增**四控制器 guard 挂载元数据断言**（修复前必红，修复后 4 passed）；重建重发后四端点与公网入口均 404。
+2. **`docs/45` 排障样例两处口径与真机不符**（文档修正，非代码缺陷）：① 1Panel 档日志在 **journald** 而非容器 stdout（`docker logs fw-app` 不可跑）→ 补 `journalctl -u fw-api` 变体；② 公共 `refresh` 路由**无鉴权**，ALS 无 userId，`LogRecord` 顶层自动身份只有 `requestId`，`userId` 落在该行 `ctx`（审计行顶层 `userId` 仍齐全）。契约不破，但样例必须按真实形态写。
+3. **部署侧 Nginx 实例与仓库模板漂移**（登记跟进，窗口内不擅动线上配置）：线上仍是 v0.2.0 手写的 `fw-locations.inc`（仅 `= /health`、`= /ready`），仓库模板 `deploy/nginx/fw-1panel-locations.conf` 另有 `location ~ ^/(ready|metrics)$` 的内网 allow/deny；实测公网 `/metrics` 落 SPA 回退返回 `index.html`（**不泄露指标**，但语义错）。改线上 nginx 会影响 1Panel 探针与人工排障面 → 登记为 OBS-19 部署侧对齐项。
+4. 我方首轮断言口径错误 2 处（已修正脚本）：把「exception-filter 行的 `code`」当成 replay 行也有 `code`、把 `userId` 当成顶层必有——正是第 2 条要修文档的原因。
+
+### 6.5 结论
+
+- AC-OBS-15 / 16 / 19 的真机 HTTP 边界与 AC-OBS-13 的排障样例**全部实测通过**（命令逐条可跑）。
+- 升级影响第 2 条（存量环境 reseed 补 `ops:read`）在真机走通：reseed 后 `admin` 持有、`alice` 不持有、maintenance 三端点行为符合预期。
+- 遗留：K8s NetworkPolicy 评估（E-05）与 6.4-3 的 Nginx 实例对齐，属「登记待做」，不阻塞 v0.6.0。
+
+---
+
+## 7. 相关文档
 
 - [1Panel 真机部署手册](./62-1panel-real-deploy.md) —— 步骤手册（本文为其实测记录）
 - [云服务器裸机部署手册](./61-bare-metal-deploy.md) —— 宿主 nginx 档位

@@ -77,6 +77,28 @@
 
 ## 5. 遗留问题（登记，不阻塞发布）
 
-- AC-OBS-07 的 `request_id` 已于 W2 落地；**真机 1Panel maintenance 边界实测 + AC-OBS-13 排障样例实测**待部署窗口（需用户配合）。
+- ~~AC-OBS-07 的 `request_id` 已于 W2 落地；**真机 1Panel maintenance 边界实测 + AC-OBS-13 排障样例实测**待部署窗口（需用户配合）。~~ **已于 2026-10-17 部署窗口完成**，见 §6。
 - K8s NetworkPolicy 评估（E-05）、storage S3 端口实测（E-09）、长压实测（E-11）维持暂缓登记。
 - 真 Redis 单实例集成与双进程分布式锁验证（回归测试设计 §9.4）待 CI 挂服务后接入。
+- 线上 Nginx 实例与仓库模板漂移（`/metrics` 未建 location，落 SPA 回退）——部署侧对齐跟进（OBS-19，见 §6.2）。
+
+## 6. 发布后真机实测与补丁（2026-10-17，v0.6.0 之后）
+
+发布 tag 之后按计划打了**部署窗口**，把 v0.6.0 部署到 1Panel 真机（`106.55.32.251` / `APP_ENV=prod`）并执行 M12 真机验收。完整数据见 [docs/63 §6](./63-1panel-real-deploy-verification.md)。
+
+### 6.1 实测结论
+
+- **发版路径**：`git archive` 投送 → 服务器构建（100 s）→ 6 条迁移（audit_archives / notifications / upload_files / refresh_replacement / refresh_fingerprint / audit_event_contract）→ reseed（**43 权限点，含 `ops:read`**）→ 前端 rsync → 软链原子切换 → 2 s 内 `/health` 200、`/ready` 四依赖 ok。旧 release 保留可秒级回滚，本次迁移全 additive。
+- **W3 边界（OBS-15/16/19）**：maintenance 三端点 `401/3001`（无 token）、`403/3002`（alice）、`200 + no-store`（admin）逐项符合；公网入口同判据；demo 自检面 404；`/health`/`/ready` 200；`/metrics` 含 `fw_auth_*`/`fw_security_*`。
+- **OBS-13 链路**：真实 replay 一次，`X-Request-Id`/`X-Trace-Id` ↔ 信封 ↔ `audit_logs` 九要素（含 `category=security`）↔ journald 日志（`auth.refresh` ctx 身份 + `exception-filter` `code=3001`）↔ `fw_security_replay_detected_total{reason="fingerprint_mismatch"} 1`，四处一致；审计检索 `request_id`/`category`/`event` 过滤与白名单外 400 均实测。汇总断言 **40/40 通过**。
+- **升级影响第 2 条（reseed 补 `ops:read`）**：真机走通（admin 持有 / alice 不持有）。
+
+### 6.2 实测抓出的缺陷与补丁
+
+| # | 缺陷 | 处置 |
+|---|---|---|
+| 1 | **`DemoController` 漏挂 `DemoEndpointsGuard`**：W3 只给 demo-queue / demo-transport / cache-demo 加了守卫，`APP_ENV=prod` 下 `/api/v1/demo/*`（含 `/demo/ok`、`/demo/items` CRUD）**公网 200**，与 `docs/46` §4 漂移 | 补 `@UseGuards`（commit **`0944864`**）+ `demo-endpoints.guard.spec.ts` 增四控制器 guard 挂载元数据断言；重建重发后四端点与公网均 404 |
+| 2 | `docs/45` 排障样例：1Panel 档日志在 journald（`docker logs` 不可跑）；公共 refresh 路由 ALS 无 userId（顶层只有 requestId，userId 在 `ctx`） | 文档修正（补 journalctl 变体 + 口径说明），契约不变 |
+| 3 | 线上 Nginx 实例仍是 v0.2.0 手写 `fw-locations.inc`（仅 `/health`、`/ready`；`/metrics` 落 SPA 回退返回 index.html），与仓库 `deploy/nginx` 模板的内网 allow/deny 漂移 | **未在窗口内改线上配置**（影响探针/排障面），登记为 OBS-19 部署侧对齐项 |
+
+> 补丁 `0944864` 未进入 `v0.6.0` tag，属「发布后真机验证补丁」；tag 语义与发布产物不变，升级到 `main`（或 cherry-pick 该提交）即获得修复。
