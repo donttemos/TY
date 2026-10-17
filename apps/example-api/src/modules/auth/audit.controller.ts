@@ -73,6 +73,8 @@ export const AUDIT_FILTER_PARAMS = [
   'family_id',
   'category',
   'event',
+  // mock 失败演示路径专用透传参数（simulate=fail；smoke-mock 用，后端忽略该值）
+  'simulate',
 ] as const;
 
 /** 白名单校验：未知过滤参数直接 400（反向验证：不静默忽略） */

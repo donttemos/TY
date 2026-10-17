@@ -531,6 +531,7 @@ const MOCK_AUDIT_SORT_FIELDS: Record<string, string> = {
 const MOCK_AUDIT_FILTER_PARAMS = [
   'page', 'pageSize', 'user_id', 'module', 'action', 'target_type', 'target_id', 'from', 'to', 'sort',
   'trace_id', 'request_id', 'family_id', 'category', 'event',
+  'simulate', // 失败演示路径（与 example-api 的 AUDIT_FILTER_PARAMS 逐项一致）
 ];
 
 /** 白名单校验：返回首个未知过滤参数的 400 文案；全部合法返回 null（反向验证：不静默忽略） */
