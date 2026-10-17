@@ -499,11 +499,13 @@ async function main() {
     const csvDownload = await fetch(`${BASE}/jobs/${exportDispatchId}/download`, { headers: { Authorization: `Bearer ${newAccess}` } });
     const csvDownloadBytes = Buffer.from(await csvDownload.arrayBuffer());
     const csvDownloadText = csvDownloadBytes.toString('utf8');
+    const csvHasBom = csvDownloadBytes[0] === 0xef && csvDownloadBytes[1] === 0xbb && csvDownloadBytes[2] === 0xbf;
+    // M12 W2 OBS-14：CSV 列扩展（与 example-api buildAuditCsv / mock 产物逐字节同构）
+    const csvHasHeader = csvDownloadText.includes('id,createdAt,userId,module,action,targetType,targetId,ip,traceId,requestId,familyId,category,event,before,after');
+    const csvLines = csvDownloadText.split('\r\n').length;
     check('GET /jobs/:id/download 取回 CSV（BOM + 表头 + 行数据，非统一信封）',
-      csvDownload.status === 200 && csvDownloadBytes[0] === 0xef && csvDownloadBytes[1] === 0xbb && csvDownloadBytes[2] === 0xbf
-      && csvDownloadText.includes('id,createdAt,userId,module,action,targetType,targetId,ip,traceId,before,after')
-      && csvDownloadText.split('\r\n').length >= 2,
-      `bytes=${csvDownloadBytes.length}`);
+      csvDownload.status === 200 && csvHasBom && csvHasHeader && csvLines >= 2,
+      `status=${csvDownload.status} bytes=${csvDownloadBytes.length} bom=${csvHasBom} header=${csvHasHeader} lines=${csvLines} head=${JSON.stringify(csvDownloadText.slice(0, 72))}`);
 
     // ---- M10 E-13 站内信 / 通知中心（mock 与 example-api §3.14 同构）----
     const notifList = await api('GET', '/notifications', { token: newAccess });
@@ -562,10 +564,10 @@ async function main() {
       if (failProgress && (failProgress.status === 'succeeded' || failProgress.status === 'failed')) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    check('simulate=fail 任务轮询到 failed（错误可读）', failProgress?.status === 'failed' && typeof failProgress?.error === 'string' && failProgress.error.length > 0, `error=${failProgress?.error?.slice(0, 40)}`);
+    check('simulate=fail 任务轮询到 failed（错误可读）', failProgress?.status === 'failed' && typeof failProgress?.error === 'string' && failProgress.error.length > 0, `dispatchCode=${failDispatch.body?.code} id=${failDispatchId} last=${JSON.stringify(failProgress)?.slice(0, 120)}`);
 
     const retriedFailed = await api('POST', `/jobs/${failDispatchId}/retry`, { token: newAccess });
-    check('POST /jobs/:id/retry 失败任务原地重跑（pending）', retriedFailed.body?.code === 0 && retriedFailed.body?.data?.status === 'pending');
+    check('POST /jobs/:id/retry 失败任务原地重跑（pending）', retriedFailed.body?.code === 0 && retriedFailed.body?.data?.status === 'pending', `code=${retriedFailed.body?.code} status=${retriedFailed.body?.data?.status} msg=${retriedFailed.body?.message?.slice(0, 60)}`);
 
     // 越权：alice 无 tenant:* / audit:export；任务按归属人隔离
     const aliceTenants = await api('GET', '/tenants', { token: aliceToken });
