@@ -175,7 +175,8 @@ async function main() {
 
     // ---------- C. 快照与落库断言 ----------
     console.log('\n—— 阶段 C：快照与落库断言 ——');
-    const snap = await call(base, '/api/v1/auth-maintenance/audit-archive');
+    // M12 W3：audit-archive 快照端点由 @Public 收敛为 ops:read 守卫，须持 admin 令牌
+    const snap = await call(base, '/api/v1/auth-maintenance/audit-archive', { headers: { authorization: `Bearer ${token}` } });
     const s = snap.body?.data ?? {};
     check('C1 快照：表达式 / 保留天数 / 批大小与配置一致', s.expression === '0 2 * * *' && s.retentionDays === 1 && s.batchSize === 2, JSON.stringify({ expression: s.expression, retentionDays: s.retentionDays, batchSize: s.batchSize }));
     check('C2 快照：lastArchived=3 且无错误', s.lastArchived === 3 && s.lastError === null, `archived=${s.lastArchived} error=${s.lastError}`);
@@ -192,7 +193,7 @@ async function main() {
     // ---------- D. 幂等重跑 ----------
     console.log('\n—— 阶段 D：幂等重跑 ——');
     await call(base, '/api/v1/demo-queue/cron-tick?name=audit.archive', { method: 'POST' });
-    const snap2 = (await call(base, '/api/v1/auth-maintenance/audit-archive')).body?.data ?? {};
+    const snap2 = (await call(base, '/api/v1/auth-maintenance/audit-archive', { headers: { authorization: `Bearer ${token}` } })).body?.data ?? {};
     check('D1 二次触发 lastArchived=0（无重复归档）', snap2.lastArchived === 0 && snap2.lastError === null, `archived=${snap2.lastArchived}`);
     check('D2 归档表仍为 3 条（无重复行）', (await prisma.auditLogArchive.count({ where: { module: MODULE } })) === 3);
 

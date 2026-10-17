@@ -40,8 +40,24 @@ function check(name, ok, detail = '') {
 }
 
 /** HTTP 请求：返回 { status, body, text } */
+let accessToken = null;
+
+/** 管理员登录（M12 W3 起 maintenance 端点需 ops:read，冒烟须持 admin 令牌访问） */
+async function loginAdmin() {
+  const res = await call('/api/v1/auth/login', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ account: 'admin', password: 'Admin@123456' }),
+  });
+  accessToken = res.body?.data?.accessToken ?? null;
+  return accessToken;
+}
+
 async function call(path, options) {
-  const res = await fetch(BASE + path, options);
+  const headers = { ...(options?.headers ?? {}) };
+  // 仅对显式 { auth: true } 的请求注入令牌（维护「未携带凭证返回 401/403」反向断言需要裸调）
+  if (options?.auth && accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  const res = await fetch(BASE + path, { ...options, headers });
   const text = await res.text();
   let body = {};
   try {
@@ -128,6 +144,9 @@ async function stopServer(server) {
 async function phaseMemory() {
   console.log('\n=== 阶段 A：memory 驱动（TC-JOB-001~006 + FR-09 + AC-002/003）===');
   const server = await startServer({ MQ_DRIVER: 'memory' });
+  // M12 W3：maintenance 端点由 @Public 收敛为 ops:read 守卫，先取 admin 令牌（此前裸调即可）
+  const token = await loginAdmin();
+  if (!token) throw new Error('admin 登录失败，后续 maintenance 断言无法执行');
   try {
     // 启动期告警：memory 驱动 + 进程内守卫时，cron 互斥降级必须显式提示（PRD-007 §8）
     check(
@@ -263,15 +282,15 @@ async function phaseMemory() {
       `[expression=${refreshCron?.expression} lock=${refreshCron?.lock}]`,
     );
     const tickResp = await post('/api/v1/demo-queue/cron-tick?name=auth.refresh-cleanup');
-    if (tickResp.status !== 200) console.log(`  [诊断] cron-tick status=${tickResp.status} body=${JSON.stringify(tickResp.body)?.slice(0, 200)}`);
+    if (tickResp.status >= 400) console.log(`  [诊断] cron-tick status=${tickResp.status} body=${JSON.stringify(tickResp.body)?.slice(0, 200)}`);
     let lastMaintenance = null;
     const refreshSnap = await waitUntil(async () => {
-      const resp = await call('/api/v1/auth-maintenance/refresh-cleanup');
+      const resp = await call('/api/v1/auth-maintenance/refresh-cleanup', { auth: true });
       lastMaintenance = resp;
       const snap = resp.body?.data;
       return snap?.runs >= 1 ? snap : null;
-      // 20s：这是 phase A server 的第一条 DB 查询（Prisma 引擎冷启动 + 清理查询），
-      // CI 冷机首跑可能超过默认 6s 窗口（v0.6.0 release CI 实测超时假红）
+      // 20s：任务执行含 Prisma 冷启动查询，CI 冷机首跑可能超过默认 6s 窗口；
+      // 且该端点为 ops:read 守卫（M12 W3），令牌已由阶段 A 入口 loginAdmin 注入
     }, 'auth.refresh-cleanup 手动触发执行', 20_000).catch((error) => {
       throw new Error(`${error.message}；maintenance 响应 status=${lastMaintenance?.status} body=${JSON.stringify(lastMaintenance?.body)?.slice(0, 240)}`);
     });
