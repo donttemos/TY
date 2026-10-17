@@ -564,7 +564,7 @@ async function main() {
       if (failProgress && (failProgress.status === 'succeeded' || failProgress.status === 'failed')) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    check('simulate=fail 任务轮询到 failed（错误可读）', failProgress?.status === 'failed' && typeof failProgress?.error === 'string' && failProgress.error.length > 0, `dispatchCode=${failDispatch.body?.code} id=${failDispatchId} last=${JSON.stringify(failProgress)?.slice(0, 120)}`);
+    check('simulate=fail 任务轮询到 failed（错误可读）', failProgress?.status === 'failed' && typeof failProgress?.error === 'string' && failProgress.error.length > 0, `dispatchStatus=${failDispatch.status} dispatchCode=${failDispatch.body?.code} msg=${failDispatch.body?.message?.slice(0, 80)} id=${failDispatchId} last=${JSON.stringify(failProgress)?.slice(0, 120)}`);
 
     const retriedFailed = await api('POST', `/jobs/${failDispatchId}/retry`, { token: newAccess });
     check('POST /jobs/:id/retry 失败任务原地重跑（pending）', retriedFailed.body?.code === 0 && retriedFailed.body?.data?.status === 'pending', `code=${retriedFailed.body?.code} status=${retriedFailed.body?.data?.status} msg=${retriedFailed.body?.message?.slice(0, 60)}`);
