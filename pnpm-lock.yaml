@@ -517,6 +517,9 @@ importers:
       '@fw/config':
         specifier: workspace:*
         version: link:../config
+      '@fw/core':
+        specifier: workspace:*
+        version: link:../core
       '@fw/logger':
         specifier: workspace:*
         version: link:../logger

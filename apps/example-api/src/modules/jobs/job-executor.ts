@@ -5,10 +5,12 @@
  *   （`job-center.execute` handler）调它——同一份写库语义，两条执行路径行为一致。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module example-api/jobs
  */
 
 import { Logger } from '@fw/logger';
+import { BizError, ErrorCode } from '@fw/core';
 import { emitJobEvent } from './job-events.js';
 import type { JobReporter, JobRunner } from './job-center.port.js';
 import { jobRowToView, type JobRecordRow, type JobStore } from './jobs.store.js';
@@ -66,7 +68,7 @@ export class JobExecutor {
     try {
       const artifact = await runner(report);
       if (artifact && artifact.content.length > this.maxArtifactChars) {
-        throw new Error(`产物超过 ${Math.round(this.maxArtifactChars / 1024 / 1024)}MB 上限，请缩小导出范围后重试`);
+        throw new BizError(ErrorCode.BAD_REQUEST, `产物超过 ${Math.round(this.maxArtifactChars / 1024 / 1024)}MB 上限，请缩小导出范围后重试`);
       }
       row.progress = 100;
       row.status = 'succeeded';

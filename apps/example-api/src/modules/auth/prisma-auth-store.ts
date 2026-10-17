@@ -13,6 +13,7 @@
  *   TODO(donttemo, 2026-10-13): 关联表与审计表建议由 @fw/db 补 RelationRepository / ReadOnlyRepository 下沉（M3 后）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-06）：audit_logs 统一事件契约增列透传（category/event/result/familyId/jti/requestId）
  * @modified 2026-10-13 donttemo 行类型按 @fw/auth 契约把主键收窄为 string（@fw/db 的 BaseEntity.id 为 string | number）
  * @modified 2026-10-14 donttemo M8 T-M8-04：实现 DataScopeOrgPort；pageUsers 支持 departmentIds、pageAuditLogs 支持 userIds
  * @modified 2026-10-14 donttemo BUG-15：pageUsers 消费 query.sort（映射为 Prisma orderBy，并始终追加 id asc tie-breaker）
@@ -153,6 +154,12 @@ interface AuditLogRow {
   userId: string | null;
   module: string;
   action: string;
+  category: string | null;
+  event: string | null;
+  result: string | null;
+  familyId: string | null;
+  jti: string | null;
+  requestId: string | null;
   targetType: string | null;
   targetId: string | null;
   beforeValue: unknown;
@@ -565,6 +572,12 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
         userId: record.userId,
         module: record.module,
         action: record.action,
+        category: record.category,
+        event: record.event,
+        result: record.result,
+        familyId: record.familyId,
+        jti: record.jti,
+        requestId: record.requestId,
         targetType: record.targetType,
         targetId: record.targetId,
         beforeValue: this.toJson(record.beforeValue),
@@ -593,6 +606,12 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
     if (query.action) where.action = query.action;
     if (query.targetType) where.targetType = query.targetType;
     if (query.targetId) where.targetId = query.targetId;
+    // M12 W2 OBS-14：契约字段精确过滤（列于 migration 20261017110000 软增列，均有索引）
+    if (query.traceId) where.traceId = query.traceId;
+    if (query.requestId) where.requestId = query.requestId;
+    if (query.familyId) where.familyId = query.familyId;
+    if (query.category) where.category = query.category;
+    if (query.event) where.event = query.event;
     if (query.from || query.to) {
       where.createdAt = {
         ...(query.from ? { gte: query.from } : {}),
@@ -730,6 +749,12 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
       userId: row.userId,
       module: row.module,
       action: row.action as AuditAction,
+      category: (row.category ?? null) as AuditLogRecord['category'],
+      event: row.event,
+      result: (row.result ?? null) as AuditLogRecord['result'],
+      familyId: row.familyId,
+      jti: row.jti,
+      requestId: row.requestId,
       targetType: row.targetType,
       targetId: row.targetId,
       beforeValue: row.beforeValue ?? null,

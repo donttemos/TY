@@ -55,7 +55,7 @@ export class DemoController {
   /** 未知异常：验证收敛为 9001，不裸抛 500 */
   @Get('boom')
   boom(): never {
-    throw new Error('意外错误：演示未知异常收敛');
+    throw new Error('意外错误：演示未知异常收敛'); // fw-allow-raw-throw: 演示端点本体——该行就是「未知异常收敛 9001」的演示对象，不可改
   }
 
   /** 敏感日志：验证 password/token 自动脱敏为 ***（TC-CORE-005） */

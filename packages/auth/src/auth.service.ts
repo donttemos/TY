@@ -18,6 +18,7 @@ import { Logger } from '@fw/logger';
 import type { AuditPage, AuditQuery, AuthOptions, ID, LoginResult, MenuNode, MeResult, RequestUser, TokenPair } from './types.js';
 import type { AuthStore } from './auth-store.js';
 import type { AuditService } from './audit.service.js';
+import { recordLoginMetric } from './auth-metrics.js';
 import type { LoginSecurity } from './login-security.js';
 import type { PasswordService } from './password.service.js';
 import type { PermissionService } from './permission.service.js';
@@ -91,6 +92,17 @@ export class AuthService {
    * @throws BizError 9003 限流 / 3004 锁定 / 3001 账号或密码错误
    */
   async login(input: LoginInput): Promise<LoginResult> {
+    // M12 W2 OBS-12：登录结果计数（fw_auth_login_total）；失败路径统一在此收敛，不打散到逐个 throw 点
+    try {
+      return await this.performLogin(input);
+    } catch (error) {
+      recordLoginMetric('failed');
+      throw error;
+    }
+  }
+
+  /** 登录主体（OBS-12 计数包装拆出，逻辑与拆分前逐字一致） */
+  private async performLogin(input: LoginInput): Promise<LoginResult> {
     const { store, passwords, security, audit, options } = this.deps;
     await security.assertRateLimit(input.ip);
 
@@ -152,6 +164,7 @@ export class AuthService {
       userAgent: input.userAgent ?? null,
     });
     logger.info('登录成功', { userId: user.id, username: user.username, ip: input.ip, policy: options.passwordPolicy });
+    recordLoginMetric('success');
     return result;
   }
 

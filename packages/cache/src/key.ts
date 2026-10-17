@@ -5,9 +5,15 @@
  *   PRD-004 §9 结论），用单字符前缀区分「真实值」与「空值占位」。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo Cache 缺陷清单复核修复（C-06）：参数哈希升级——① 序列化改为
+ *   **类型可区分的规范化编码**（原 JSON.stringify 把数组内 undefined 折叠成 null、丢弃对象的
+ *   undefined 属性、NaN/Infinity 折叠成 null，产生确定性碰撞）；② 摘要从 32 位 FNV-1a 升级为
+ *   SHA-256（256 bit，哈希碰撞在缓存键场景下可忽略）。注意：升级后装饰器默认键与旧缓存条目
+ *   不兼容，属一次性失效（旧条目等 TTL 自然过期），无脏读风险（新键读不到旧值只会回源）。
  * @module @fw/cache
  */
 
+import { createHash } from 'node:crypto';
 import { CacheKeyError } from './errors.js';
 import type { CacheEntryKind } from './types.js';
 
@@ -57,47 +63,84 @@ export function tagKeyOf(prefix: string, tag: string): string {
 }
 
 /**
- * FNV-1a 32 位哈希（base36）：跨进程稳定，用于装饰器默认 key
+ * SHA-256 摘要（hex）：跨进程稳定，用于装饰器默认 key（C-06 修复——原 32 位 FNV-1a
+ * 在数万不同参数集即有可观碰撞概率，按用户/租户区分结果的方法存在错误结果复用风险）
  * @param input 输入字符串
- * @returns 稳定哈希串
+ * @returns 64 位十六进制摘要
  */
 export function stableHash(input: string): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-  }
-  return hash.toString(36);
+  return createHash('sha256').update(input, 'utf8').digest('hex');
 }
 
 /**
- * 参数稳定哈希：对象键排序后序列化，避免 `{a:1,b:2}` 与 `{b:2,a:1}` 生成不同 key
+ * 参数稳定哈希：类型可区分的规范化编码后取 SHA-256，避免 `{a:1,b:2}` 与 `{b:2,a:1}` 生成不同 key，
+ * 同时区分 `[undefined]`/`[null]`、`{a:undefined}`/`{}`、`NaN`/`null` 等历史碰撞对（C-06 修复）
  * @param args 方法参数
- * @returns 形如 `a1b2c3` 的短哈希
+ * @returns 64 位十六进制摘要
  */
 export function hashArgs(args: readonly unknown[]): string {
-  return stableHash(stableStringify(args));
+  try {
+    return stableHash(canonicalize(args, new WeakSet<object>()));
+  } catch {
+    // getter 抛错等极端输入：退化为稳定占位，不阻塞业务方法
+    return stableHash(`~fallback:${String(args)}`);
+  }
 }
 
-/** 稳定序列化：对象键升序；不可序列化（循环引用/函数）退化为 String 形态 */
-function stableStringify(value: unknown): string {
-  const seen = new WeakSet<object>();
-  const walk = (node: unknown): unknown => {
-    if (node === null || typeof node !== 'object') {
-      return typeof node === 'function' ? '[fn]' : node;
+/**
+ * 类型可区分的规范化编码（C-06）：每个值都带类型前缀，杜绝跨类型折叠——
+ * undefined/null/NaN/±Infinity/bigint/boolean/string/function/circular 各有独立编码；
+ * 数组保序、对象键升序、Set/Map/Date/RegExp 有专属编码。
+ */
+function canonicalize(node: unknown, seen: WeakSet<object>): string {
+  if (node === undefined) return '~u';
+  if (node === null) return '~z';
+  switch (typeof node) {
+    case 'number':
+      if (Number.isNaN(node)) return '~nan';
+      if (node === Number.POSITIVE_INFINITY) return '~pinf';
+      if (node === Number.NEGATIVE_INFINITY) return '~ninf';
+      return `~n:${node}`;
+    case 'bigint':
+      return `~i:${node}`;
+    case 'boolean':
+      return node ? '~b1' : '~b0';
+    case 'string':
+      return `~s:${JSON.stringify(node)}`;
+    case 'function': {
+      // 按函数源码区分（回归测试设计 §8.1：不同函数不得仅因类型相同就得到相同键）；
+      // toString 对部分宿主函数可能抛错，退化为无源码占位
+      try {
+        return `~fn:${node.toString()}`;
+      } catch {
+        return '~fn';
+      }
     }
-    if (seen.has(node as object)) return '[circular]';
-    seen.add(node as object);
-    if (Array.isArray(node)) return node.map(walk);
-    const entries = Object.entries(node as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of entries) out[k] = walk(v);
-    return out;
-  };
+    case 'symbol':
+      return `~y:${String(node)}`;
+    case 'object':
+      break;
+    default:
+      return `~?${String(node)}`;
+  }
+  if (seen.has(node as object)) return '~circular';
+  seen.add(node as object);
   try {
-    return JSON.stringify(walk(value)) ?? 'undefined';
-  } catch {
-    return String(value);
+    if (node instanceof Date) return Number.isNaN(node.getTime()) ? '~date:invalid' : `~date:${node.getTime()}`;
+    if (node instanceof RegExp) return `~re:${node.toString()}`;
+    if (Array.isArray(node)) return `~a[${node.map((item) => canonicalize(item, seen)).join(',')}])`;
+    if (node instanceof Set) return `~S[${[...node].map((item) => canonicalize(item, seen)).sort().join(',')}])`;
+    if (node instanceof Map) {
+      const entries = [...node.entries()].map(([k, v]) => `${canonicalize(k, seen)}=>${canonicalize(v, seen)}`).sort();
+      return `~M[${entries.join(',')}])`;
+    }
+    const entries = Object.entries(node as Record<string, unknown>)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+      .map(([key, value]) => `${JSON.stringify(key)}:${canonicalize(value, seen)}`);
+    return `~o{${entries.join(',')}}`;
+  } finally {
+    // 同一对象非循环地出现两次（DAG）应正常展开两次，仅祖先链计入循环检测
+    seen.delete(node as object);
   }
 }
 

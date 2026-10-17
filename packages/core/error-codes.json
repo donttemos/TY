@@ -1,0 +1,88 @@
+{
+  "generatedFrom": "packages/core/src/errors/error-codes.ts",
+  "codes": {
+    "OK": 0,
+    "BAD_REQUEST": 1001,
+    "NOT_FOUND": 1002,
+    "CONFLICT": 1003,
+    "STATE_NOT_ALLOWED": 1004,
+    "BIZ_FAILED": 2001,
+    "UNAUTHORIZED": 3001,
+    "FORBIDDEN": 3002,
+    "TOKEN_EXPIRED": 3003,
+    "ACCOUNT_LOCKED": 3004,
+    "TENANT_INVALID": 4001,
+    "CONFIG_NOT_HOT": 5001,
+    "CONFIG_INVALID_VALUE": 5002,
+    "CONFIG_NOT_FOUND": 5003,
+    "INTERNAL": 9001,
+    "DEPENDENCY_UNAVAILABLE": 9002,
+    "RATE_LIMITED": 9003
+  },
+  "meta": {
+    "1001": {
+      "http": 400,
+      "message": "参数错误"
+    },
+    "1002": {
+      "http": 404,
+      "message": "资源不存在"
+    },
+    "1003": {
+      "http": 409,
+      "message": "唯一约束冲突"
+    },
+    "1004": {
+      "http": 400,
+      "message": "状态不允许该操作"
+    },
+    "2001": {
+      "http": 400,
+      "message": "业务校验失败"
+    },
+    "3001": {
+      "http": 401,
+      "message": "未登录或令牌无效"
+    },
+    "3002": {
+      "http": 403,
+      "message": "无操作权限"
+    },
+    "3003": {
+      "http": 401,
+      "message": "令牌已过期"
+    },
+    "3004": {
+      "http": 403,
+      "message": "账号已锁定"
+    },
+    "4001": {
+      "http": 403,
+      "message": "租户无效或已过期"
+    },
+    "5001": {
+      "http": 400,
+      "message": "该配置键不可热更新"
+    },
+    "5002": {
+      "http": 400,
+      "message": "配置新值非法"
+    },
+    "5003": {
+      "http": 404,
+      "message": "配置键不存在"
+    },
+    "9001": {
+      "http": 500,
+      "message": "系统内部错误"
+    },
+    "9002": {
+      "http": 503,
+      "message": "依赖不可用"
+    },
+    "9003": {
+      "http": 429,
+      "message": "请求过于频繁"
+    }
+  }
+}

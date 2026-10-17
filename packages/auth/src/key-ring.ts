@@ -9,10 +9,12 @@
  *   禁全 Ring brute-force）——路由逻辑在 TokenService，不在本文件。
  * @author donttemo
  * @created 2026-10-16
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module @fw/auth
  */
 
 import { createHash, hkdfSync } from 'node:crypto';
+import { BizError, ErrorCode } from '@fw/core';
 
 /** Key Ring 可观测快照的密钥来源枚举（ADR-0024 决策 3：API 契约冻结，不允许自由字符串） */
 export type KeySource = 'explicit' | 'legacy-hkdf' | 'jwt-secret' | 'jwt-secret-prev';
@@ -45,36 +47,37 @@ export function parseReplacementKeys(raw: string | undefined | null): KeyRingEnt
   const seen = new Set<string>();
   for (const segment of raw.split('|')) {
     if (segment.trim() === '') {
-      throw new Error('AUTH_REPLACEMENT_KEYS 存在空 entry（连续 | 或首尾空段）：请修正配置');
+      throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, 'AUTH_REPLACEMENT_KEYS 存在空 entry（连续 | 或首尾空段）：请修正配置');
     }
     const sep = segment.indexOf(':');
     if (sep <= 0) {
-      throw new Error(`AUTH_REPLACEMENT_KEYS 条目格式非法（应为 <keyId>:<secret>）: ${segment.slice(0, 24)}…`);
+      throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `AUTH_REPLACEMENT_KEYS 条目格式非法（应为 <keyId>:<secret>）: ${segment.slice(0, 24)}…`);
     }
     const keyId = segment.slice(0, sep);
     const secret = segment.slice(sep + 1);
     if (keyId.includes(':') || keyId.includes('|')) {
-      throw new Error(`AUTH_REPLACEMENT_KEYS keyId 禁含 : 与 |: ${keyId.slice(0, 24)}`);
+      throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `AUTH_REPLACEMENT_KEYS keyId 禁含 : 与 |: ${keyId.slice(0, 24)}`);
     }
     if (secret.includes('|')) {
-      throw new Error(`AUTH_REPLACEMENT_KEYS secret 禁含 |（keyId=${keyId.slice(0, 24)}）`);
+      throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `AUTH_REPLACEMENT_KEYS secret 禁含 |（keyId=${keyId.slice(0, 24)}）`);
     }
     if (secret.length === 0) {
-      throw new Error(`AUTH_REPLACEMENT_KEYS secret 为空（keyId=${keyId.slice(0, 24)}）`);
+      throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `AUTH_REPLACEMENT_KEYS secret 为空（keyId=${keyId.slice(0, 24)}）`);
     }
     if (Buffer.byteLength(secret, 'utf8') < KEY_SECRET_MIN_BYTES) {
-      throw new Error(
+      throw new BizError(
+        ErrorCode.CONFIG_INVALID_VALUE,
         `AUTH_REPLACEMENT_KEYS secret 长度不足（keyId=${keyId.slice(0, 24)}）：需 ≥ ${KEY_SECRET_MIN_BYTES} UTF-8 bytes`,
       );
     }
     if (seen.has(keyId)) {
-      throw new Error(`AUTH_REPLACEMENT_KEYS 存在重复 keyId: ${keyId.slice(0, 24)}`);
+      throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `AUTH_REPLACEMENT_KEYS 存在重复 keyId: ${keyId.slice(0, 24)}`);
     }
     seen.add(keyId);
     entries.push({ keyId, secret });
   }
   if (entries.length === 0) {
-    throw new Error('AUTH_REPLACEMENT_KEYS 未解析出任何有效条目');
+    throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, 'AUTH_REPLACEMENT_KEYS 未解析出任何有效条目');
   }
   return entries;
 }
@@ -89,19 +92,19 @@ export class ReplacementKeyRing {
 
   constructor(entries: KeyRingEntry[]) {
     if (entries.length === 0) {
-      throw new Error('ReplacementKeyRing 至少需要一个密钥条目');
+      throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, 'ReplacementKeyRing 至少需要一个密钥条目');
     }
     let latest = entries[0]!.keyId;
     for (const entry of entries) {
       // 字符校验（防御直接构造 entries 绕过 parseReplacementKeys 的场景）
       if (entry.keyId.includes(':') || entry.keyId.includes('|')) {
-        throw new Error(`keyId 禁含 : 与 |: ${entry.keyId.slice(0, 24)}`);
+        throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `keyId 禁含 : 与 |: ${entry.keyId.slice(0, 24)}`);
       }
       if (entry.secret.includes('|')) {
-        throw new Error(`secret 禁含 |（keyId=${entry.keyId.slice(0, 24)}）`);
+        throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `secret 禁含 |（keyId=${entry.keyId.slice(0, 24)}）`);
       }
       if (Buffer.byteLength(entry.secret, 'utf8') < KEY_SECRET_MIN_BYTES) {
-        throw new Error(`secret 长度不足（keyId=${entry.keyId.slice(0, 24)}）：需 ≥ ${KEY_SECRET_MIN_BYTES} UTF-8 bytes`);
+        throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `secret 长度不足（keyId=${entry.keyId.slice(0, 24)}）：需 ≥ ${KEY_SECRET_MIN_BYTES} UTF-8 bytes`);
       }
       // AES-256 需恰好 32 字节：secret 经 HKDF 派生（info 不含 keyId——同 secret 不同
       // keyId 视为同一密钥的不同标签，使 Rule 6④「显式命中失败不试其它 key」可验证）
@@ -164,7 +167,7 @@ export class JwtKeyRing {
     this.previousKid = previousSecret ? deriveJwtKid(previousSecret) : null;
     // 同 Ring 内 kid collision → 启动即失败（不同 secret 派生出相同 kid 会造成 keyFor 路由歧义）
     if (this.previousKid !== null && this.previousKid === this.currentKid) {
-      throw new Error(`JWT Key Ring kid collision（current 与 previous 派生出相同 kid: ${this.currentKid}）——请更换 JWT_SECRET_PREV`);
+      throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `JWT Key Ring kid collision（current 与 previous 派生出相同 kid: ${this.currentKid}）——请更换 JWT_SECRET_PREV`);
     }
   }
 

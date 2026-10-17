@@ -5,13 +5,16 @@
  *   日志与审计统一取 @fw/logger 的 traceId，便于与结构化日志串联排障。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-06，ADR-0025）：统一审计事件契约——
+ *   AuditEntry / AuditLogRecord 全量落位 category/event/result/familyId/jti/requestId（缺省 null），
+ *   persist 统一填充，杜绝「部分调用方带事件字段、部分不带」的形状漂移
  * @module @fw/auth
  */
 
 import { Logger, getRequestContext, getTraceId } from '@fw/logger';
 import type { AuthStore } from './auth-store.js';
 import { MASKED, SENSITIVE_FIELDS } from './constants.js';
-import type { AuditAction, AuditLogRecord, AuditQuery, ID } from './types.js';
+import type { AuditAction, AuditCategory, AuditEventResult, AuditLogRecord, AuditQuery, ID } from './types.js';
 import type { PageResult } from '@fw/db';
 
 const logger = Logger.for('auth.audit');
@@ -30,6 +33,18 @@ export interface AuditEntry {
   module: string;
   /** 动作 */
   action: AuditAction;
+  /** 审计大类（PRD-012 OBS-06）；缺省为 null（旧调用方零改动） */
+  category?: AuditCategory | null;
+  /** 点分事件名（PRD-012 OBS-06，如 refresh.replay_detected）；缺省为 null */
+  event?: string | null;
+  /** 事件结果（PRD-012 OBS-06）；缺省为 null */
+  result?: AuditEventResult | null;
+  /** 令牌家族 ID（安全事件关联键）；缺省为 null */
+  familyId?: string | null;
+  /** 令牌标识 jti（非令牌本体）；缺省为 null */
+  jti?: string | null;
+  /** 单次请求 ID（PRD-012 OBS-09，W2 起填充）；缺省为 null */
+  requestId?: string | null;
   /** 对象类型 */
   targetType?: string | null;
   /** 对象 ID */
@@ -110,12 +125,18 @@ export class AuditService {
     return this.store.pageAuditLogs(query);
   }
 
-  /** 组装并写入记录 */
+  /** 组装并写入记录（统一事件契约字段全量落位，缺省为 null——OBS-08「字段完整」） */
   private async persist(entry: AuditEntry): Promise<void> {
     await this.store.writeAuditLog({
       userId: entry.userId ?? getRequestContext()?.userId ?? null,
       module: entry.module,
       action: entry.action,
+      category: entry.category ?? null,
+      event: entry.event ?? null,
+      result: entry.result ?? null,
+      familyId: entry.familyId ?? null,
+      jti: entry.jti ?? null,
+      requestId: entry.requestId ?? getRequestContext()?.requestId ?? null,
       targetType: entry.targetType ?? null,
       targetId: entry.targetId ?? null,
       beforeValue: entry.before === undefined ? null : sanitizeForAudit(entry.before),

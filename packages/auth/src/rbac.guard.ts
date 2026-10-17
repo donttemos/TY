@@ -16,6 +16,8 @@ import { Reflector } from '@nestjs/core';
 import { BizError, ErrorCode } from '@fw/core';
 import { getRequestContext, Logger, patchRequestContext } from '@fw/logger';
 import type { AuthStore } from './auth-store.js';
+import { recordTokenVerifyFailedMetric } from './auth-metrics.js';
+import { TokenVerifyError } from './token.service.js';
 import { META_IGNORE_TENANT, META_PERMISSIONS, META_PUBLIC, META_STRATEGY, PERM } from './constants.js';
 // 注意：以下三个依赖必须「值导入」——仅在类型位置引用时 emitDecoratorMetadata 只能发出
 // Function / Object，Nest 无法解析构造函数依赖（启动期直接 DI 失败）。
@@ -81,6 +83,8 @@ export class RbacGuard implements CanActivate {
     try {
       identity = await this.resolve(strategyName, request);
     } catch (error) {
+      // M12 W2 OBS-12：令牌校验失败按原因计数（fw_auth_token_verify_failed_total{reason}）
+      if (error instanceof TokenVerifyError) recordTokenVerifyFailedMetric(error.reason);
       if (!isPublic) throw error;
       // 公开接口：凭证异常不阻塞（例如前端携带过期令牌访问登录接口）
       logger.debug('公开接口凭证解析失败，按匿名处理', { url: request.url, reason: (error as Error).message });
@@ -132,7 +136,14 @@ export class RbacGuard implements CanActivate {
 
     // 4) 写请求对象与日志上下文（审计与数据权限据此取操作人）
     request.user = user;
-    patchRequestContext({ userId: user.id, tenantVerified: Boolean(tenantId && user.tenantId === tenantId) });
+    patchRequestContext({
+      userId: user.id,
+      tenantVerified: Boolean(tenantId && user.tenantId === tenantId),
+      // M12 W2 OBS-10：令牌身份进统一上下文（familyId/jti 为非凭证标识，ADR-0026 安全论证）；
+      // 仅在存在时写入，避免把既有上下文值误清为 undefined
+      ...(user.jti ? { jti: user.jti } : {}),
+      ...(user.fam ? { familyId: user.fam } : {}),
+    });
     return true;
   }
 

@@ -5,6 +5,7 @@
  *   越界防护：key 经 assertKey 校验后仍按「resolve 后必须落在 root 内」做最终防线。
  * @author donttemo
  * @created 2026-10-16
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module @fw/storage
  */
 
@@ -34,7 +35,7 @@ export class LocalStorage implements StoragePort {
     const abs = path.resolve(this.root, key);
     const base = path.resolve(this.root);
     if (abs !== base && !abs.startsWith(base + path.sep)) {
-      throw new Error(`非法存储 key：解析后越出存储根目录（${JSON.stringify(key)}）`);
+      throw new BizError(ErrorCode.BAD_REQUEST, `非法存储 key：解析后越出存储根目录（${JSON.stringify(key)}）`);
     }
     return abs;
   }

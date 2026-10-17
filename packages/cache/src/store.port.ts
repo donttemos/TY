@@ -9,6 +9,12 @@
  * @modified 2026-10-16 donttemo 驱动审查修复：文档化两处端口契约——size() 为观测近似值
  *   （memory=本进程条目 / redis=DBSIZE 整库，两驱动数值不可直接对比）；tokenBucketTake 的
  *   retryAfterMs 增加 -1 哨兵语义（cost > capacity 时永不可满足，不得当作可立即重试）
+ * @modified 2026-10-17 donttemo Cache 缺陷清单复核修复（C-01/C-03/A-04）：新增两个原子端口方法——
+ *   `setWithTags`（写值与标签登记单次原子完成，消除「值已写入、标签未登记」的半程状态）与
+ *   `invalidateByTag`（读成员、删成员、删索引单次原子完成，消除失效与并发写入的竞态窗口，
+ *   且故障时整体未发生——fail-open 降级不再误删索引）。两个方法均为**多键操作**：
+ *   redis-cluster 模式下跨 slot 的多键 Lua 会被拒绝（CROSSSLOT），标签能力在 cluster 下
+ *   需 hash-tag 同 slot 或退化为不可用（已知限制，与 size() 观测限制同级登记）。
  * @module @fw/cache
  */
 
@@ -76,6 +82,30 @@ export interface CacheStorePort {
     cost: number,
     nowMs: number,
   ): Promise<TokenBucketTakeResult>;
+
+  /**
+   * 带标签登记的原子写入（C-01/C-04 修复）：写值与向各标签集合登记本键**单次原子完成**，
+   * 不存在「值已写入、标签未登记」或「标签已登记、值写入失败」的半程状态。
+   * @param key 完整缓存键
+   * @param value 已编码的缓存值
+   * @param ttlMs 值 TTL（毫秒）
+   * @param tags 标签列表（tagKey 为完整标签映射键，ttlMs 为映射集合 TTL）
+   */
+  setWithTags(
+    key: string,
+    value: string,
+    ttlMs: number,
+    tags: ReadonlyArray<{ tagKey: string; ttlMs: number }>,
+  ): Promise<void>;
+
+  /**
+   * 原子标签失效（C-01/C-03 修复）：读取成员 → 删除全部成员键 → 删除标签集合**单次原子完成**。
+   * 与 `setWithTags` 全序串行后，失效期间/之后完成登记的键要么已被删除、要么重新持有有效索引，
+   * 不再出现「键存在但索引已丢」的孤儿。操作失败时**整体未发生**（fail-open 降级不得销毁索引）。
+   * @param tagKey 完整标签映射键
+   * @returns 实际删除的成员键数量（标签集合不存在时为 0）
+   */
+  invalidateByTag(tagKey: string): Promise<number>;
 
   /** 可用性探测 */
   ping(): Promise<boolean>;

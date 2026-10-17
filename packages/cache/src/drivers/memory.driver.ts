@@ -12,11 +12,21 @@
  *   ④ capacity < cost 时 retryAfterMs 返回 -1（永不可满足）而非误导性的 0；
  *   ⑤ evictIfNeeded 容量压力下先清过期键再 LRU 淘汰；⑥ size() 的过期清理按 1 秒节流，
  *   避免高频观测调用每次全量扫描阻塞事件循环；⑦ close() 同步清理令牌桶。
+ * @modified 2026-10-17 donttemo Cache 缺陷清单复核修复（C-01/C-03/A-04）：实现端口的两个原子方法
+ *   `setWithTags` / `invalidateByTag`——memory 驱动单线程，方法体内无 await 间隔即天然原子
+ *   （与 redis 驱动的 Lua 脚本同一条端口契约对齐）。
+ * @modified 2026-10-17 donttemo Cache 缺陷清单 A-01 跨驱动语义对齐：① 类型冲突显式失败——
+ *   get/smembers/sadd/compareAndDelete/compareAndExpire 遇到与操作不符的条目类型时抛错
+ *   （对齐 Redis WRONGTYPE），不再静默替换/返回空，防止调用方键命名错误被吞掉；
+ *   mget 对非字符串条目返回 undefined（对齐 Redis MGET「永不出错、非字符串为 nil」）；
+ *   set/setNx/exists/expire/del/invalidateByTag 保持任意类型可用（对齐 Redis SET/DEL/EXISTS 等）；
+ *   ② sadd(key, [], ttl) 不再创建空集合条目（对齐 Redis SADD 空成员无操作，防幽灵集合）。
  * @module @fw/cache
  */
 
 import type { CacheStorePort, TokenBucketTakeResult } from '../store.port.js';
 import type { CacheDriverName } from '../types.js';
+import { BizError, ErrorCode } from '@fw/core';
 
 /** 存储条目（判别联合：kind 收窄后无需 as 断言） */
 type Entry = ValueEntry | SetEntry;
@@ -99,6 +109,7 @@ export class MemoryCacheStore implements CacheStorePort {
 
   async get(key: string): Promise<string | undefined> {
     const entry = this.touch(key);
+    this.assertKind(key, entry, 'value');
     return entry && entry.kind === 'value' ? entry.value : undefined;
   }
 
@@ -138,6 +149,7 @@ export class MemoryCacheStore implements CacheStorePort {
   }
 
   async mget(keys: readonly string[]): Promise<Array<string | undefined>> {
+    // 非字符串条目返回 undefined（对齐 Redis MGET：永不出错，非字符串键为 nil——与单键 GET 抛 WRONGTYPE 不同）
     return keys.map((key) => {
       const entry = this.touch(key);
       return entry && entry.kind === 'value' ? entry.value : undefined;
@@ -146,7 +158,10 @@ export class MemoryCacheStore implements CacheStorePort {
 
   async sadd(key: string, members: readonly string[], ttlMs: number): Promise<void> {
     this.assertTtl(ttlMs);
+    // 空成员为无操作（对齐 Redis SADD；不创建幽灵集合条目）
+    if (members.length === 0) return;
     const existing = this.touch(key);
+    this.assertKind(key, existing, 'set');
     const bucket = existing && existing.kind === 'set' ? new Set(existing.value) : new Set<string>();
     for (const member of members) bucket.add(member);
     this.entries.delete(key);
@@ -157,11 +172,14 @@ export class MemoryCacheStore implements CacheStorePort {
 
   async smembers(key: string): Promise<string[]> {
     const entry = this.touch(key);
+    this.assertKind(key, entry, 'set');
     return entry && entry.kind === 'set' ? [...entry.value] : [];
   }
 
   async compareAndDelete(key: string, expected: string): Promise<boolean> {
     const entry = this.touch(key);
+    // 对齐 Redis：条件删除脚本内 GET 对集合键报 WRONGTYPE
+    this.assertKind(key, entry, 'value');
     if (!entry || entry.kind !== 'value' || entry.value !== expected) return false;
     this.entries.delete(key);
     return true;
@@ -205,9 +223,53 @@ export class MemoryCacheStore implements CacheStorePort {
   async compareAndExpire(key: string, expected: string, ttlMs: number): Promise<boolean> {
     this.assertTtl(ttlMs);
     const entry = this.touch(key);
+    // 对齐 Redis：条件续期脚本内 GET 对集合键报 WRONGTYPE
+    this.assertKind(key, entry, 'value');
     if (!entry || entry.kind !== 'value' || entry.value !== expected) return false;
     entry.expireAt = Date.now() + ttlMs;
     return true;
+  }
+
+  /**
+   * 带标签登记的原子写入（端口契约见 store.port）：方法体内无 await 间隔，
+   * JS 单线程语义下与 redis 驱动的 Lua 脚本等价原子（C-01/C-04 修复）
+   */
+  async setWithTags(
+    key: string,
+    value: string,
+    ttlMs: number,
+    tags: ReadonlyArray<{ tagKey: string; ttlMs: number }>,
+  ): Promise<void> {
+    this.assertTtl(ttlMs);
+    for (const tag of tags) this.assertTtl(tag.ttlMs);
+    const now = Date.now();
+    // 写值
+    this.entries.delete(key);
+    this.entries.set(key, { kind: 'value', value, expireAt: now + ttlMs });
+    // 标签登记（与写值同一同步块：半程状态不可见）
+    for (const tag of tags) {
+      const existing = this.touch(tag.tagKey);
+      const bucket = existing && existing.kind === 'set' ? new Set(existing.value) : new Set<string>();
+      bucket.add(key);
+      this.entries.delete(tag.tagKey);
+      this.entries.set(tag.tagKey, { kind: 'set', value: [...bucket], expireAt: now + tag.ttlMs });
+    }
+    this.evictIfNeeded();
+  }
+
+  /**
+   * 原子标签失效（端口契约见 store.port）：读成员、删成员、删索引在同一同步块完成；
+   * 失败即整体未发生，不存在「索引已删、成员残留」的半程状态（C-03 修复）
+   */
+  async invalidateByTag(tagKey: string): Promise<number> {
+    const entry = this.touch(tagKey);
+    const members = entry && entry.kind === 'set' ? [...entry.value] : [];
+    let removed = 0;
+    for (const member of members) {
+      if (this.entries.delete(member)) removed++;
+    }
+    this.entries.delete(tagKey);
+    return removed;
   }
 
   async ping(): Promise<boolean> {
@@ -243,7 +305,26 @@ export class MemoryCacheStore implements CacheStorePort {
   /** 校验 TTL：禁止无过期写入（防脏数据） */
   private assertTtl(ttlMs: number): void {
     if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
-      throw new Error(`缓存 TTL 必须为正数（毫秒）：收到 ${ttlMs}；禁止无过期时间的缓存`);
+      throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `缓存 TTL 必须为正数（毫秒）：收到 ${ttlMs}；禁止无过期时间的缓存`);
+    }
+  }
+
+  /**
+   * 类型冲突校验（A-01，对齐 Redis WRONGTYPE 语义）：条目存在但类型与操作不符时显式抛错，
+   * 不静默替换/返回空——让调用方的键命名错误在开发期暴露，而不是在跨驱动切换后才炸。
+   * 类型语义速查（与 redis 驱动一致，store-contract.test 锁定）：
+   * - get / smembers / sadd / compareAndDelete / compareAndExpire：类型不符 → 抛错；
+   * - mget：非字符串条目 → undefined（Redis MGET 对非字符串返回 nil，永不出错）；
+   * - set / setNx / exists / expire / del / invalidateByTag：任意类型可用（Redis 同）。
+   */
+  // 断言签名收窄：wrong-kind 抛错后调用方拿到精确的条目类型（并行批次 A-01 修复的编译收尾）
+  private assertKind(key: string, entry: Entry | undefined, expected: 'value'): asserts entry is ValueEntry | undefined;
+  private assertKind(key: string, entry: Entry | undefined, expected: 'set'): asserts entry is SetEntry | undefined;
+  private assertKind(key: string, entry: Entry | undefined, expected: 'value' | 'set'): void {
+    if (entry && entry.kind !== expected) {
+      const actual = entry.kind === 'value' ? '字符串' : '集合';
+      const wanted = expected === 'value' ? '字符串' : '集合';
+      throw new BizError(ErrorCode.INTERNAL, `缓存键类型冲突（WRONGTYPE）：键 ${key} 已是${actual}，不能按${wanted}操作`);
     }
   }
 
@@ -270,6 +351,10 @@ export class MemoryCacheStore implements CacheStorePort {
   /**
    * 令牌桶过期清理（摊销 O(1)/次）：size 达到阈值时清一轮到期桶，之后阈值按存活量翻倍重设，
    * 保证「限流 key 随访问方无限增长」的场景（如伪造大量 IP）不会让 buckets 无界膨胀。
+   *
+   * A-07 验收口径（登记）：冷桶（低于阈值的过期桶）不保证立即清理，内存上界 =
+   * `bucketSweepAt × 单桶体积`（阈值随存活量翻倍、有上界可控）；过期桶在被再次访问时惰性重建。
+   * 若部署环境对内存上限有硬要求，应配合 CACHE_MAX_ITEMS / 进程内存告警，不依赖本清理的实时性。
    */
   private sweepBuckets(nowMs: number): void {
     if (this.buckets.size < this.bucketSweepAt) return;

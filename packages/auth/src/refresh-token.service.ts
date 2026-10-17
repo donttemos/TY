@@ -14,19 +14,36 @@
  * @modified 2026-10-16 donttemo M11.3（ADR-0022）：grace 重试绑定轮换赢家指纹——CAS 写入
  *   rotated_fingerprint（同一 UPDATE），重试方指纹不匹配 → replay（安全事件，Rule 8 全链）；
  *   IP 不参与指纹；NULL 仅存量/off 来源
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-07，ADR-0025）：replay 安全事件走统一审计
+ *   事件契约（category/event/result/familyId/jti 落位）+ 审计行 traceId 取自请求上下文（修复
+ *   硬编码 null 断链）+ 全部调用点强制传入 ip/userAgent（修复主泄漏路径丢失）+ reason 结构化
  * @module @fw/auth
  */
 
 import { createHash, randomUUID } from 'node:crypto';
 import { decodeJwt } from 'jose';
 import { BizError, ErrorCode } from '@fw/core';
-import { Logger } from '@fw/logger';
+import { Logger, getRequestContext, getTraceId, patchRequestContext } from '@fw/logger';
+import { recordFamilyRevokedMetric, recordReplayDetectedMetric, recordRefreshMetric } from './auth-metrics.js';
 import type { AuthStore, RotateRefreshTokenInput } from './auth-store.js';
 import { DEFAULT_REFRESH_GRACE_SECONDS } from './constants.js';
 import type { TokenService } from './token.service.js';
 import type { ID, RefreshTokenRecord } from './types.js';
 
 const logger = Logger.for('auth.refresh');
+
+/**
+ * replay 安全事件的结构化原因（PRD-012 OBS-07，低基数枚举）：
+ * 人读描述走 detail（审计 afterValue.detail），检索与统计走 reason（afterValue.reason）。
+ */
+export type ReplayReason =
+  | 'not_found'
+  | 'no_replacement'
+  | 'fingerprint_mismatch'
+  | 'grace_expired'
+  | 'family_revoked'
+  | 'restore_failed'
+  | 'replacement_invalid';
 
 /**
  * 计算令牌哈希（落库前一律哈希，明文不落盘）
@@ -121,6 +138,21 @@ export class RefreshTokenService {
     ip: string | null,
     userAgent: string | null,
   ): Promise<{ outcome: RotationOutcome; refreshToken: string; expireAt: Date; jti: string }> {
+    // M12 W2 OBS-12：轮换结果计数（fw_auth_refresh_total）；失败路径统一收敛（含 replay 3001）
+    try {
+      return await this.performRotate(refreshToken, ip, userAgent);
+    } catch (error) {
+      recordRefreshMetric('failed');
+      throw error;
+    }
+  }
+
+  /** 轮换主体（OBS-12 计数包装拆出，逻辑与拆分前逐字一致） */
+  private async performRotate(
+    refreshToken: string,
+    ip: string | null,
+    userAgent: string | null,
+  ): Promise<{ outcome: RotationOutcome; refreshToken: string; expireAt: Date; jti: string }> {
     const record = await this.store.findRefreshTokenByHash(hashToken(refreshToken));
     if (!record) throw new BizError(ErrorCode.UNAUTHORIZED, '刷新令牌无效');
 
@@ -128,7 +160,15 @@ export class RefreshTokenService {
     if (record.expireAt.getTime() <= now.getTime()) {
       throw new BizError(ErrorCode.TOKEN_EXPIRED, '刷新令牌已过期，请重新登录');
     }
-    return this.rotateWithCas(record, ip, userAgent, now);
+    // 复用方令牌标识（PRD-012 OBS-07：安全事件审计的九要素之一；decode 不验签，
+    // 验签语义已在此前入口完成——A 能走到这里说明格式合法）
+    const jti = extractJti(refreshToken) || null;
+    // M12 W2 OBS-10：编排边界把令牌身份写进统一上下文（familyId/jti 为非凭证标识，ADR-0026）——
+    // 后续日志与审计自动携带；只补「记录什么」，rotation 判定语义零改动（ADR-0020 Rule 8 保持）
+    patchRequestContext({ familyId: record.familyId, ...(jti ? { jti } : {}) });
+    const outcome = await this.rotateWithCas(record, ip, userAgent, now, jti);
+    recordRefreshMetric('success');
+    return outcome;
   }
 
   /**
@@ -140,6 +180,7 @@ export class RefreshTokenService {
     ip: string | null,
     userAgent: string | null,
     now: Date,
+    jti: string | null,
   ): Promise<RotationIssued> {
     const rotate = this.store.rotateRefreshToken.bind(this.store);
 
@@ -172,7 +213,7 @@ export class RefreshTokenService {
     }
 
     if (result.outcome === 'already_rotated') {
-      return this.recoverReplacement(record, result, ip, userAgent, now);
+      return this.recoverReplacement(record, result, ip, userAgent, now, jti);
     }
 
     // replay_detected（存储层可判定的事实）
@@ -182,7 +223,11 @@ export class RefreshTokenService {
     }
     // no_replacement：A 被撤销但从未成功轮换（登出 / 泄漏处置 / 强制下线后的复用）
     // not_found：CAS 时点记录已被清理（并发窗口内被 purge，按泄漏处置从紧）
-    await this.handleReplay(record.familyId, record.userId, now, `replay_detected: ${result.reason}`);
+    await this.handleReplay(record.familyId, record.userId, now, result.reason, `replay_detected: ${result.reason}`, {
+      ip,
+      userAgent,
+      jti,
+    });
     throw new BizError(ErrorCode.UNAUTHORIZED, '刷新令牌已被使用，疑似泄漏，已终止全部会话，请重新登录');
   }
 
@@ -196,6 +241,7 @@ export class RefreshTokenService {
     ip: string | null,
     userAgent: string | null,
     now: Date,
+    jti: string | null,
   ): Promise<RotationIssued> {
     const familyId = result.oldToken.familyId;
 
@@ -208,7 +254,11 @@ export class RefreshTokenService {
       retryFingerprint !== null &&
       retryFingerprint !== result.fingerprint
     ) {
-      await this.handleReplay(familyId, record.userId, now, 'grace 重试客户端指纹不匹配', ip, userAgent);
+      await this.handleReplay(familyId, record.userId, now, 'fingerprint_mismatch', 'grace 重试客户端指纹不匹配', {
+        ip,
+        userAgent,
+        jti,
+      });
       throw new BizError(ErrorCode.UNAUTHORIZED, '刷新令牌已被使用，疑似泄漏，已终止全部会话，请重新登录');
     }
 
@@ -223,7 +273,9 @@ export class RefreshTokenService {
         familyId,
         record.userId,
         now,
+        graceOk ? 'family_revoked' : 'grace_expired',
         graceOk ? '族已撤销后 grace 重试' : 'grace 窗口外复用',
+        { ip, userAgent, jti },
       );
       throw new BizError(ErrorCode.UNAUTHORIZED, '刷新令牌已被使用，疑似泄漏，已终止全部会话，请重新登录');
     }
@@ -238,7 +290,11 @@ export class RefreshTokenService {
         familyId,
         error: error instanceof Error ? error.message : String(error),
       });
-      await this.handleReplay(familyId, record.userId, now, 'replacement 恢复失败');
+      await this.handleReplay(familyId, record.userId, now, 'restore_failed', 'replacement 恢复失败', {
+        ip,
+        userAgent,
+        jti,
+      });
       throw new BizError(ErrorCode.UNAUTHORIZED, '刷新令牌已被使用，疑似泄漏，已终止全部会话，请重新登录');
     }
 
@@ -257,37 +313,56 @@ export class RefreshTokenService {
       };
     }
 
-    await this.handleReplay(familyId, record.userId, now, 'grace 重试但 replacement 已失效');
+    await this.handleReplay(familyId, record.userId, now, 'replacement_invalid', 'grace 重试但 replacement 已失效', {
+      ip,
+      userAgent,
+      jti,
+    });
     throw new BizError(ErrorCode.UNAUTHORIZED, '刷新令牌已被使用，疑似泄漏，已终止全部会话，请重新登录');
   }
 
   /**
    * replay 副作用编排（ADR-0020 Rule 8）：整族撤销 + 用户全部 refresh 作废 + 告警日志。
    * 存储层保持纯持久化，业务副作用一律在本服务层。
+   *
+   * PRD-012 OBS-07（ADR-0025）：安全事件走统一审计事件契约——审计行携带
+   * category='security' / event='refresh.replay_detected' / result='denied' / familyId / jti，
+   * 且 traceId 取自请求上下文（修复此前的硬编码 null 断链）、ip/userAgent 由全部调用点强制传入
+   * （修复主泄漏路径丢失）。reason 为低基数结构化原因，detail 保留人读描述。
    */
   private async handleReplay(
     familyId: string,
     userId: ID,
     now: Date,
+    reason: ReplayReason,
     detail: string,
-    ip: string | null = null,
-    userAgent: string | null = null,
+    context: { ip: string | null; userAgent: string | null; jti: string | null },
   ): Promise<void> {
     const revoked = await this.store.revokeRefreshFamily(familyId, now);
     const others = await this.store.revokeUserRefreshTokens(userId, now);
+    // M12 W2 OBS-12：安全事件计数（fw_security_replay_detected_total{reason} / fw_security_family_revoked_total）
+    recordReplayDetectedMetric(reason);
+    recordFamilyRevokedMetric(1);
     // ADR-0022 决策 7：replay / 指纹不匹配是安全事件，落审计（不阻塞主流程）
     try {
       await this.store.writeAuditLog({
         userId,
         module: 'auth',
+        category: 'security',
         action: 'security',
+        event: 'refresh.replay_detected',
+        result: 'denied',
         targetType: 'refresh_family',
         targetId: familyId,
         beforeValue: null,
-        afterValue: { detail },
-        ip,
-        userAgent,
-        traceId: null,
+        afterValue: { detail, reason },
+        familyId,
+        jti: context.jti,
+        // M12 W2 OBS-09：由统一上下文填充（requestId 列 W1 先行落位；直连 store 路径自取 ALS）
+        requestId: getRequestContext()?.requestId ?? null,
+        ip: context.ip,
+        userAgent: context.userAgent,
+        traceId: getTraceId() || null,
         createdAt: now,
       });
     } catch (error) {
@@ -299,6 +374,8 @@ export class RefreshTokenService {
     logger.error('检测到 refresh 令牌复用，已终止该用户全部会话', {
       userId,
       familyId,
+      reason,
+      jti: context.jti,
       familyRevoked: revoked,
       userTokensRevoked: others,
       detail,
@@ -311,7 +388,9 @@ export class RefreshTokenService {
    * @returns 受影响条数
    */
   async revokeFamily(familyId: string): Promise<number> {
-    return this.store.revokeRefreshFamily(familyId, new Date());
+    const affected = await this.store.revokeRefreshFamily(familyId, new Date());
+    if (affected > 0) recordFamilyRevokedMetric(1);
+    return affected;
   }
 
   /**

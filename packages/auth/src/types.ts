@@ -124,6 +124,15 @@ export interface RefreshTokenRecord {
 /** 审计动作 */
 export type AuditAction = 'create' | 'update' | 'delete' | 'login' | 'logout' | 'export' | 'grant' | 'security';
 
+/**
+ * 审计大类（PRD-012 OBS-06，ADR-0025）：低基数，用于粗筛 / 分组 / 分区，不承载细分语义；
+ * 细分事件名走 event（点分命名）。安全事件统一 category='security'。
+ */
+export type AuditCategory = 'auth' | 'security' | 'admin' | 'data' | 'config' | 'tenant' | 'system';
+
+/** 审计事件结果（PRD-012 OBS-06） */
+export type AuditEventResult = 'success' | 'denied' | 'failed';
+
 /** 审计日志记录（数据字典 §3.13） */
 export interface AuditLogRecord {
   id: ID;
@@ -131,6 +140,18 @@ export interface AuditLogRecord {
   userId: ID | null;
   module: string;
   action: AuditAction;
+  /** 审计大类（PRD-012 OBS-06：auth/security/admin/data/config/tenant/system） */
+  category: AuditCategory | null;
+  /** 点分事件名（PRD-012 OBS-06，如 refresh.replay_detected）；安全事件的结构化检索键 */
+  event: string | null;
+  /** 事件结果（PRD-012 OBS-06：success / denied / failed） */
+  result: AuditEventResult | null;
+  /** 令牌家族 ID（M11.1 rotation family；安全事件关联键，PRD-012 OBS-06） */
+  familyId: string | null;
+  /** 令牌标识 jti（非令牌本体，可安全落库；PRD-012 OBS-06） */
+  jti: string | null;
+  /** 单次请求 ID（PRD-012 OBS-09，W2 起填充；本列随 OBS-06 先行落位） */
+  requestId: string | null;
   targetType: string | null;
   targetId: string | null;
   /** 变更前（已脱敏） */
@@ -223,6 +244,16 @@ export interface AuditQuery extends PageParams {
   action?: AuditAction;
   targetType?: string;
   targetId?: string;
+  /** 链路 ID 精确过滤（M12 W2 OBS-14：一次拉全链的检索键） */
+  traceId?: string;
+  /** 单请求 ID 精确过滤（M12 W2 OBS-14） */
+  requestId?: string;
+  /** 令牌家族 ID 精确过滤（M12 W2 OBS-14） */
+  familyId?: string;
+  /** 低基数大类过滤（M12 W2 OBS-14：auth/security/admin/data/config/tenant/system） */
+  category?: string;
+  /** 点分事件名精确过滤（M12 W2 OBS-14：如 refresh.replay_detected） */
+  event?: string;
   /** 起始时间（含） */
   from?: Date;
   /** 结束时间（含） */

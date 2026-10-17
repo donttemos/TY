@@ -27,6 +27,7 @@
 > 变更记录：2026-10-14 donttemo 管理后台可达性修复：§3.2 新增 `GET` / `PUT /auth/profile`（`auth:me`，本人资料自助；
 > 原实现让个人中心借 `PUT /users/:id` 保存，普通角色必 `3002`）；§3.6 更正 `GET /dict/:code` 的权限点标注为 `dict:read`（原标「登录后」，与实现不符）。
 >
+> 变更记录：2026-10-17 donttemo M12 W1/W2（PRD-012）：§1.3 失败信封增 `requestId`（additive，单请求 ULID）；§1.4 增 `X-Request-Id` 请求/响应头；§3 审计查询/导出增 `trace_id / request_id / family_id / category / event` 过滤（白名单外 400）与 CSV 列扩展；`/metrics` 新增 `fw_auth_*` / `fw_security_*` 段（OBS-12）。字段级契约见 [docs/45](./45-observability-contract.md)。
 > 变更记录：2026-10-15 donttemo N-01/N-02 收口：§3.7 `GET /audit-logs/export` 由 Backlog 转为已实现（异步任务，返回 `jobId`）；
 > 新增 §3.11 异步任务中心（`/jobs/:id/progress|retry|download`，登录即可 + 归属人隔离）；§3.9 补注跨租户维护面的
 > `@IgnoreTenant()` + `system:tenant:ignore` 双重要求与 legacy 守卫语义；§4 导出/批量行的「M7 未实现通用进度端点」标注作废。
@@ -69,15 +70,17 @@
 // 成功
 { "code": 0, "message": "ok", "data": { }, "traceId": "b3f1c9..." }
 
-// 失败
-{ "code": 3002, "message": "无操作权限", "data": null, "traceId": "b3f1c9..." }
+// 失败（校验失败时信封顶层 details 携带字段级错误；requestId 为 M12 W2 additive 字段——请求上下文存在时输出）
+{ "code": 1001, "message": "参数错误", "data": null, "traceId": "b3f1c9...", "requestId": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "details": [{ "field": "username", "message": "长度需为 3-32" }] }
 
 // 分页（data 固定结构）
 { "code": 0, "data": { "items": [], "total": 128, "page": 1, "pageSize": 20 } }
 ```
 
 - HTTP 状态码与 `code` 一致：`200` 成功、`400` 参数/业务、`401` 未登录、`403` 无权限、`404` 不存在、`409` 冲突、`429` 限流、`500` 系统错误。
-- 校验失败时 `data.details` 返回字段级错误：`[{ "field": "username", "message": "长度需为 3-32" }]`。
+- 校验失败时**信封顶层** `details` 返回字段级错误：`[{ "field": "username", "message": "长度需为 3-32" }]`。
+  （PRD-012 OBS-04 口径修正：历史文档误写为 `data.details`，而 `GlobalExceptionFilter` / 前端解析 / mock 的实际实现均在顶层；前端 `request.ts` 对 `data.details` 的兼容读取已标注 Deprecated，一个版本后移除。）
+- `requestId`（M12 W2 OBS-09）：**单次请求 ID**（ULID），单请求生命周期、不跨服务透传（跨服务链路语义归 `traceId`，ADR-0026）；与响应头 `X-Request-Id` / 日志 `LogRecord.requestId` / `audit_logs.request_id` 四处同源。字段级契约见 [docs/45](./45-observability-contract.md)。
 
 ### 1.4 通用请求头 / 响应头
 
@@ -87,6 +90,8 @@
 | `X-Tenant-Id` | 请求（M8） | 租户标识；也可由子域名或 token claim 解析 |
 | `Idempotency-Key` | 请求（写操作可选） | 幂等键，24h 内重复请求返回首次结果 |
 | `X-Trace-Id` | 响应 | 与日志一致，便于排障 |
+| `X-Request-Id` | 请求（可选，M12 W2） | 上游单请求 ID（合法 ULID 复用、非法值替换）；缺省服务端生成；不跨服务透传 |
+| `X-Request-Id` | 响应（M12 W2） | 本请求的单请求 ID，与失败信封 `requestId` / 日志 / 审计同源 |
 | `X-RateLimit-Remaining` / `Retry-After` | 响应 | 限流剩余与建议重试秒数 |
 
 ### 1.5 列表查询约定
@@ -228,11 +233,17 @@
 
 | 方法 | 路径 | 权限点 | 说明 |
 |---|---|---|---|
-| GET | `/audit-logs` | `audit:read` | 分页查询，支持 `user_id / module / action / target / 时间区间` |
+| GET | `/audit-logs` | `audit:read` | 分页查询，支持 `user_id / module / action / target / 时间区间` 与 M12 W2 契约字段 `trace_id / request_id / family_id / category / event`（精确过滤、可组合）；**过滤参数白名单外字段一律 400**（不静默忽略，OBS-14）。排序见 §1.5 |
 | GET | `/audit-logs/:id` | `audit:read` | 详情，含变更前后值（脱敏） |
-| GET | `/audit-logs/export` | `audit:export` | 异步导出：派发到任务中心并**立即返回 `jobId`**（不等导出完成），进度 / 下载 / 重跑走 §3.11 的 `/jobs/:id/*`；同样受 `dataScope` 收敛（`self` 范围只导自己的记录）。CSV 产物与 mock 逐字节同构（UTF-8 BOM + CRLF + 引号转义） |
+| GET | `/audit-logs/export` | `audit:export` | 异步导出：派发到任务中心并**立即返回 `jobId`**（不等导出完成），进度 / 下载 / 重跑走 §3.11 的 `/jobs/:id/*`；同样受 `dataScope` 收敛（`self` 范围只导自己的记录）；过滤面与列表同源（含 `trace_id / request_id / family_id / category / event`）。CSV 产物与 mock 逐字节同构（UTF-8 BOM + CRLF + 引号转义；M12 W2 列序：`...,traceId,requestId,familyId,category,event,before,after`） |
 | GET | `/audit-archives` | `audit:read` | 归档审计分页查询（M10 E-10）：参数与 `/audit-logs` 同形（`user_id / module / action / target / 时间区间 / sort` 白名单同源）；数据范围同样收敛——归档不是越权后门 |
 | GET | `/audit-archives/export` | `audit:export` | 归档审计异步导出（M10 E-10）：与 `/audit-logs/export` 同机制（任务中心类型 `audit.archive.export`，返回 `jobId`），CSV 产物形态逐字节同构；数据范围在派发时收敛固化进 params |
+
+> M12 W1（PRD-012 OBS-06/OBS-07，ADR-0025）起审计记录携带**统一事件契约**字段：`category` / `event` /
+> `result` / `family_id` / `jti` / `request_id`（全可空，缺省 NULL——形状不漂移）。安全事件（replay 族撤销）
+> 按 `action=security + category=security + event=refresh.replay_detected + result=denied` 落库，且
+> `trace_id` 取自请求上下文（修复此前硬编码 NULL 的断链）。按 `event / family_id / request_id` 的查询
+> 参数扩展见 PRD-012 OBS-14（W2）。
 
 ### 3.8 任务与队列（PRD-007）
 
@@ -426,4 +437,16 @@
   该脚本把**前端调用面**（`apps/admin-web/src` 下所有 `request.<method>('<path>')`）与**后端路由面**
   （全仓 `*.controller.ts` 的 `@Controller` + 方法装饰器）逐一对撞，前端调了而后端没有即失败；
   后端有而前端未调用（演示 / 运维端点）仅提示。已在 CI 的 base 作业阻断合并。
+- **三方一致性门禁（`pnpm run check:triway-consistency`）**：框架包（`packages/*`，权限码 `PERM` /
+  配置键 `ENV_KEY_PATHS` / 框架控制器 / auth 核心表契约的权威）、example-api（参考实现，全量装配）、
+  admin 模板（`templates/admin/`，`fw new --template=admin` 的生成结果，参考实现的裁剪子集）
+  是三份同源实现，任一单方面演进都会让另外两份悄悄漂移。该脚本按六轴对撞：
+  ① 模板前端调用面 ⊆ 模板后端路由面（含按模块装配判定的框架包控制器，未装配不计入）；
+  ② 模板路由面 ⊆ example-api 路由面（模板独立演化的路由即漂移）；
+  ③ 权限码三方闭环——模板 admin-web 使用的码 ⊆ 模板种子声明 ∪ 框架码；模板种子声明的应用码
+  ⊆ example-api 种子声明 ∪ 框架码（模板不发明新码）；两侧控制器 `@Permissions` 的码 ≤ 本侧种子声明 ∪ 框架码；
+  ④ 两 Prisma schema 共有模型字段逐一一致（`@fw/auth` Store 契约变化必须同步模板）；
+  ⑤ 模板 `@fw/*` 依赖存在且为 `workspace:*`，源码 import 的必须已声明；
+  ⑥ 模板 `.env.example` 的配置键 ⊆ `ENV_KEY_PATHS` ∩ example-api `.env.example`。
+  同样在 CI 的 base 作业阻断合并；提示级差异（索引 / 表名 / 死代码风格）不阻断。
 - 变更流程：改接口 → 更新本文档与 spec → 评审 → 合并。

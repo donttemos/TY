@@ -11,12 +11,19 @@
  *   capacity < cost（或 refill ≤ 0）时返回 retryAfterMs = -1（永不可满足），不再返回误导性的 0；
  *   ③ eval 结果解析改为逐项校验（不再用 as 元组断言掩盖形状错误）；
  *   ④ close() 对 quit() 加 3 秒超时兜底，挂住的连接强制 disconnect，不再阻塞优雅停机。
+ * @modified 2026-10-17 donttemo Cache 缺陷清单复核修复：① C-01/C-03/A-04——新增 `SET_TAGS_LUA`
+ *   （写值 + SADD 标签登记单条原子）与 `INVALIDATE_TAG_LUA`（SMEMBERS → 逐个 DEL 成员 → DEL 标签集合
+ *   单条原子）实现端口新方法 `setWithTags` / `invalidateByTag`，消除写登记半程状态与失效竞态窗口，
+ *   失效故障时整体未发生（fail-open 不再误删索引）；② C-05——close() 超时分支改为真正触发
+ *   disconnect()（原实现超时仅 resolve，与注释「超时即强制断开」不符），并对 quit() 挂接兜底
+ *   catch 防止超时先行返回后的 unhandled rejection。
  * @module @fw/cache
  */
 
 import type { CacheStorePort, TokenBucketTakeResult } from '../store.port.js';
 import type { CacheDriverName } from '../types.js';
 import type { RedisClientLike } from './redis-client.js';
+import { BizError, ErrorCode } from '@fw/core';
 
 /** 条件删除脚本：值匹配才删除（锁释放） */
 const COMPARE_DELETE_LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
@@ -30,6 +37,36 @@ const SADD_PEXPIRE_LUA = `
 local added = redis.call('SADD', KEYS[1], unpack(ARGV, 2))
 redis.call('PEXPIRE', KEYS[1], ARGV[1])
 return added
+`;
+
+/**
+ * 带标签登记的写入脚本（C-01/A-04 修复）：SET 值与向各标签集合 SADD 本键单次原子完成，
+ * 不存在「值已写入、标签未登记」的半程状态。
+ * KEYS[1]=值键，KEYS[2..n]=标签映射键；ARGV[1]=值 ARGV[2]=值TTL(ms) ARGV[i+1]=KEYS[i] 的标签集合TTL(ms)。
+ * 已知限制：多键脚本在 redis-cluster 跨 slot 时会被拒绝（CROSSSLOT），见 store.port 登记项。
+ */
+const SET_TAGS_LUA = `
+redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+for i = 2, #KEYS do
+  redis.call('SADD', KEYS[i], KEYS[1])
+  redis.call('PEXPIRE', KEYS[i], ARGV[i + 1])
+end
+return nil
+`;
+
+/**
+ * 原子标签失效脚本（C-01/C-03 修复）：SMEMBERS → 逐个 DEL 成员 → DEL 标签集合单次原子完成。
+ * 与 SET_TAGS_LUA 全序串行后，失效期间完成登记的键要么已被删除、要么重新持有有效索引；
+ * 脚本失败（连接中断）时 Redis 单脚本原子性保证整体未发生。
+ * KEYS[1]=标签映射键；返回删除的成员键数量。cluster 跨 slot 限制同 SET_TAGS_LUA。
+ */
+const INVALIDATE_TAG_LUA = `
+local members = redis.call('SMEMBERS', KEYS[1])
+for _, member in ipairs(members) do
+  redis.call('DEL', member)
+end
+redis.call('DEL', KEYS[1])
+return #members
 `;
 
 /**
@@ -132,6 +169,37 @@ export class RedisCacheStore implements CacheStorePort {
     return this.client.smembers(key);
   }
 
+  /** 带标签登记的原子写入：SET + SADD×N + PEXPIRE×N 单条 Lua（C-01/A-04 修复） */
+  async setWithTags(
+    key: string,
+    value: string,
+    ttlMs: number,
+    tags: ReadonlyArray<{ tagKey: string; ttlMs: number }>,
+  ): Promise<void> {
+    this.assertTtl(ttlMs);
+    if (tags.length === 0) {
+      await this.set(key, value, ttlMs);
+      return;
+    }
+    for (const tag of tags) this.assertTtl(tag.ttlMs);
+    // KEYS[1]=值键，KEYS[2..n]=标签键；ARGV=[值, 值TTL, 各标签TTL...]（与 KEYS[2..n] 一一对齐）
+    await this.client.eval(
+      SET_TAGS_LUA,
+      1 + tags.length,
+      key,
+      ...tags.map((tag) => tag.tagKey),
+      value,
+      Math.round(ttlMs),
+      ...tags.map((tag) => Math.round(tag.ttlMs)),
+    );
+  }
+
+  /** 原子标签失效：SMEMBERS + DEL 成员 + DEL 索引单条 Lua（C-01/C-03 修复） */
+  async invalidateByTag(tagKey: string): Promise<number> {
+    const result = await this.client.eval(INVALIDATE_TAG_LUA, 1, tagKey);
+    return Number(result);
+  }
+
   async compareAndDelete(key: string, expected: string): Promise<boolean> {
     const result = await this.client.eval(COMPARE_DELETE_LUA, 1, key, expected);
     return Number(result) === 1;
@@ -161,31 +229,40 @@ export class RedisCacheStore implements CacheStorePort {
   }
 
   async close(): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
     try {
-      // quit 可能因连接半开挂住：加超时兜底，超时即强制断开，保证优雅停机不被缓存阻塞
+      const quitting = this.client.quit();
+      // 超时分支先行返回后 quit 仍可能失败：挂接兜底 catch，避免 unhandled rejection
+      void quitting.catch(() => undefined);
+      // quit 可能因连接半开挂住：超时分支 reject 触发强制断开（C-05 修复——
+      // 原实现超时分支仅 resolve，disconnect 只在 quit 抛错时执行，注释承诺落空）
       await Promise.race([
-        this.client.quit(),
-        new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, CLOSE_TIMEOUT_MS);
+        quitting,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`quit 超时（${CLOSE_TIMEOUT_MS}ms），强制断开`)), CLOSE_TIMEOUT_MS);
           timer.unref?.();
         }),
       ]);
     } catch {
-      // quit 在断连场景会抛错，兜底强制断开
+      // 超时或 quit 在断连场景抛错：兜底强制断开
       this.client.disconnect();
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
   async size(): Promise<number> {
     // 说明：dbsize 为整库键数（无法按前缀过滤），此处作为容量观测的近似值——
-    // 端口语义为「观测近似」，不保证 memory/redis 两种驱动的数值可比（见 store.port 注释）
+    // 端口语义为「观测近似」，不保证 memory/redis 两种驱动的数值可比（见 store.port 注释）。
+    // A-05 登记：redis-cluster 模式下 DBSIZE 为**单节点**键数（ioredis Cluster 路由到单个节点执行），
+    // 不代表集群总键数；仅可用于容量趋势观测，跨节点求和需运维侧聚合，禁止业务判定。
     return this.client.dbsize();
   }
 
   /** 校验 TTL：禁止无过期写入 */
   private assertTtl(ttlMs: number): void {
     if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
-      throw new Error(`缓存 TTL 必须为正数（毫秒）：收到 ${ttlMs}；禁止无过期时间的缓存`);
+      throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `缓存 TTL 必须为正数（毫秒）：收到 ${ttlMs}；禁止无过期时间的缓存`);
     }
   }
 }
@@ -196,14 +273,14 @@ export class RedisCacheStore implements CacheStorePort {
  */
 function parseTokenBucketResult(raw: unknown): TokenBucketTakeResult {
   if (!Array.isArray(raw) || raw.length < 3) {
-    throw new Error(`令牌桶脚本返回形状异常：期望 [allowed, remaining, retryAfterMs]，收到 ${JSON.stringify(raw)}`);
+    throw new BizError(ErrorCode.INTERNAL, `令牌桶脚本返回形状异常：期望 [allowed, remaining, retryAfterMs]，收到 ${JSON.stringify(raw)}`);
   }
   const [allowedRaw, remainingRaw, retryRaw] = raw as [unknown, unknown, unknown];
   const allowed = Number(allowedRaw);
   const remaining = Number(remainingRaw);
   const retry = Number(retryRaw);
   if (!Number.isFinite(allowed) || !Number.isFinite(remaining) || !Number.isFinite(retry)) {
-    throw new Error(`令牌桶脚本返回项非法：${JSON.stringify(raw)}`);
+    throw new BizError(ErrorCode.INTERNAL, `令牌桶脚本返回项非法：${JSON.stringify(raw)}`);
   }
   return { allowed: allowed === 1, remaining, retryAfterMs: retry };
 }

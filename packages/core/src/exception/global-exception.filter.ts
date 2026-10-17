@@ -3,12 +3,14 @@
  * @description 把一切异常归一化为统一错误体：BizError 按错误码；Nest HttpException 映射到错误码表（校验数组转 details）；未知异常收敛为 9001 并记录服务端日志——杜绝裸 500。
  * @author donttemo
  * @created 2026-10-09
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-05）：错误码升为日志一等字段（LogOptions.code），不再内嵌 ctx
+ * @modified 2026-10-17 donttemo M12 W2（PRD-012 OBS-09）：信封 additive 增 requestId（请求上下文存在时输出）
  * @module core
  * @since v0.1.0
  */
 import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { getTraceId, Logger } from '@fw/logger';
+import { getRequestId, getTraceId, Logger } from '@fw/logger';
 import { BizError } from '../errors/biz-error.js';
 import { ERROR_CODE_META, HTTP_TO_ERROR_CODE, type BizErrorCode, type ErrorBody } from '../errors/error-codes.js';
 
@@ -33,23 +35,25 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 
     const body = this.toErrorBody(exception);
     const level = body.code === 9001 ? 'error' : 'warn';
+    // PRD-012 OBS-05：code 升为日志一等字段（LogOptions），不再内嵌 ctx——日志侧可按错误码检索
     logger[level](`请求异常 ${req.method} ${req.path}`, {
-      code: body.code,
       message: body.message,
       stack: exception instanceof Error ? exception.stack : undefined,
-    });
+    }, { code: body.code });
     res.status(this.httpOf(exception, body.code)).json(body);
   }
 
   /** 异常 → 统一错误体 */
   private toErrorBody(exception: unknown): ErrorBody {
     const traceId = getTraceId();
+    const requestId = getRequestId();
     if (exception instanceof BizError) {
       const body: ErrorBody = {
         code: exception.code,
         message: exception.message,
         data: null,
         traceId,
+        ...(requestId ? { requestId } : {}),
       };
       if (exception.details) body.details = exception.details;
       return body;
@@ -61,13 +65,14 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         message: this.httpMessage(exception, code),
         data: null,
         traceId,
+        ...(requestId ? { requestId } : {}),
       };
       const details = this.extractDetails(exception);
       if (details) body.details = details;
       return body;
     }
     // 未知异常：对外只暴露错误码，不泄漏内部细节
-    return { code: 9001, message: ERROR_CODE_META[9001].message, data: null, traceId };
+    return { code: 9001, message: ERROR_CODE_META[9001].message, data: null, traceId, ...(requestId ? { requestId } : {}) };
   }
 
   /** 决定 HTTP 状态码 */

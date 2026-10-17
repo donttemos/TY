@@ -7,12 +7,15 @@
  * @created 2026-10-15
  * @modified 2026-10-16 donttemo 驱动审查修复配套：新增时钟回拨语义（对齐 Redis Lua）、
  *   capacity < cost 的 retryAfterMs=-1 哨兵、令牌桶 TTL 回收用例
+ * @modified 2026-10-17 donttemo Cache 缺陷清单复核修复配套（A-06）：429 用例改拒绝型存储桩
+ *   （构造期校验后 capacity=0 不再可构造），新增构造期校验回归。
  * @module @fw/cache
  */
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryCacheStore } from '../drivers/memory.driver.js';
 import { RedisCacheStore } from '../drivers/redis.driver.js';
 import type { RedisClientLike } from '../drivers/redis-client.js';
+import { BizError, ErrorCode } from '@fw/core';
 import { RateLimitLimiter, RateLimitMiddleware, normalizeClientIp } from '../rate-limit.js';
 import type { RateLimitSnapshot } from '../rate-limit.js';
 
@@ -165,6 +168,36 @@ describe('RateLimitLimiter 决策面', () => {
     expect(closedDecision.allowed).toBe(false);
     expect(closedDecision.via).toBe('fail-closed');
   });
+
+  it('A-02 回归：存储返回非法结构按存储故障处理，遵守 fail-open/fail-closed 策略', async () => {
+    const cases: Array<() => Promise<unknown>> = [
+      async () => ({ remaining: 0, retryAfterMs: 100 }), // 缺 allowed
+      async () => ({ allowed: 'yes', remaining: 0, retryAfterMs: 100 }), // allowed 类型不符
+      async () => ({ allowed: true, remaining: Number.NaN, retryAfterMs: 0 }), // remaining 非有限
+      async () => ({ allowed: false, remaining: 0, retryAfterMs: 'soon' }), // retryAfterMs 类型不符
+      async () => null, // 非对象
+    ];
+    for (const tokenBucketTake of cases) {
+      const brokenStore = { kind: 'memory' as const, tokenBucketTake: vi.fn(tokenBucketTake) };
+      const open = new RateLimitLimiter({ store: brokenStore as never, capacity: 10, refillPerSecond: 1, whitelist: [], failOpen: true, dryRun: false });
+      const openDecision = await open.take('/api/private', '10.0.0.1');
+      expect(openDecision.allowed).toBe(true);
+      expect(openDecision.via).toBe('fail-open');
+      const closed = new RateLimitLimiter({ store: brokenStore as never, capacity: 10, refillPerSecond: 1, whitelist: [], failOpen: false, dryRun: false });
+      const closedDecision = await closed.take('/api/private', '10.0.0.1');
+      expect(closedDecision.allowed).toBe(false);
+      expect(closedDecision.via).toBe('fail-closed');
+    }
+  });
+
+  it('A-02 回归：retryAfterMs=-1 哨兵不被形状校验拦截（cost > capacity 永不可满足语义保留）', async () => {
+    const store = { kind: 'memory' as const, tokenBucketTake: vi.fn(async () => ({ allowed: false, remaining: 0, retryAfterMs: -1 })) };
+    const limiter = new RateLimitLimiter({ store: store as never, capacity: 10, refillPerSecond: 1, whitelist: [], failOpen: false, dryRun: false });
+    const decision = await limiter.take('/api/private', '10.0.0.2');
+    expect(decision.allowed).toBe(false);
+    expect(decision.retryAfterMs).toBe(0); // -1 被兜底为 0（Retry-After 兜底 1 秒由中间件 ceil 完成）
+    expect(decision.via).toBe('token-bucket');
+  });
 });
 
 describe('RateLimitMiddleware', () => {
@@ -175,7 +208,12 @@ describe('RateLimitMiddleware', () => {
   });
 
   it('超限返回 429/9003 信封形态 + Retry-After 头位置由 status 链路给出', async () => {
-    const limiter = new RateLimitLimiter({ store: new MemoryCacheStore(), capacity: 0, refillPerSecond: 1, whitelist: [], failOpen: true, dryRun: false });
+    // A-06 修复后构造期拒绝非法 capacity：改用拒绝型存储桩模拟「桶不可满足」
+    const deniedStore = {
+      kind: 'memory' as const,
+      tokenBucketTake: vi.fn(async () => ({ allowed: false, remaining: 0, retryAfterMs: -1 })),
+    };
+    const limiter = new RateLimitLimiter({ store: deniedStore as never, capacity: 3, refillPerSecond: 1, whitelist: [], failOpen: true, dryRun: false });
     const middleware = new RateLimitMiddleware(limiter);
     const responses: Array<{ code: number; body: unknown }> = [];
     const res = {
@@ -190,7 +228,7 @@ describe('RateLimitMiddleware', () => {
         };
       },
     };
-    // capacity=0 → 直接拒绝（cost=1 > capacity → retryAfterMs=-1「永不可满足」→ Retry-After 兜底 1 秒）
+    // retryAfterMs=-1（永不可满足）→ Retry-After 兜底 1 秒
     middleware.use({ originalUrl: '/api/v1/users', ip: '5.5.5.5' }, res, () => {
       throw new Error('不应放行');
     });
@@ -198,5 +236,67 @@ describe('RateLimitMiddleware', () => {
     expect(responses).toHaveLength(1);
     expect(responses[0].code).toBe(429);
     expect((responses[0].body as { code: number }).code).toBe(9003);
+  });
+
+  it('A-02 回归：决策链路意外异常按 limiter.failOpen 决策——fail-open 放行、fail-closed 交 next(error)', async () => {
+    const responses: Array<{ code: number; body: unknown }> = [];
+    const res = {
+      setHeader() {
+        /* 桩 */
+      },
+      status(code: number) {
+        return {
+          json(body: unknown) {
+            responses.push({ code, body });
+          },
+        };
+      },
+    };
+    const makeReq = (): { originalUrl: string; ip: string } => ({ originalUrl: '/api/private', ip: '10.0.0.9' });
+
+    // fail-open：意外异常仍放行（限流器不能比业务更早把服务打挂），但 via 面无决策
+    const openLimiter = {
+      failOpen: true,
+      take: vi.fn(async () => {
+        throw new Error('unexpected limiter bug');
+      }),
+    };
+    const openNext = vi.fn();
+    new RateLimitMiddleware(openLimiter as never).use(makeReq(), res, openNext);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(openNext).toHaveBeenCalledTimes(1);
+    expect(openNext).toHaveBeenCalledWith(); // 无参放行
+
+    // fail-closed：不再无条件放行——BizError 9002 经 next(error) 交全局异常过滤器（统一异常面 503）
+    const closedLimiter = {
+      failOpen: false,
+      take: vi.fn(async () => {
+        throw new Error('unexpected limiter bug');
+      }),
+    };
+    const closedNext = vi.fn();
+    new RateLimitMiddleware(closedLimiter as never).use(makeReq(), res, closedNext);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closedNext).toHaveBeenCalledTimes(1);
+    const forwarded = closedNext.mock.calls[0][0] as { code: number };
+    expect(forwarded).toBeInstanceOf(BizError);
+    expect(forwarded.code).toBe(ErrorCode.DEPENDENCY_UNAVAILABLE);
+    expect(responses).toHaveLength(0); // 不手工拼响应，统一异常面负责
+  });
+
+  it('A-06 回归：构造期校验拒绝非法容量与补充速率（装配期 fail-fast）', () => {
+    const store = new MemoryCacheStore();
+    for (const capacity of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        () => new RateLimitLimiter({ store, capacity, refillPerSecond: 1, whitelist: [], failOpen: true, dryRun: false }),
+      ).toThrow(/capacity 必须为 ≥1 的整数/);
+    }
+    for (const refillPerSecond of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        () => new RateLimitLimiter({ store, capacity: 3, refillPerSecond, whitelist: [], failOpen: true, dryRun: false }),
+      ).toThrow(/refillPerSecond 必须为正数/);
+    }
   });
 });

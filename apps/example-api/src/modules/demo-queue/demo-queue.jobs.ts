@@ -10,6 +10,7 @@
  *   全部为 Nest provider：注册进模块后由 QueueModule 启动期自动扫描，无需手写注册代码（AC-003）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module example-api/demo-queue
  */
 
@@ -41,7 +42,7 @@ export class DemoFlakyJob implements Job<{ failTimes: number }> {
 
   handle(payload: { failTimes: number }, ctx: JobContext<{ failTimes: number }>): void {
     if (ctx.attempt <= (payload.failTimes ?? 0)) {
-      throw new Error(`第 ${ctx.attempt} 次故意失败（共需失败 ${payload.failTimes} 次）`);
+      throw new Error(`第 ${ctx.attempt} 次故意失败（共需失败 ${payload.failTimes} 次）`); // fw-allow-raw-throw: 演示任务本体——故意失败驱动重试/死信演示，非业务错误
     }
     this.ledger.record('demo.flaky', 0, { attempt: ctx.attempt, maxAttempts: ctx.maxAttempts });
   }

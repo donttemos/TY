@@ -32,7 +32,9 @@
 | [0021](./0021-refresh-token-lifecycle.md) | Refresh Token 生命周期完整性：replacement 密文 grace 级清空（cipher 三列置 NULL）+ 两级清理接线 + L5 全链生命周期回归 | 已采纳 | 后端 |
 | [0022](./0022-client-fingerprint.md) | M11.3 Client Fingerprint：grace 恢复绑定轮换发起方（UA 指纹起步，provider 接口预留 deviceId/clientId），异端重试升级为 replay | 已采纳 | 后端 |
 | [0023](./0023-key-ring.md) | M11.4 双 Key Ring：Replacement 密钥代际回退（HKDF legacy 回退链，解 JWT_SECRET 轮换误杀）+ JWT kid 路由 + 退役窗口规则 | 已采纳 | 后端 |
-| [0024](./0024-key-observability.md) | M11.5 Key Ring 可观测性：稳定 kid（secret 指纹派生，兼容回退）+ 密钥运维端点（retirable 判据）+ 安全事件审计口径 | 提议（待评审） | 后端 |
+| [0024](./0024-key-observability.md) | M11.5 Key Ring 可观测性：稳定 kid（secret 指纹派生，兼容回退）+ 密钥运维端点（retirable 判据）+ 安全事件审计口径 | 已采纳（2026-10-16） | 后端 |
+| [0025](./0025-unified-error-audit-contract.md) | M12 W1 统一错误与审计事件契约：错误三类治理（①继承 BizError / ②内部信号禁上浮 / ③fail-fast）+ 判别符≠错误码 + `audit_logs` 软增列六列（category/event/result/family_id/jti/request_id）+ replay 安全事件九要素 | 已采纳（2026-10-17） | 后端 / 前端契约 |
+| [0026](./0026-observability-id-layering.md) | M12 W2 可观测 ID 分层与贯穿：requestId(单请求) vs traceId(跨服务) 分层 / ALS 扩展（familyId/jti）+ logger 自动身份 / fw_auth_*·fw_security_* 指标段与基数护栏 / 审计检索键扩展 | 已采纳（2026-10-17） | 后端 / 前端契约 |
 
 ## 模板
 

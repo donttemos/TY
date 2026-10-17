@@ -4,10 +4,12 @@
  *   `/metrics` 已在统一响应拦截器与鉴权守卫的免包装/免认证名单内（C-05 DEFAULT_PUBLIC_PATHS）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo M12 W2（PRD-012 OBS-12）：/metrics 追加各域注册指标段
  * @module @fw/cache
  */
 
 import { Controller, Get, Inject, Res } from '@nestjs/common';
+import { renderExtraMetricSections } from '@fw/core';
 import { CACHE_SERVICE } from './tokens.js';
 import { CacheMetrics } from './metrics.js';
 import type { CacheService } from './cache.service.js';
@@ -36,6 +38,9 @@ export class CacheMetricsController {
   @Get(CACHE_METRICS_PATH)
   render(@Res({ passthrough: true }) res: ResponseLike): string {
     res.type('text/plain; version=0.0.4; charset=utf-8');
-    return CacheMetrics.render(this.cache.metricsSnapshot(), getGlobalRateLimiter()?.snapshot());
+    const base = CacheMetrics.render(this.cache.metricsSnapshot(), getGlobalRateLimiter()?.snapshot());
+    // M12 W2 OBS-12：追加各域注册段（@fw/auth 的 fw_auth_* / fw_security_* 等；无段时零输出）
+    const extra = renderExtraMetricSections();
+    return extra ? `${base}\n\n${extra}\n` : base;
   }
 }

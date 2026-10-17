@@ -29,12 +29,14 @@ export type PermissionCode = `${string}:${string}`;
 /** 审计动作（与 @fw/auth AuditAction 同源） */
 export type AuditAction = 'create' | 'update' | 'delete' | 'login' | 'logout' | 'export' | 'grant';
 
-/** 统一响应信封（与 @fw/core ResponseInterceptor 一致） */
+/** 统一响应信封（与 @fw/core ResponseInterceptor / ErrorBody 一致） */
 export interface ApiEnvelope<T> {
   code: number;
   message: string;
   data: T;
   traceId: string;
+  /** 字段级校验错误（PRD-012 OBS-04 冻结口径：在信封顶层，不在 data 内） */
+  details?: Array<{ field: string; message: string }>;
 }
 
 /** 分页结果（与 @fw/db PageResult 一致） */
@@ -242,6 +244,18 @@ export interface AuditLogRecord {
   userId: ID | null;
   module: string;
   action: AuditAction;
+  /** 审计大类（PRD-012 OBS-06：auth/security/admin/data/config/tenant/system） */
+  category: string | null;
+  /** 点分事件名（如 auth.login / refresh.replay_detected） */
+  event: string | null;
+  /** 事件结果（success / denied / failed） */
+  result: string | null;
+  /** 令牌家族 ID（安全事件关联键） */
+  familyId: string | null;
+  /** 令牌标识 jti（非令牌本体） */
+  jti: string | null;
+  /** 单次请求 ID（PRD-012 OBS-09） */
+  requestId: string | null;
   targetType: string | null;
   targetId: ID | null;
   beforeValue: unknown;

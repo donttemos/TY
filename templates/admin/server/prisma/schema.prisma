@@ -192,6 +192,12 @@ model AuditLog {
   userId      String?  @map("user_id")
   module      String
   action      String
+  category    String?  @map("category")
+  event       String?  @map("event")
+  result      String?  @map("result")
+  familyId    String?  @map("family_id")
+  jti         String?  @map("jti")
+  requestId   String?  @map("request_id")
   targetType  String?  @map("target_type")
   targetId    String?  @map("target_id")
   beforeValue Json?    @map("before_value")
@@ -206,6 +212,10 @@ model AuditLog {
   @@index([action], map: "idx_audit_action")
   @@index([targetType, targetId], map: "idx_audit_target")
   @@index([traceId], map: "idx_audit_trace")
+  @@index([event], map: "idx_audit_event")
+  @@index([familyId], map: "idx_audit_family")
+  @@index([requestId], map: "idx_audit_request")
+  @@index([category, createdAt], map: "idx_audit_category_created")
   @@index([createdAt], map: "idx_audit_created")
   @@map("audit_logs")
 }

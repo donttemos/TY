@@ -99,6 +99,14 @@ export const envSchema = z.object({
   LOG_LEVEL: z.enum(LOG_LEVEL_VALUES).default('info').describe('默认日志级别'),
   /** 单条日志最大字节数，超出截断 */
   LOG_MAX_BYTES: z.coerce.number().int().min(512).default(8192).describe('单条日志上限（字节）'),
+  /** 日志自动身份字段集（M12 W2 OBS-11；逗号分隔：userId/requestId/familyId/jti，空串关闭） */
+  LOG_IDENTITY_FIELDS: optionalString().describe('日志自动身份字段（LOG_IDENTITY_FIELDS，默认 userId,requestId）'),
+  /** 单请求 ID 开关（M12 W2 OBS-09；false = 回退仅 traceId，零行为差异） */
+  REQUEST_ID_ENABLED: boolString(true).describe('requestId 双 ID 分层开关（REQUEST_ID_ENABLED）'),
+  /** 单请求 ID 头名（M12 W2 OBS-09；请求/响应同用） */
+  REQUEST_ID_HEADER: optionalString().describe('requestId 头名（REQUEST_ID_HEADER，默认 X-Request-Id）'),
+  /** auth/security 指标段开关（M12 W2 OBS-12） */
+  METRICS_AUTH_SECTION_ENABLED: boolString(true).describe('fw_auth_*/fw_security_* 指标段开关（METRICS_AUTH_SECTION_ENABLED）'),
   /** 数据库驱动 */
   DB_DRIVER: z.enum(DB_DRIVER_VALUES).default('sqlite').describe('数据库驱动'),
   /** 数据库连接串 */
@@ -326,6 +334,10 @@ export const ENV_KEY_PATHS = {
   APP_PORT: 'app.port',
   LOG_LEVEL: 'log.level',
   LOG_MAX_BYTES: 'log.maxBytes',
+  LOG_IDENTITY_FIELDS: 'log.identityFields',
+  REQUEST_ID_ENABLED: 'request.idEnabled',
+  REQUEST_ID_HEADER: 'request.header',
+  METRICS_AUTH_SECTION_ENABLED: 'metrics.authSectionEnabled',
   DB_DRIVER: 'db.driver',
   DB_URL: 'db.url',
   DB_SLOW_MS: 'db.slowMs',
@@ -436,6 +448,10 @@ export const ENV_KEY_PATHS = {
 export const ENV_HOT_KEYS = {
   'log.level': 'LOG_LEVEL',
   'log.maxBytes': 'LOG_MAX_BYTES',
+  'log.identityFields': 'LOG_IDENTITY_FIELDS',
+  'request.idEnabled': 'REQUEST_ID_ENABLED',
+  'request.header': 'REQUEST_ID_HEADER',
+  'metrics.authSectionEnabled': 'METRICS_AUTH_SECTION_ENABLED',
   'cache.ttl': 'CACHE_TTL',
   'cache.nullTtl': 'CACHE_NULL_TTL',
   'cache.ttlJitter': 'CACHE_TTL_JITTER',

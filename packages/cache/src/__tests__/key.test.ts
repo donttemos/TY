@@ -4,6 +4,8 @@
  *   与信封序列化的往返正确性（含边界值 false / 0 / 空串）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo Cache 缺陷清单复核修复配套（C-06）：新增 SHA-256 摘要形状、
+ *   历史确定性碰撞对（undefined/null、NaN/Infinity、跨类型折叠）与 Set/Map/Date 编码回归。
  * @module @fw/cache
  */
 
@@ -42,6 +44,8 @@ describe('@fw/cache · key 规范', () => {
   it('稳定哈希对同一输入恒定、对不同输入区分', () => {
     expect(stableHash('abc')).toBe(stableHash('abc'));
     expect(stableHash('abc')).not.toBe(stableHash('abd'));
+    // C-06 回归：升级后为 64 位十六进制 SHA-256 摘要
+    expect(stableHash('abc')).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('参数哈希与对象键顺序无关（默认 key 稳定性）', () => {
@@ -51,6 +55,43 @@ describe('@fw/cache · key 规范', () => {
     const circular: Record<string, unknown> = {};
     circular.self = circular;
     expect(typeof hashArgs([circular])).toBe('string');
+  });
+
+  it('C-06 回归：历史确定性碰撞对全部可区分', () => {
+    // 数组内 undefined 不再折叠为 null
+    expect(hashArgs([undefined])).not.toBe(hashArgs([null]));
+    // 对象的 undefined 属性不再被丢弃
+    expect(hashArgs([{ a: undefined }])).not.toBe(hashArgs([{}]));
+    // NaN / ±Infinity 不再折叠为 null
+    expect(hashArgs([Number.NaN])).not.toBe(hashArgs([null]));
+    expect(hashArgs([Number.POSITIVE_INFINITY])).not.toBe(hashArgs([null]));
+    expect(hashArgs([Number.POSITIVE_INFINITY])).not.toBe(hashArgs([Number.NEGATIVE_INFINITY]));
+    // 跨类型不再折叠：1 / '1' / true
+    expect(hashArgs([1])).not.toBe(hashArgs(['1']));
+    expect(hashArgs([1])).not.toBe(hashArgs([true]));
+    // 函数与 undefined 区分
+    expect(hashArgs([() => 1])).not.toBe(hashArgs([undefined]));
+  });
+
+  it('C-06 回归：Set/Map/Date 专属编码，等价集合哈希一致、异构结构可区分', () => {
+    expect(hashArgs([new Set([1, 2])])).toBe(hashArgs([new Set([2, 1])]));
+    expect(hashArgs([new Map<unknown, unknown>([['a', 1]])])).toBe(hashArgs([new Map<unknown, unknown>([['a', 1]])]));
+    expect(hashArgs([new Date(0)])).toBe(hashArgs([new Date(0)]));
+    expect(hashArgs([new Set([1])])).not.toBe(hashArgs([[1]]));
+    expect(hashArgs([new Date(0)])).not.toBe(hashArgs([0]));
+  });
+
+  it('C-06 补充（设计 §8.1）：函数参数按源码区分、循环引用与占位字符串可区分', () => {
+    // 不同源码的函数不得仅因「都是函数」就得到相同键
+    expect(hashArgs([() => 1])).not.toBe(hashArgs([() => 2]));
+    // 同源码函数 deterministically 同键（跨进程稳定的前提）
+    const g1 = (): number => 1;
+    const g2 = (): number => 1;
+    expect(hashArgs([g1])).toBe(hashArgs([g2]));
+    // 循环引用的编码与普通占位字符串不同
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(hashArgs([circular])).not.toBe(hashArgs([{ self: '[circular]' }]));
   });
 
   it('信封序列化往返正确，含 false / 0 / 空串等假值边界', () => {

@@ -11,6 +11,7 @@
  *   全部为参数化查询，不涉及原生 SQL（dialect 白名单约束）。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-06）：归档表与在线表同构增列（两表同构不变量保持）
  * @module example-api/auth
  */
 
@@ -26,6 +27,12 @@ interface AuditLogRow {
   userId: string | null;
   module: string;
   action: string;
+  category: string | null;
+  event: string | null;
+  result: string | null;
+  familyId: string | null;
+  jti: string | null;
+  requestId: string | null;
   targetType: string | null;
   targetId: string | null;
   beforeValue: unknown;
@@ -70,6 +77,12 @@ export class PrismaAuditArchiveStore implements AuditArchivePort {
         userId: record.userId,
         module: record.module,
         action: record.action,
+        category: record.category,
+        event: record.event,
+        result: record.result,
+        familyId: record.familyId,
+        jti: record.jti,
+        requestId: record.requestId,
         targetType: record.targetType,
         targetId: record.targetId,
         beforeValue: record.beforeValue ?? undefined,
@@ -154,6 +167,12 @@ function toAuditRecord(row: AuditLogRow): AuditLogRecord {
     userId: row.userId,
     module: row.module,
     action: row.action as AuditLogRecord['action'],
+    category: (row.category ?? null) as AuditLogRecord['category'],
+    event: row.event,
+    result: (row.result ?? null) as AuditLogRecord['result'],
+    familyId: row.familyId,
+    jti: row.jti,
+    requestId: row.requestId,
     targetType: row.targetType,
     targetId: row.targetId,
     beforeValue: row.beforeValue ?? null,

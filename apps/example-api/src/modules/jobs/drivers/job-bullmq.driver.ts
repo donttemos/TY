@@ -7,12 +7,14 @@
  *   派发期即校验注册表：闭包无法入队，未登记 factory 的任务类型直接拒绝派发（快速失败）。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module example-api/jobs
  */
 
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { Logger, getTraceId } from '@fw/logger';
+import { BizError, ErrorCode } from '@fw/core';
 import type { JobHandle } from '@fw/queue';
 import type {
   JobArtifact,
@@ -89,7 +91,7 @@ export class BullmqJobDriver implements JobCenterPort {
     };
     // 闭包无法入队：bullmq 驱动的执行体只能来自注册表——缺登记属编程错误，快速失败
     if (!this.registry.has(options.type)) {
-      throw new Error(`任务类型 ${options.type} 未注册执行体工厂（bullmq 驱动要求登记 JobRunnerRegistry）`);
+      throw new BizError(ErrorCode.BAD_REQUEST, `任务类型 ${options.type} 未注册执行体工厂（bullmq 驱动要求登记 JobRunnerRegistry）`);
     }
     void this.store
       .insert(row)

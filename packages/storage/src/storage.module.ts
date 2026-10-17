@@ -6,11 +6,13 @@
  *   非法取值在启动时即失败（zod 枚举 + s3 配置完整性双保险）。
  * @author donttemo
  * @created 2026-10-16
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module @fw/storage
  */
 
 import { Global, Module, type DynamicModule, type Provider } from '@nestjs/common';
 import { loadEnv } from '@fw/config';
+import { BizError, ErrorCode } from '@fw/core';
 import { LocalStorage } from './drivers/local.driver.js';
 import { S3Storage } from './drivers/s3.driver.js';
 import { createS3Client } from './drivers/s3-client.js';
@@ -114,7 +116,7 @@ export class StorageModule {
           if (runtime.driver === 'local') return new LocalStorage(runtime.localRoot);
           // s3 驱动配置完整性：桶名必填（启动即失败，不猜默认桶）
           if (!runtime.s3Bucket) {
-            throw new Error('STORAGE_DRIVER=s3 时必须配置 STORAGE_S3_BUCKET（启动即失败，不猜默认值）');
+            throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, 'STORAGE_DRIVER=s3 时必须配置 STORAGE_S3_BUCKET（启动即失败，不猜默认值）');
           }
           const { client, commands } = await createS3Client({
             endpoint: runtime.s3Endpoint,

@@ -34,11 +34,14 @@ describe('ENV_HOT_KEYS（热更新白名单）一致性', () => {
     expect(Object.keys(ENV_HOT_KEYS).length).toBeLessThan(Object.keys(ENV_KEY_PATHS).length);
   });
 
-  it('热更白名单范围固定（12 键：PRD-009 FR-03 首版 11 键 + PRD-010 E-16 评审扩范围 web.keepAliveMax）', () => {
+  it('热更白名单范围固定（16 键：首版 12 键 + M12 W1 可观测扩展 4 键）', () => {
+    // M12 W1 扩展（PRD-012 / ADR-0026 / auth metrics）：log.identityFields（logger 身份字段输出）、
+    // metrics.authSectionEnabled（/metrics auth 段开关）、request.header / request.idEnabled（traceId/requestId）
     expect(Object.keys(ENV_HOT_KEYS).sort()).toEqual(
       [
         'log.level',
         'log.maxBytes',
+        'log.identityFields',
         'cache.ttl',
         'cache.nullTtl',
         'cache.ttlJitter',
@@ -49,6 +52,9 @@ describe('ENV_HOT_KEYS（热更新白名单）一致性', () => {
         'otel.sampleRatio',
         'tenant.cacheTtl',
         'web.keepAliveMax',
+        'metrics.authSectionEnabled',
+        'request.header',
+        'request.idEnabled',
       ].sort(),
     );
   });

@@ -21,6 +21,7 @@
  * @module @fw/auth
  */
 
+import { BizError, ErrorCode } from '@fw/core';
 import type { PageResult } from '@fw/db';
 import type {
   RotateRefreshTokenInput,
@@ -180,12 +181,12 @@ export class MemoryAuthStore implements AuthStore {
 
   async updateUser(id: ID, patch: Partial<AuthUser>): Promise<AuthUser> {
     const current = this.users.get(id);
-    if (!current) throw new Error(`用户不存在: ${id}`);
+    if (!current) throw new BizError(ErrorCode.NOT_FOUND, `用户不存在: ${id}`);
     // patch 语义（对齐 Prisma 列更新）：仅接受业务列白名单；未知列报错而非静默忽略
     // （Prisma 遇到未知列同样抛错）；id 不可变更，createdAt 由存储层管理
     const unknown = Object.keys(patch).filter((key) => !USER_PATCH_FIELDS.includes(key));
     if (unknown.length > 0) {
-      throw new Error(`updateUser 不支持的字段: ${unknown.join(', ')}（仅接受用户业务列，id/createdAt 不可经 patch 修改）`);
+      throw new BizError(ErrorCode.BAD_REQUEST, `updateUser 不支持的字段: ${unknown.join(', ')}（仅接受用户业务列，id/createdAt 不可经 patch 修改）`);
     }
     const next = { ...current, ...patch, id };
     this.users.set(id, next);
@@ -464,6 +465,12 @@ export class MemoryAuthStore implements AuthStore {
     if (query.action) rows = rows.filter((r) => r.action === query.action);
     if (query.targetType) rows = rows.filter((r) => r.targetType === query.targetType);
     if (query.targetId) rows = rows.filter((r) => r.targetId === query.targetId);
+    // M12 W2 OBS-14：契约字段精确过滤（与 Prisma 实现同语义）
+    if (query.traceId) rows = rows.filter((r) => r.traceId === query.traceId);
+    if (query.requestId) rows = rows.filter((r) => r.requestId === query.requestId);
+    if (query.familyId) rows = rows.filter((r) => r.familyId === query.familyId);
+    if (query.category) rows = rows.filter((r) => r.category === query.category);
+    if (query.event) rows = rows.filter((r) => r.event === query.event);
     if (query.from) rows = rows.filter((r) => r.createdAt >= (query.from as Date));
     if (query.to) rows = rows.filter((r) => r.createdAt <= (query.to as Date));
     // 排序（BUG-15）：字段白名单已在 HTTP 层校验，这里只负责方向；
@@ -486,12 +493,12 @@ export class MemoryAuthStore implements AuthStore {
 
   /** 引用主体不存在的统一报错（对齐 DB 外键违例语义） */
   private assertExists(label: string, exists: boolean, id: ID): void {
-    if (!exists) throw new Error(`${label}不存在: ${id}（关联写入须引用已存在的记录，外键约束）`);
+    if (!exists) throw new BizError(ErrorCode.BAD_REQUEST, `${label}不存在: ${id}（关联写入须引用已存在的记录，外键约束）`);
   }
 
   /** 引用集合中不存在项的统一报错 */
   private assertMissing(label: string, missing: readonly string[]): void {
-    if (missing.length > 0) throw new Error(`${label}不存在: ${missing.join(', ')}（关联写入须引用已存在的记录，外键约束）`);
+    if (missing.length > 0) throw new BizError(ErrorCode.BAD_REQUEST, `${label}不存在: ${missing.join(', ')}（关联写入须引用已存在的记录，外键约束）`);
   }
 }
 

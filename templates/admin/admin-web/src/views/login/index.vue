@@ -2,25 +2,22 @@
  * @file 登录页
  * @description 账号密码登录（原型 §5.1）：验证码钩子（VITE_LOGIN_CAPTCHA 控制，默认关闭）、记住我、
  *   错误码分级提示（3001 凭证错误 / 3004 账号锁定 / 9003 限流倒计时）、登录后回跳 redirect 原路径。
- *   E-07：OAuth2 授权码登录——按后端已注册提供方渲染入口（空列表不渲染，mock/未配置即无感）；
- *   回调经 URL fragment 携带令牌返回本页，解析后落地登录态并立即清除 hash。
+ *   模板按裁剪范围仅提供账号密码登录——OAuth2 授权码登录不在模板范围内
+ *   （服务端未注册 /auth/oauth2/*，接入时参照 apps/admin-web 登录页与 example-api oauth2 控制器补回）。
  * @author donttemo
  * @created 2026-10-13
- * @modified 2026-10-15 donttemo E-07：OAuth2 授权码入口 + 回调接管（providers 列表驱动，
- *   拉取失败按空处理不阻塞密码登录；回调解析抽 utils/oauth2.ts 供单测）
+ * @modified 2026-10-17 donttemo 三方一致性门禁：移除 OAuth2 授权码入口与回调接管——模板服务端
+ *   未接入 OAuth2，providers 拉取必 404；utils/oauth2.ts 同批删除
  * @module __APP_NAME__-web/views
 -->
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, type FormInstance } from 'element-plus';
 import { Lock, User } from '@element-plus/icons-vue';
 import { useUserStore } from '@/store/user';
 import { BIZ_CODE, BizError, describeBizError } from '@/utils/biz-error';
-import { fetchOAuth2Providers } from '@/api/auth';
-import { API_BASE } from '@/utils/request';
-import { buildOAuth2AuthorizeUrl, parseOAuth2CallbackHash } from '@/utils/oauth2';
 
 const route = useRoute();
 const router = useRouter();
@@ -31,42 +28,6 @@ const loading = ref(false);
 const remember = ref(true);
 
 const form = ref({ account: '', password: '', captcha: '' });
-
-/** OAuth2 已注册提供方（空 = 未启用，不渲染入口；拉取失败按空处理） */
-const oauthProviders = ref<string[]>([]);
-
-/** 跳转 IdP 授权（整页跳转，回调带 fragment 回到本页） */
-function startOAuth2(provider: string): void {
-  const loginUrl = `${window.location.origin}/login`;
-  window.location.href = buildOAuth2AuthorizeUrl(API_BASE, provider, loginUrl);
-}
-
-/** OAuth2 回调接管：fragment 带令牌 → 落地登录态 → 清 hash → 回跳 */
-async function consumeOAuth2Callback(): Promise<boolean> {
-  const tokens = parseOAuth2CallbackHash(window.location.hash);
-  if (!tokens) return false;
-  // 立即清除地址栏 hash，防令牌留在历史记录与复制分享的 URL 里
-  window.history.replaceState(null, '', window.location.pathname + window.location.search);
-  try {
-    await user.loginWithTokens(tokens.accessToken, tokens.refreshToken, remember.value);
-    ElMessage.success('登录成功');
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard';
-    await router.push(redirect);
-    return true;
-  } catch {
-    ElMessage.error('OAuth2 登录失败：令牌无效或已过期');
-    return false;
-  }
-}
-
-onMounted(async () => {
-  if (await consumeOAuth2Callback()) return;
-  try {
-    oauthProviders.value = (await fetchOAuth2Providers()).providers ?? [];
-  } catch {
-    oauthProviders.value = [];
-  }
-});
 
 /** 验证码钩子：VITE_LOGIN_CAPTCHA=true 时显示（PRD-005 待定问题：默认关闭） */
 const captchaEnabled = computed(() => import.meta.env.VITE_LOGIN_CAPTCHA === 'true');
@@ -187,18 +148,6 @@ async function handleLogin(): Promise<void> {
         <el-button type="primary" size="large" class="fw-login-submit" :loading="loading" :disabled="cooldown > 0" @click="handleLogin">
           {{ cooldown > 0 ? `请稍候（${cooldown}s）` : '登 录' }}
         </el-button>
-        <template v-if="oauthProviders.length > 0">
-          <el-divider class="fw-login-divider">或</el-divider>
-          <el-button
-            v-for="provider in oauthProviders"
-            :key="provider"
-            size="large"
-            class="fw-login-oauth2"
-            @click="startOAuth2(provider)"
-          >
-            OAuth2 登录（{{ provider }}）
-          </el-button>
-        </template>
       </el-form>
     </div>
   </div>
@@ -269,14 +218,5 @@ async function handleLogin(): Promise<void> {
 
 .fw-login-submit {
   width: 100%;
-}
-
-.fw-login-divider {
-  margin: 16px 0;
-}
-
-.fw-login-oauth2 {
-  width: 100%;
-  margin: 0 0 4px;
 }
 </style>

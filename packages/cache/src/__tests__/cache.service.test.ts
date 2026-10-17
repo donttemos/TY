@@ -4,6 +4,9 @@
  *   空值占位（005）、TTL 抖动（006）、降级与回切（007/008）、大 key 拒绝（010），以及 fail-closed 抛 9002。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo Cache 缺陷清单复核修复配套：新增 C-01 回归（失效×并发写入交错
+ *   后无孤儿不变式）、C-03 回归（fail-open/fail-closed 失效失败不销毁索引）、A-04 回归（带标签
+ *   写入走 setWithTags 原子端口方法）。
  * @module @fw/cache
  */
 
@@ -128,6 +131,65 @@ describe('@fw/cache · CacheService 统一接口', () => {
     expect(await cache.invalidateTag('user:1')).toBe(0);
   });
 
+  it('C-01 回归：失效与并发写入交错后，任何存活值都必须仍可经标签失效（无孤儿）', async () => {
+    const { cache } = makeService();
+    // 修复前的竞态：setRaw 写值与标签登记两步分离，登记落在失效成员快照之后、索引删除之前
+    // → 键成为孤儿（get 有值、再次 invalidateTag 却返回 0）。修复后写+登记原子、失效原子，
+    // 两者全序串行，该不变式必须恒成立。
+    for (let i = 0; i < 60; i++) {
+      await Promise.all([cache.set('k', `v${i}`, { tags: ['t'] }), cache.invalidateTag('t')]);
+      const value = await cache.get('k');
+      const removed = await cache.invalidateTag('t');
+      if (value !== undefined) {
+        expect(removed).toBe(1);
+      } else {
+        expect(removed).toBe(0);
+      }
+    }
+  }, 15_000);
+
+  it('C-03 回归：fail-open 下成员读取失败时，失效整体未发生（索引不销毁）', async () => {
+    const store = new FaultyStore();
+    const { cache } = makeService({ failOpen: true }, { store });
+    await cache.set('k', 'v', { tags: ['t'] });
+    // 仅让 smembers 类读取失败（invalidateByTag），del 正常——修复前：
+    // smembers 降级为 [] 被当成「没有成员」，cleanup 仍会删掉索引，留下不可失效的残留数据
+    store.failWhen = (method) => method === 'invalidateByTag';
+    expect(await cache.invalidateTag('t')).toBe(0);
+    store.failWhen = () => false;
+    // 数据仍在，索引仍有效——可正常失效
+    expect(await cache.get('k')).toBe('v');
+    expect(await cache.invalidateTag('t')).toBe(1);
+    expect(await cache.get('k')).toBeUndefined();
+  });
+
+  it('C-03 回归：fail-closed 下失效失败抛 9002 且索引不销毁', async () => {
+    const store = new FaultyStore();
+    const { cache } = makeService({ failOpen: false }, { store });
+    await cache.set('k', 'v', { tags: ['t'] });
+    store.failWhen = (method) => method === 'invalidateByTag';
+    await expect(cache.invalidateTag('t')).rejects.toBeInstanceOf(CacheUnavailableError);
+    store.failWhen = () => false;
+    expect(await cache.get('k')).toBe('v');
+    expect(await cache.invalidateTag('t')).toBe(1);
+  });
+
+  it('A-04 回归：带标签写入走原子端口方法（无「值已写入、标签未登记」半程）', async () => {
+    const store = new MemoryCacheStore();
+    const setWithTagsSpy = vi.spyOn(store, 'setWithTags');
+    const setSpy = vi.spyOn(store, 'set');
+    const { cache } = makeService({}, { store });
+    await cache.set('k', 'v', { tags: ['t1', 't2'] });
+    // 带标签写入必须走 setWithTags（单次原子），不再先 set 后逐个 sadd
+    expect(setWithTagsSpy).toHaveBeenCalledTimes(1);
+    expect(setWithTagsSpy.mock.calls[0][3].map((tag) => tag.tagKey)).toEqual(['test:__tag__:t1', 'test:__tag__:t2']);
+    expect(setSpy).not.toHaveBeenCalled();
+    // 两个标签都能失效到该键
+    expect(await cache.invalidateTag('t1')).toBe(1);
+    await cache.set('k2', 'v2', { tags: ['t2'] });
+    expect(await cache.invalidateTag('t2')).toBe(1);
+  });
+
   it('mset / mget / del / has / expire 批量语义', async () => {
     const { cache } = makeService({ defaultTtlSeconds: 600 });
     await cache.mset([
@@ -225,6 +287,41 @@ describe('@fw/cache · 降级与 fail-closed', () => {
     // 边界内正常写入
     await cache.set('small', 'ok');
     expect(await cache.get('small')).toBe('ok');
+  });
+});
+
+describe('@fw/cache · 配置边界（A-03）', () => {
+  it.each([
+    ['负数 TTL', -1],
+    ['零 TTL', 0],
+    ['NaN TTL', Number.NaN],
+    ['无限 TTL', Number.POSITIVE_INFINITY],
+  ])('set 拒绝%s（不再被钳到 1ms 静默写入）', async (_label, ttlSeconds) => {
+    const { cache, store } = makeService();
+    await expect(cache.set('config:bad-ttl', 'v', { ttlSeconds: ttlSeconds as number })).rejects.toThrow(/必须为正数/);
+    await expect(cache.set('config:bad-null-ttl', null, { nullTtlSeconds: -5 })).rejects.toThrow(/必须为正数/);
+    await expect(cache.expire('config:bad-expire', -1)).rejects.toThrow(/必须为正数/);
+    await expect(cache.lock('config:bad-lock', 0)).rejects.toThrow(/必须为正数/);
+    expect(await store.get('test:config:bad-ttl')).toBeUndefined();
+  });
+
+  it.each([
+    [{ ttlJitter: -0.1 }],
+    [{ ttlJitter: 1.1 }],
+    [{ ttlJitter: Number.NaN }],
+    [{ lockTtlSeconds: 0 }],
+    [{ lockTtlSeconds: -1 }],
+    [{ defaultTtlSeconds: 0 }],
+    [{ nullTtlSeconds: Number.POSITIVE_INFINITY }],
+    [{ slowMs: -1 }],
+  ])('updateRuntimeOptions 拒绝非法热更 %#', (patch) => {
+    const { cache } = makeService();
+    expect(() => cache.updateRuntimeOptions(patch as never)).toThrow(/非法/);
+  });
+
+  it('合法热更仍正常生效（校验不误伤）', () => {
+    const { cache } = makeService();
+    expect(() => cache.updateRuntimeOptions({ ttlJitter: 0.2, lockTtlSeconds: 60, slowMs: 100 })).not.toThrow();
   });
 });
 

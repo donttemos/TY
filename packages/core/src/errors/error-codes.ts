@@ -1,8 +1,11 @@
 /*
  * @file 错误码表
  * @description 与 docs/40-api-spec.md 第 2 节同源：分段 1xxx 通用、2xxx 业务预留、3xxx 鉴权、4xxx 租户、9xxx 系统；新增错误码必须同步该表与 PRD-001。
+ *   码表为全仓唯一权威（PRD-012 OBS-03）：error-codes.json 工件 + 前端/模板/mock 三副本由
+ *   check-triway-consistency 轴 G 构建期断言同源，篡改任意一份即构建失败。
  * @author donttemo
  * @created 2026-10-09
+ * @modified 2026-10-17 donttemo M12 W1（OBS-03）码表单一来源登记 + W2（OBS-09）ErrorBody 增 requestId
  * @module core
  * @since v0.1.0
  */
@@ -88,11 +91,13 @@ export const HTTP_TO_ERROR_CODE: Record<number, BizErrorCode> = {
   503: ErrorCode.DEPENDENCY_UNAVAILABLE,
 };
 
-/** 统一响应体（失败形态，字段级校验错误放 details） */
+/** 统一响应体（失败形态，字段级校验错误放 details；requestId 为 W2 additive 字段） */
 export interface ErrorBody {
   code: BizErrorCode;
   message: string;
   data: null;
   traceId: string;
+  /** 单次请求 ID（M12 W2 OBS-09；仅在请求上下文存在时输出，additive） */
+  requestId?: string;
   details?: Array<{ field: string; message: string }>;
 }

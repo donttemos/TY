@@ -17,6 +17,7 @@
 import { Global, Module, type DynamicModule, type Provider } from '@nestjs/common';
 import { APP_GUARD, APP_INTERCEPTOR, Reflector } from '@nestjs/core';
 import { loadEnv } from '@fw/config';
+import { BizError, ErrorCode } from '@fw/core';
 import { AuditInterceptor } from './audit.interceptor.js';
 import { AuditService } from './audit.service.js';
 import { MemoryAuthCache, type AuthCachePort } from './auth-cache.js';
@@ -118,10 +119,10 @@ export interface AuthModuleOptions {
 export function buildAuthOptions(env: AuthEnvLike, overrides: Partial<AuthOptions> = {}): AuthOptions {
   const jwtSecret = overrides.jwtSecret ?? env.JWT_SECRET;
   if (!jwtSecret) {
-    throw new Error('缺少 JWT_SECRET：请在 .env 配置 ≥32 位强随机密钥（M3 鉴权必需，无默认值以防弱密钥入生产）');
+    throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, '缺少 JWT_SECRET：请在 .env 配置 ≥32 位强随机密钥（M3 鉴权必需，无默认值以防弱密钥入生产）');
   }
   if (env.JWT_SECRET_PREV && env.JWT_SECRET_PREV === jwtSecret) {
-    throw new Error('JWT_SECRET_PREV 不得与 JWT_SECRET 相同：轮换过渡期需两把不同密钥（TC-AUTH-014）');
+    throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, 'JWT_SECRET_PREV 不得与 JWT_SECRET 相同：轮换过渡期需两把不同密钥（TC-AUTH-014）');
   }
   return {
     strategy: overrides.strategy ?? env.AUTH_STRATEGY ?? DEFAULT_STRATEGY,

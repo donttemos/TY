@@ -4,10 +4,12 @@
  *   （TC-CACHE-009：多实例同时触发定时任务，仅一个执行）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo Cache 缺陷清单复核修复配套：新增 C-02 回归（普通获取句柄先释放只减
+ *   共享深度 / release 幂等）与 C-04 回归（短 TTL 看门狗先于过期续期 / onLost 失锁感知）。
  * @module @fw/cache
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { LockManager } from '../lock.js';
 import { MemoryCacheStore } from '../drivers/memory.driver.js';
 
@@ -74,6 +76,92 @@ describe('@fw/cache · 分布式锁', () => {
     expect(await store.exists('lock:reentrant')).toBe(true);
     expect(await outer!.release()).toBe(true);
     expect(await store.exists('lock:reentrant')).toBe(false);
+  });
+
+  it('C-02 回归：普通获取句柄先释放时只减共享深度，不再提前释放整把锁', async () => {
+    const store = new MemoryCacheStore();
+    const manager = new LockManager(store, 5000);
+    // A 普通获取（depth 1），B 重入（depth 2）——修复前 A 释放会直接 compareAndDelete，
+    // B 仍在业务代码中锁已被释放
+    const a = await manager.acquire('lock:order', 5000);
+    const b = await manager.acquire('lock:order', 5000, { reentrant: true });
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(await a!.release()).toBe(true);
+    // 锁仍被 B 持有
+    expect(await store.get('lock:order')).toBe(b!.token);
+    expect(await b!.release()).toBe(true);
+    expect(await store.exists('lock:order')).toBe(false);
+  });
+
+  it('C-02 回归：release 幂等——重复释放返回 false，不二次触碰存储', async () => {
+    const store = new MemoryCacheStore();
+    const manager = new LockManager(store, 5000);
+    const handle = await manager.acquire('lock:idem', 5000);
+    expect(await handle!.release()).toBe(true);
+    expect(await store.exists('lock:idem')).toBe(false);
+    expect(await handle!.release()).toBe(false);
+    // 其他实例可正常获取（未被误删/误占）
+    const next = new LockManager(store, 5000);
+    expect(await next.acquire('lock:idem', 5000)).not.toBeNull();
+  });
+
+  it('C-04 回归：TTL < 1s 时看门狗仍能在锁过期前续期', async () => {
+    const store = new MemoryCacheStore();
+    const manager = new LockManager(store, 5000);
+    // 修复前看门狗周期 max(1000, TTL/3)=1000ms ≥ TTL，锁先过期再续期
+    const handle = await manager.acquire('lock:short', 500, { autoRenew: true });
+    expect(handle).not.toBeNull();
+    await sleep(700);
+    expect(await store.get('lock:short')).toBe(handle!.token);
+    await handle!.release();
+  });
+
+  it('C-04 回归：续期失败后 onLost 回调触发（失锁可感知）', async () => {
+    const store = new MemoryCacheStore();
+    const manager = new LockManager(store, 5000);
+    const lost: string[] = [];
+    const handle = await manager.acquire('lock:onlost', 600, { autoRenew: true, onLost: (reason) => lost.push(reason) });
+    expect(handle).not.toBeNull();
+    // 模拟失锁：锁被其他持有者占据（TTL 过期后抢占）
+    await store.set('lock:onlost', 'other-owner', 600);
+    await sleep(400);
+    expect(lost).toEqual(['renew-failed']);
+    // 看门狗已停表：不再继续续期
+    await sleep(300);
+    expect(lost).toHaveLength(1);
+  });
+
+  it('C-04 补充：续期返回 false 后看门狗停表，不再持续续期', async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new MemoryCacheStore();
+      const renewSpy = vi.spyOn(store, 'compareAndExpire').mockResolvedValue(false);
+      const manager = new LockManager(store, 1500);
+      const handle = await manager.acquire('lock:renew-stop', 1500, { autoRenew: true });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(renewSpy).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(renewSpy).toHaveBeenCalledTimes(1);
+      await handle!.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('令牌隔离：释放后旧句柄 renew 不得续期已被第三方取得的新锁', async () => {
+    const store = new MemoryCacheStore();
+    const manager = new LockManager(store, 5000);
+    const first = await manager.acquire('lock:isolate', 5000);
+    expect(first).not.toBeNull();
+    await first!.release();
+    const third = new LockManager(store, 5000);
+    const second = await third.acquire('lock:isolate', 5000);
+    expect(second).not.toBeNull();
+    // 旧句柄 renew：令牌不匹配 → false，新持有者的锁不受影响
+    expect(await first!.renew()).toBe(false);
+    expect(await store.get('lock:isolate')).toBe(second!.token);
+    await second!.release();
   });
 
   it('非重入模式下同持有者再次获取失败', async () => {

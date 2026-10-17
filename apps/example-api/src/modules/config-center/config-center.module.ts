@@ -20,6 +20,7 @@
 import { Global, Module, type DynamicModule, type Provider } from '@nestjs/common';
 import { CACHE_SERVICE, type CacheService } from '@fw/cache';
 import { loadEnv } from '@fw/config';
+import { BizError, ErrorCode } from '@fw/core';
 import { DB_CLIENT, type PrismaClientLike } from '@fw/db';
 import { ConfigCenterService, FileConfigDriver, NacosConfigDriver, type ConfigDriverPort, type ConfigHistoryPort } from '@fw/config-center';
 import { AuditService } from '@fw/auth';
@@ -62,7 +63,7 @@ export class ConfigCenterModule {
           // serverAddr 缺失启动即失败（fail-fast，与非法枚举值同语义）
           if (env.CONFIG_CENTER_DRIVER === 'nacos') {
             if (!env.CONFIG_CENTER_NACOS_SERVER_ADDR) {
-              throw new Error('CONFIG_CENTER_DRIVER=nacos 需要配置 CONFIG_CENTER_NACOS_SERVER_ADDR（缺失启动即失败）');
+              throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, 'CONFIG_CENTER_DRIVER=nacos 需要配置 CONFIG_CENTER_NACOS_SERVER_ADDR（缺失启动即失败）');
             }
             return new NacosConfigDriver({
               serverAddr: env.CONFIG_CENTER_NACOS_SERVER_ADDR,

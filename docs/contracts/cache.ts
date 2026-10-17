@@ -78,7 +78,11 @@ export interface CacheServiceContract {
   read<T>(key: CacheKey, options?: CacheOptions): Promise<CacheReadResult<T>>;
   /** 写入（`value` 为 undefined 时写空值占位） */
   set(key: CacheKey, value: unknown, options?: CacheOptions): Promise<void>;
-  /** 批量写入 */
+  /**
+   * 批量写入。
+   * 契约（A-03 冻结）：**非事务**——逐键写入，中途失败时可能已写入部分键，不做回滚；
+   * 需要「全有或全无」语义的场景不得使用本接口推断原子性。
+   */
   mset(entries: ReadonlyArray<{ key: CacheKey; value: unknown; tags?: CacheTag[] }>, options?: CacheOptions): Promise<void>;
   /** 批量读取；返回 Map（未命中键不在 Map 中） */
   mget<T>(keys: readonly CacheKey[], options?: CacheOptions): Promise<Map<CacheKey, T>>;
@@ -94,7 +98,12 @@ export interface CacheServiceContract {
    * - `loader` 返回 null/undefined 时写空值占位（防穿透，TC-CACHE-005）。
    */
   wrap<T>(key: CacheKey, ttlSeconds: number, loader: () => Promise<T | undefined | null>, options?: CacheOptions): Promise<T | undefined>;
-  /** 按标签批量失效；返回失效键数量 */
+  /**
+   * 按标签批量失效；返回失效键数量。
+   * 原子语义（C-01/C-03 冻结）：写+登记（`set` 带 tags）与失效各自原子、彼此全序串行——
+   * 失效后任何存活键必仍可被再次失效（无孤儿）；失效故障时整体未发生（fail-open 返回 0 且
+   * 不销毁索引，fail-closed 抛 9002）。已知限制：redis-cluster 跨 slot 多键脚本不可用。
+   */
   invalidateTag(tag: CacheTag): Promise<number>;
   /** 连接可用性探测（注册为 `/ready` 探针；memory 恒为 true） */
   ping(): Promise<boolean>;
@@ -112,7 +121,11 @@ export interface LockHandle {
   readonly ttlMs: number;
   /** 是否可重入获取（同一持有者重复 acquire） */
   readonly reentrant: boolean;
-  /** 释放：仅当令牌匹配时删除；返回是否真的释放 */
+  /**
+   * 释放：仅当令牌匹配时删除；返回是否真的释放。
+   * 语义（冻结，C-02）：释放行为由**共享持有记录的深度**决定——深度 > 1 时只减深度
+   * （与本句柄当初是普通获取还是重入获取无关），深度 = 1 时真正释放；重复释放幂等返回 false。
+   */
   release(): Promise<boolean>;
   /** 续期（自动续期开启时由看门狗周期调用）；返回是否成功 */
   renew(ttlMs?: number): Promise<boolean>;
@@ -122,12 +135,16 @@ export interface LockHandle {
 export interface LockOptions {
   /** 允许同持有者重入（默认 false） */
   reentrant?: boolean;
-  /** 自动续期（默认 false）：开启后每 `ttlMs/3` 续期一次，`release` 时停表 */
+  /** 自动续期（默认 false）：开启后每 `max(50ms, ttlMs/3)` 续期一次，`release` 时停表；
+   *  TTL < 1s 时续期可靠性受限（实现侧告警），持续失锁通过 `onLost` 感知 */
   autoRenew?: boolean;
   /** 持有者标识（默认进程内自动生成，跨实例需显式传入业务唯一标识） */
   owner?: string;
   /** 等待获取的最大毫秒数（默认 0 = 不等待，立即返回） */
   waitMs?: number;
+  /** 失锁感知（C-04）：`autoRenew` 开启时看门狗续期失败/异常停表后触发一次；
+   *  持锁副作用不可重复的业务应据此中止执行 */
+  onLost?: (reason: 'renew-failed' | 'renew-error') => void;
 }
 
 /**

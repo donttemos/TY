@@ -100,6 +100,13 @@ export interface MockAuditLog {
   userId: string | null;
   module: string;
   action: 'create' | 'update' | 'delete' | 'login' | 'logout' | 'export' | 'grant';
+  /** PRD-012 OBS-06：统一审计事件契约（后端信封已全量返回；即时构造行可缺省） */
+  category?: 'auth' | 'security' | 'admin' | 'data' | 'config' | 'tenant' | 'system' | null;
+  event?: string | null;
+  result?: 'success' | 'denied' | 'failed' | null;
+  familyId?: string | null;
+  jti?: string | null;
+  requestId?: string | null;
   targetType: string | null;
   targetId: string | null;
   beforeValue: unknown;
@@ -460,15 +467,22 @@ function seedAuditLogs(): MockAuditLog[] {
   for (let i = 1; i <= 26; i += 1) {
     const action = actions[i % actions.length] as MockAuditLog['action'];
     const userId = i % 5 === 0 ? 'u-alice' : 'u-admin';
+    const moduleName = i % 3 === 0 ? 'user' : i % 3 === 1 ? 'role' : 'auth';
     logs.push({
       id: `a-${String(i).padStart(4, '0')}`,
       userId,
-      module: i % 3 === 0 ? 'user' : i % 3 === 1 ? 'role' : 'auth',
+      module: moduleName,
       action,
       targetType: action === 'login' || action === 'logout' ? null : action === 'grant' ? 'role' : 'user',
       targetId: action === 'login' || action === 'logout' ? null : i % 3 === 0 ? 'u-bob' : 'r-user',
       beforeValue: action === 'update' ? { status: 1, nickname: '旧昵称' } : action === 'delete' ? { username: 'temp' } : null,
       afterValue: action === 'update' ? { status: 0, nickname: '新昵称' } : action === 'grant' ? { permissionIds: ['p-user-read', 'p-auth-me'] } : null,
+      category: 'admin',
+      event: `${moduleName}.${action}`,
+      result: 'success',
+      familyId: null,
+      jti: null,
+      requestId: null,
       ip: '127.0.0.1',
       userAgent: 'Mozilla/5.0 (mock)',
       traceId: `trace-${String(i).padStart(6, '0')}`,

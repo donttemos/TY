@@ -10,6 +10,7 @@
  *   tenant 收敛由基类保证；关联表与字典项用模型委托（条件超出 Repository<T> 公共子集），全部参数化查询。
  * @author donttemo
  * @created 2026-10-14
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-06）：审计行映射补齐统一事件契约字段
  * @modified 2026-10-15 donttemo BUG-15 增量：listRoleDetails / listDictCategories / listDictItems
  *   增加可选 sort 参数（控制器白名单收敛后透传，缺省行为不变，存储层自带主键 tie-breaker）
  * @module __APP_NAME__/admin
@@ -96,6 +97,12 @@ interface AuditLogRow {
   userId: string | null;
   module: string;
   action: string;
+  category: string | null;
+  event: string | null;
+  result: string | null;
+  familyId: string | null;
+  jti: string | null;
+  requestId: string | null;
   targetType: string | null;
   targetId: string | null;
   beforeValue: unknown;
@@ -662,6 +669,12 @@ export class PrismaAdminStore implements AdminStore {
       userId: row.userId,
       module: row.module,
       action: row.action as AuditAction,
+      category: (row.category ?? null) as AuditLogRecord['category'],
+      event: row.event,
+      result: (row.result ?? null) as AuditLogRecord['result'],
+      familyId: row.familyId,
+      jti: row.jti,
+      requestId: row.requestId,
       targetType: row.targetType,
       targetId: row.targetId,
       beforeValue: row.beforeValue ?? null,

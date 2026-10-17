@@ -7,10 +7,20 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：新增 updateRuntimeOptions——cache.ttl/nullTtl/ttlJitter/slowMs/lockTtl 五键经配置中心订阅热更
+ * @modified 2026-10-17 donttemo Cache 缺陷清单复核修复（C-01/C-03/A-04）：setRaw 带标签时改走端口
+ *   原子方法 `setWithTags`（写值与标签登记单次完成，消除半程状态）；invalidateTag 改走 `invalidateByTag`
+ *   （读成员/删成员/删索引单次原子，与并发写入全序串行，故障时整体未发生——fail-open 降级不再
+ *   把「无法确认成员」误删成「没有成员」的索引）。
+ * @modified 2026-10-17 donttemo Cache 缺陷清单 A-03 修复：① updateRuntimeOptions 增加入口校验
+ *   （TTL/空值 TTL/lockTtl 必须为正数、jitter ∈ [0,1]、slowMs ≥ 0），非法热更 fail-fast——
+ *   「合法性由配置中心保证」降级为第二道防线而非唯一防线；② 调用级 ttlSeconds/nullTtlSeconds/
+ *   expire/lock 的 TTL 校验（此前 ttlMs() 用 Math.max(1,·) 把非法值钳到 1ms 静默写入）；
+ *   ③ mset 契约显式化：非事务、逐键写入、中途失败可能留下部分键。
  * @module @fw/cache
  */
 
 import { Logger } from '@fw/logger';
+import { BizError, ErrorCode } from '@fw/core';
 import { CacheUnavailableError } from './errors.js';
 import { assertLogicalKey, decodeEntry, encodeNegative, encodeValue, tagKeyOf, withPrefix } from './key.js';
 import { LockManager, type LockHandle, type LockOptions } from './lock.js';
@@ -20,6 +30,13 @@ import type { CacheStorePort } from './store.port.js';
 import type { CacheCallOptions, CacheDriverName, CacheMetricsSnapshot, CacheReadResult, CacheRuntimeOptions } from './types.js';
 
 const logger = Logger.for('cache');
+
+/** 秒级 TTL 校验（A-03）：必须为正的有限数值（此前 ttlMs() 用 Math.max(1,·) 把非法值钳到 1ms 静默写入） */
+function assertPositiveSeconds(value: number, field: string): void {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `缓存配置非法：${field} 必须为正数（秒），收到 ${value}`);
+  }
+}
 
 /** 构造参数 */
 export interface CacheServiceDeps {
@@ -74,12 +91,29 @@ export class CacheService {
    * 运行时更新可热更选项（M9/PRD-009 FR-09：由配置中心 onChange 订阅调用，禁止业务侧自行轮询）
    *
    * 仅接受白名单键对应的字段（ttl/nullTtl/ttlJitter/slowMs/lockTtl）；lockTtl 同步刷新锁管理器默认 TTL
-   * （对后续新获取的锁生效，在途锁不受影响）。值的合法性由配置中心管道保证，本方法不做二次校验。
+   * （对后续新获取的锁生效，在途锁不受影响）。入口校验（A-03）：TTL/空值 TTL/lockTtl 必须为正数、
+   * jitter ∈ [0,1]、slowMs ≥ 0——非法热更 fail-fast 抛 BizError CONFIG_INVALID_VALUE，
+   * 配置中心管道校验为第一道防线、此处为直接调用者的兜底防线。
    * @param patch 待更新字段
    */
   updateRuntimeOptions(
     patch: Partial<Pick<CacheRuntimeOptions, 'defaultTtlSeconds' | 'nullTtlSeconds' | 'ttlJitter' | 'slowMs' | 'lockTtlSeconds'>>,
   ): void {
+    if (patch.defaultTtlSeconds !== undefined) assertPositiveSeconds(patch.defaultTtlSeconds, 'defaultTtlSeconds');
+    if (patch.nullTtlSeconds !== undefined) assertPositiveSeconds(patch.nullTtlSeconds, 'nullTtlSeconds');
+    if (patch.lockTtlSeconds !== undefined) assertPositiveSeconds(patch.lockTtlSeconds, 'lockTtlSeconds');
+    if (patch.ttlJitter !== undefined) {
+      const { ttlJitter } = patch;
+      if (!Number.isFinite(ttlJitter) || ttlJitter < 0 || ttlJitter > 1) {
+        throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `缓存配置非法：ttlJitter 必须在 [0,1] 内，收到 ${ttlJitter}`);
+      }
+    }
+    if (patch.slowMs !== undefined) {
+      const { slowMs } = patch;
+      if (!Number.isFinite(slowMs) || slowMs < 0) {
+        throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `缓存配置非法：slowMs 必须为 ≥0 的有限数值，收到 ${slowMs}`);
+      }
+    }
     Object.assign(this.opt, patch);
     if (patch.lockTtlSeconds !== undefined) {
       this.lockManager.updateDefaultTtl(patch.lockTtlSeconds * 1000);
@@ -127,6 +161,11 @@ export class CacheService {
 
   /**
    * 批量写入
+   *
+   * 契约（A-03 显式化）：**非事务**——逐键调用 setRaw，中途失败时可能已经写入部分键，
+   * 不做回滚。需要「全有或全无」语义的场景不得从「批量」一词推断原子性，应使用存储层
+   * 事务能力或自行补偿。
+   *
    * @param entries 键值（可带独立标签）
    * @param options 公共覆盖选项
    */
@@ -184,6 +223,7 @@ export class CacheService {
    * @returns 键存在且成功为 true
    */
   async expire(key: string, ttlSeconds: number): Promise<boolean> {
+    assertPositiveSeconds(ttlSeconds, 'ttlSeconds');
     const fullKey = this.resolveKey(key);
     const ttlMs = this.ttlMs(ttlSeconds, 0);
     return this.guarded('expire', { key: fullKey }, undefined, () => this.store.expire(fullKey, ttlMs), () => false);
@@ -220,18 +260,20 @@ export class CacheService {
 
   /**
    * 按标签批量失效
+   *
+   * 原子语义（C-01/C-03 修复）：走端口 `invalidateByTag`——读成员、删成员、删索引单次原子完成，
+   * 与 `setWithTags` 的写+登记全序串行：失效期间/之后完成登记的键要么已被删除、要么重新持有
+   * 有效索引，不再产生「键存在但索引已丢」的孤儿；操作故障时整体未发生（fail-open 降级返回 0
+   * 且**不销毁索引**，fail-closed 抛 9002），不会把「无法确认成员」误判为「没有成员」。
    * @param tag 标签（如 `user:123`）
-   * @returns 失效键数量
+   * @returns 失效键数量（故障降级时为 0，可观测的失败语义）
    */
   async invalidateTag(tag: string): Promise<number> {
     const fullTagKey = tagKeyOf(this.opt.prefix, tag);
-    const members = await this.guarded('invalidateTag.members', { tag }, undefined, () => this.store.smembers(fullTagKey), () => [] as string[]);
-    let removed = 0;
-    if (members.length > 0) {
-      removed = await this.guarded('invalidateTag.del', { tag, count: members.length }, undefined, () => this.store.del(members), () => 0);
+    const removed = await this.guarded('invalidateTag', { tag }, undefined, () => this.store.invalidateByTag(fullTagKey), () => 0);
+    if (removed > 0) {
       this.metrics.delete(removed);
     }
-    await this.guarded('invalidateTag.cleanup', { tag }, undefined, () => this.store.del([fullTagKey]), () => 0);
     this.metrics.tagInvalidation();
     logger.debug('标签失效', { tag, removed });
     return removed;
@@ -262,6 +304,7 @@ export class CacheService {
    * @returns 锁句柄；未获取到（含降级）返回 null
    */
   async lock(key: string, ttlSeconds?: number, options?: LockOptions): Promise<LockHandle | null> {
+    if (ttlSeconds !== undefined) assertPositiveSeconds(ttlSeconds, 'ttlSeconds');
     const fullKey = this.resolveKey(`lock:${key}`);
     const ttlMs = this.ttlMs(ttlSeconds ?? this.opt.lockTtlSeconds, 0);
     return this.guarded('lock', { key: fullKey }, undefined, () => this.lockManager.acquire(fullKey, ttlMs, options), () => null);
@@ -311,7 +354,7 @@ export class CacheService {
     };
   }
 
-  /** 写入实现（入参为完整键）；含大 key 拒绝与标签登记 */
+  /** 写入实现（入参为完整键）；含大 key 拒绝与 TTL 校验。带标签时走端口原子方法（C-01/A-04 修复） */
   private async setRaw(fullKey: string, value: unknown, options?: CacheCallOptions): Promise<void> {
     const isNegative = value === undefined || value === null;
     const encoded = isNegative ? encodeNegative() : encodeValue(value);
@@ -321,21 +364,28 @@ export class CacheService {
       logger.warn('缓存值超过上限，已拒绝写入（大 key 防护）', { key: fullKey, bytes, limit: this.opt.maxValueBytes });
       return;
     }
+    // 调用级 TTL 校验（A-03）：非法值 fail-fast，不再被 ttlMs() 钳到 1ms 静默写入
+    if (!isNegative && options?.ttlSeconds !== undefined) assertPositiveSeconds(options.ttlSeconds, 'ttlSeconds');
+    if (options?.nullTtlSeconds !== undefined) assertPositiveSeconds(options.nullTtlSeconds, 'nullTtlSeconds');
     const ttlMs = isNegative
       ? this.ttlMs(options?.nullTtlSeconds ?? this.opt.nullTtlSeconds, 0)
       : this.ttlMs(options?.ttlSeconds ?? this.opt.defaultTtlSeconds, options?.jitter);
-    await this.guarded('set', { key: fullKey, ttlMs, negative: isNegative }, options, () => this.store.set(fullKey, encoded, ttlMs), () => undefined);
-    this.metrics.set();
-    // 标签登记：标签映射键 TTL 显著长于业务键，且每次登记续期（防「幽灵缓存」）
-    for (const tag of options?.tags ?? []) {
+    const tags = options?.tags ?? [];
+    if (tags.length === 0) {
+      await this.guarded('set', { key: fullKey, ttlMs, negative: isNegative }, options, () => this.store.set(fullKey, encoded, ttlMs), () => undefined);
+    } else {
+      // 写值与标签登记单次原子完成（此前两步分离：值已写入而标签登记失败/被并发失效吞掉，
+      // 会留下「有值无索引」或「失效后残留旧值」——现由 setWithTags 消除半程状态）
+      const tagEntries = tags.map((tag) => ({ tagKey: tagKeyOf(this.opt.prefix, tag), ttlMs: this.opt.tagTtlSeconds * 1000 }));
       await this.guarded(
-        'tag',
-        { key: fullKey, tag },
+        'set+tags',
+        { key: fullKey, ttlMs, negative: isNegative, tags },
         options,
-        () => this.store.sadd(tagKeyOf(this.opt.prefix, tag), [fullKey], this.opt.tagTtlSeconds * 1000),
+        () => this.store.setWithTags(fullKey, encoded, ttlMs, tagEntries),
         () => undefined,
       );
     }
+    this.metrics.set();
   }
 
   /** 单飞回源实现：读 → 回源 → 写（含空值占位） */

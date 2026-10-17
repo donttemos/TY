@@ -7,6 +7,7 @@
  *   未接入缓存时退化为进程内实现并在启动期告警（PRD-007 §8）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module @fw/queue
  */
 
@@ -24,6 +25,7 @@ import {
 import { DiscoveryModule, DiscoveryService, MetadataScanner } from '@nestjs/core';
 import { CACHE_SERVICE, type CacheService } from '@fw/cache';
 import { loadEnv } from '@fw/config';
+import { BizError, ErrorCode } from '@fw/core';
 import { Logger } from '@fw/logger';
 import { CacheGuardStore, MemoryGuardStore, type QueueGuardStore } from './guard-store.js';
 import { scanCrons, scanJobHandlers } from './discovery.js';
@@ -239,7 +241,7 @@ export class QueueModule {
             });
           }
           if (runtime.driver !== 'memory') {
-            throw new Error(`暂不支持的队列驱动：${runtime.driver}（M7 提供 memory / bullmq；kafka 仅预留端口）`);
+            throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `暂不支持的队列驱动：${runtime.driver}（M7 提供 memory / bullmq；kafka 仅预留端口）`);
           }
           return new MemoryQueueDriver({
             concurrency: runtime.concurrency,

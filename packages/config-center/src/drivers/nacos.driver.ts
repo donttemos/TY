@@ -9,10 +9,12 @@
  *   环境契约不变——该驱动按代码注册而非 env 切换）。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module config-center
  */
 import { createHash } from 'node:crypto';
 import { Logger } from '@fw/logger';
+import { BizError, ErrorCode } from '@fw/core';
 import type { ConfigDriverPort } from '../types.js';
 
 const logger = Logger.for('config.nacos');
@@ -137,7 +139,7 @@ export class NacosConfigDriver implements ConfigDriverPort {
       body: params.toString(),
     });
     if (res.status !== 200 || (await res.text()).trim() !== 'true') {
-      throw new Error(`Nacos 配置发布失败：http=${res.status}`);
+      throw new BizError(ErrorCode.DEPENDENCY_UNAVAILABLE, `Nacos 配置发布失败：http=${res.status}`);
     }
     // 写后更新指纹，抑制下一轮轮询自触发（与 file 驱动同策略）
     this.fingerprint = md5(JSON.stringify(snapshot, null, 2));
@@ -183,7 +185,7 @@ export class NacosConfigDriver implements ConfigDriverPort {
     if (this.accessToken) params.set('accessToken', this.accessToken);
     const res = await this.fetchFn(`${this.serverAddr}/nacos/v1/cs/configs?${params.toString()}`);
     if (res.status === 404) return null;
-    if (res.status !== 200) throw new Error(`Nacos 配置读取失败：http=${res.status}`);
+    if (res.status !== 200) throw new BizError(ErrorCode.DEPENDENCY_UNAVAILABLE, `Nacos 配置读取失败：http=${res.status}`);
     return res.text();
   }
 
@@ -214,7 +216,7 @@ export class NacosConfigDriver implements ConfigDriverPort {
     try {
       const parsed: unknown = JSON.parse(raw);
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('顶层必须是 JSON 对象（点路径 → 值）');
+        throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, '顶层必须是 JSON 对象（点路径 → 值）');
       }
       return parsed as Record<string, unknown>;
     } catch (error) {
@@ -236,7 +238,7 @@ export class NacosConfigDriver implements ConfigDriverPort {
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: params.toString(),
     });
-    if (res.status !== 200) throw new Error(`Nacos 登录失败：http=${res.status}`);
+    if (res.status !== 200) throw new BizError(ErrorCode.DEPENDENCY_UNAVAILABLE, `Nacos 登录失败：http=${res.status}`);
     const body = JSON.parse(await res.text()) as { accessToken?: string };
     this.accessToken = body.accessToken ?? null;
   }

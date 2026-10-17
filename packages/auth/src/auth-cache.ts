@@ -6,8 +6,11 @@
  *   M4 接入时只需在 AuthModule 注入 CacheService 适配器，业务代码零改动。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module @fw/auth
  */
+
+import { BizError, ErrorCode } from '@fw/core';
 
 /** 鉴权缓存端口（对齐 docs/contracts/cache.ts 的 C-04 子集） */
 export interface AuthCachePort {
@@ -54,7 +57,7 @@ export class MemoryAuthCache implements AuthCachePort {
 
   async set(key: string, value: unknown, ttlSeconds: number, tags: string[] = []): Promise<void> {
     if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
-      throw new Error(`缓存 TTL 必须为正数（key=${key}）：禁止无过期时间的缓存`);
+      throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `缓存 TTL 必须为正数（key=${key}）：禁止无过期时间的缓存`);
     }
     this.store.set(key, { value, expireAt: Date.now() + ttlSeconds * 1000 });
     for (const tag of tags) {

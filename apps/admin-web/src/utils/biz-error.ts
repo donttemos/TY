@@ -51,13 +51,22 @@ export interface FieldError {
 export class BizError extends Error {
   readonly code: number;
   readonly traceId: string | null;
+  /** 单请求 ID（M12 W2 OBS-09：后端信封 additive 字段，弹错报障时与 traceId 一并展示） */
+  readonly requestId: string | null;
   readonly details: FieldError[] | null;
 
-  constructor(code: number, message: string, traceId: string | null = null, details: FieldError[] | null = null) {
+  constructor(
+    code: number,
+    message: string,
+    traceId: string | null = null,
+    details: FieldError[] | null = null,
+    requestId: string | null = null,
+  ) {
     super(message);
     this.name = 'BizError';
     this.code = code;
     this.traceId = traceId;
+    this.requestId = requestId;
     this.details = details;
   }
 
@@ -108,8 +117,8 @@ export function describeBizError(error: BizError, locale: Locale = currentLocale
 }
 
 /** 从信封体构造 BizError（code≠0 时；code 缺省按 9001 处理，data 可为 null） */
-export function toBizError(body: { code?: number; message?: string; traceId?: string; details?: FieldError[]; data?: { details?: FieldError[] } | null }): BizError {
+export function toBizError(body: { code?: number; message?: string; traceId?: string; requestId?: string; details?: FieldError[]; data?: { details?: FieldError[] } | null }): BizError {
   // 真实后端（GlobalExceptionFilter）把 details 放在信封顶层；兼容 data.details（历史 mock 形态）
   const details = Array.isArray(body.details) ? body.details : Array.isArray(body.data?.details) ? (body.data?.details as FieldError[]) : null;
-  return new BizError(body.code ?? BIZ_CODE.INTERNAL, body.message ?? '', body.traceId ?? null, details);
+  return new BizError(body.code ?? BIZ_CODE.INTERNAL, body.message ?? '', body.traceId ?? null, details, body.requestId ?? null);
 }

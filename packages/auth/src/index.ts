@@ -3,6 +3,7 @@
  * @description 统一导出鉴权模块全部公共 API（服务、守卫、装饰器、端口、类型），禁止从深路径引用内部文件。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo M12 W2（PRD-012 OBS-12）：导出 auth/security 指标段 API
  * @module @fw/auth
  */
 
@@ -37,6 +38,17 @@ export type {
   VerifyResult,
 } from './token.service.js';
 export { RefreshTokenService, hashToken } from './refresh-token.service.js';
+export {
+  recordLoginMetric,
+  recordRefreshMetric,
+  recordTokenVerifyFailedMetric,
+  recordReplayDetectedMetric,
+  recordFamilyRevokedMetric,
+  renderAuthMetricsSection,
+  isAuthMetricsSectionEnabled,
+  resetAuthMetrics,
+} from './auth-metrics.js';
+export type { VerifyFailReason } from './auth-metrics.js';
 export type { RotationOutcome } from './refresh-token.service.js';
 export { TokenBlacklist, BLACKLIST_PREFIX, CUTOFF_PREFIX } from './token-blacklist.js';
 export { PermissionService } from './permission.service.js';

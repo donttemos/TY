@@ -7,6 +7,11 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：默认 TTL 可变（updateDefaultTtl）——cache.lockTtl 配置中心热更的生效路径
+ * @modified 2026-10-17 donttemo Cache 缺陷清单复核修复：① C-02 释放语义改由**共享持有记录的深度**
+ *   决定（原实现按句柄创建时的 reentrant 布尔值判断，普通获取句柄先释放会连重入方一起释放整把锁），
+ *   并明确 release 幂等（重复释放返回 false，不再二次触碰存储）；② C-04 看门狗周期改为与 TTL 成比例
+ *   （`max(50ms, TTL/3)`，短 TTL 不再晚于过期才续期）并在 TTL<1s 时告警；新增 `onLost` 回调——
+ *   续期失败/异常停表后调用方可在锁已被他人取得时感知失锁（原实现仅日志，调用方无感知）。
  * @module @fw/cache
  */
 
@@ -26,7 +31,11 @@ export interface LockHandle {
   readonly ttlMs: number;
   /** 是否重入获取 */
   readonly reentrant: boolean;
-  /** 释放（重入时只减深度）；返回是否真正释放 */
+  /**
+   * 释放；返回是否真正释放。
+   * 语义（C-02 修复）：释放行为由**共享持有记录的深度**决定——深度 > 1 时只减深度（无论本句柄
+   * 是普通获取还是重入获取），深度 = 1 时删除本地记录并做令牌校验删除；重复释放幂等返回 false。
+   */
   release(): Promise<boolean>;
   /** 续期；返回是否成功 */
   renew(ttlMs?: number): Promise<boolean>;
@@ -42,6 +51,11 @@ export interface LockOptions {
   owner?: string;
   /** 等待获取的最大毫秒数（默认 0：不等待） */
   waitMs?: number;
+  /**
+   * 失锁感知回调（C-04）：`autoRenew` 开启时，看门狗续期失败（锁已被他人取得或已过期）或
+   * 续期调用自身异常后停表，并触发本回调一次。持锁副作用不可重复的业务应据此中止执行。
+   */
+  onLost?: (reason: 'renew-failed' | 'renew-error') => void;
 }
 
 /** 进程内持有记录（重入深度） */
@@ -96,7 +110,7 @@ export class LockManager {
         if (local && (await this.store.get(key)) === local.token) {
           local.depth++;
           logger.debug('锁重入', { key, depth: local.depth });
-          return this.createHandle(key, local.token, ttlMs, true, options.autoRenew === true);
+          return this.createHandle(key, local.token, ttlMs, true, options);
         }
       }
 
@@ -104,7 +118,7 @@ export class LockManager {
       if (await this.store.setNx(key, token, ttlMs)) {
         this.held.set(key, { token, depth: 1 });
         logger.debug('获取锁成功', { key, ttlMs });
-        return this.createHandle(key, token, ttlMs, false, options.autoRenew === true);
+        return this.createHandle(key, token, ttlMs, false, options);
       }
 
       if (Date.now() >= deadline) {
@@ -115,8 +129,8 @@ export class LockManager {
     }
   }
 
-  /** 构造句柄：绑定释放与续期语义 */
-  private createHandle(key: string, token: string, ttlMs: number, reentrant: boolean, autoRenew: boolean): LockHandle {
+  /** 构造句柄：绑定释放与续期语义（释放以共享持有记录为准，C-02） */
+  private createHandle(key: string, token: string, ttlMs: number, reentrant: boolean, options: LockOptions): LockHandle {
     let watchdog: NodeJS.Timeout | undefined;
     const stopWatchdog = (): void => {
       if (watchdog) {
@@ -125,38 +139,53 @@ export class LockManager {
       }
     };
 
+    /** 幂等保护：一个句柄只允许参与一次释放（重复 release 直接 false，不再触碰共享状态与存储） */
+    let released = false;
+
     const handle: LockHandle = {
       key,
       token,
       ttlMs,
       reentrant,
       release: async (): Promise<boolean> => {
+        if (released) return false;
+        released = true;
         stopWatchdog();
         const local = this.held.get(key);
-        if (reentrant && local && local.token === token && local.depth > 1) {
-          local.depth--;
-          return true;
+        // 释放语义由共享持有记录决定：深度 > 1 只减深度，与「本句柄当初怎么获取」无关（C-02 修复点）
+        if (local && local.token === token) {
+          if (local.depth > 1) {
+            local.depth--;
+            return true;
+          }
+          this.held.delete(key);
         }
-        this.held.delete(key);
+        // 本地无匹配记录（跨管理器实例 / TTL 过期后被他人取得）：仍做令牌校验删除，防误删他人锁
         return this.store.compareAndDelete(key, token);
       },
       renew: async (ms?: number): Promise<boolean> => this.store.compareAndExpire(key, token, ms ?? ttlMs),
     };
 
-    if (autoRenew) {
-      // 看门狗周期为 TTL/3，保证至少两次续期机会；unref 避免阻塞进程退出
-      const interval = Math.max(1000, Math.floor(ttlMs / 3));
+    if (options.autoRenew === true) {
+      // 看门狗周期与 TTL 成比例（TTL/3），下限 50ms 仅覆盖定时器粒度（C-04 修复点：
+      // 原实现 max(1000, TTL/3) 在 TTL < 1000ms 时首次续期晚于锁过期，autoRenew 形同虚设）
+      const interval = Math.max(50, Math.floor(ttlMs / 3));
+      if (ttlMs < 1000) {
+        logger.warn('锁 TTL 过短：自动续期依赖存储往返及时完成，短 TTL 下失锁窗口不可忽略', { key, ttlMs, intervalMs: interval });
+      }
       watchdog = setInterval(() => {
         void handle.renew().then(
           (ok) => {
             if (!ok) {
               stopWatchdog();
               logger.warn('锁续期失败（已失去锁）', { key });
+              options.onLost?.('renew-failed');
             }
           },
           (error: unknown) => {
             stopWatchdog();
             logger.warn('锁续期异常（已停止看门狗）', { key, error: error instanceof Error ? error.message : String(error) });
+            options.onLost?.('renew-error');
           },
         );
       }, interval);

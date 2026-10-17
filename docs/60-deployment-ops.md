@@ -96,6 +96,10 @@
 | | `TRANSPORT_INSTANCE_ID` | 否 | `host-<pid>` | 实例标识（诊断用：跨进程区分处理方） |
 | | `TRANSPORT_SHUTDOWN_TIMEOUT` | 否 | 10 | 传输优雅停机等待在途请求的超时（秒） |
 | 日志 | `LOG_LEVEL` | 否 | info | 级别；输出格式由 `@fw/logger` 固定为结构化 JSON（字段 `time/level/traceId/spanId/module/msg/ctx`），不提供格式切换键 |
+| | `LOG_IDENTITY_FIELDS` | 否 | `userId,requestId` | 日志自动身份字段集（M12 W2 OBS-11，逗号分隔：`userId`/`requestId`/`familyId`/`jti`）；**显式空串关闭全部**。身份由 ALS 自动读取，调用方手塞 ctx 不覆盖 |
+| 请求 ID | `REQUEST_ID_ENABLED` | 否 | true | 单请求 ID 双 ID 分层开关（M12 W2 OBS-09）：`false` 回退仅 traceId（零行为差异）；`requestId` 不跨服务透传（ADR-0026） |
+| | `REQUEST_ID_HEADER` | 否 | `X-Request-Id` | 单请求 ID 头名（请求读取 + 响应回带同用）；上游合法 ULID 复用、非法值替换 |
+| 指标 | `METRICS_AUTH_SECTION_ENABLED` | 否 | true | `/metrics` 的 `fw_auth_*` / `fw_security_*` 段开关（M12 W2 OBS-12）；label 仅低基数 `result`/`reason`，身份字段禁止入 label |
 | 追踪 | `OTEL_ENABLED` | 否 | false | 链路追踪总开关（M8 T-M8-06）；关闭时全短路零开销 |
 | | `OTEL_SERVICE_NAME` | 否 | `fw:<APP_ENV>` | 服务名（采集端按 `service.name` 聚合）；多服务部署必须显式区分 |
 | | `OTEL_EXPORTER_URL` | 条件 | — | OTLP/HTTP 采集端点（如 `http://otel-collector:4318/v1/traces`）；`OTEL_ENABLED=true` 时**必填，缺失启动即失败**。导出形态为 OTLP/HTTP JSON |

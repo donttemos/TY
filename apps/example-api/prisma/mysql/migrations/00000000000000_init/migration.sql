@@ -187,6 +187,12 @@ CREATE TABLE `audit_logs` (
     `user_id` VARCHAR(191) NULL,
     `module` VARCHAR(191) NOT NULL,
     `action` VARCHAR(191) NOT NULL,
+    `category` VARCHAR(191) NULL,
+    `event` VARCHAR(191) NULL,
+    `result` VARCHAR(191) NULL,
+    `family_id` VARCHAR(191) NULL,
+    `jti` VARCHAR(191) NULL,
+    `request_id` VARCHAR(191) NULL,
     `target_type` VARCHAR(191) NULL,
     `target_id` VARCHAR(191) NULL,
     `before_value` JSON NULL,
@@ -201,6 +207,10 @@ CREATE TABLE `audit_logs` (
     INDEX `idx_audit_action`(`action`),
     INDEX `idx_audit_target`(`target_type`, `target_id`),
     INDEX `idx_audit_trace`(`trace_id`),
+    INDEX `idx_audit_event`(`event`),
+    INDEX `idx_audit_family`(`family_id`),
+    INDEX `idx_audit_request`(`request_id`),
+    INDEX `idx_audit_category_created`(`category`, `created_at`),
     INDEX `idx_audit_created`(`created_at`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -212,6 +222,12 @@ CREATE TABLE `audit_log_archives` (
     `user_id` VARCHAR(191) NULL,
     `module` VARCHAR(191) NOT NULL,
     `action` VARCHAR(191) NOT NULL,
+    `category` VARCHAR(191) NULL,
+    `event` VARCHAR(191) NULL,
+    `result` VARCHAR(191) NULL,
+    `family_id` VARCHAR(191) NULL,
+    `jti` VARCHAR(191) NULL,
+    `request_id` VARCHAR(191) NULL,
     `target_type` VARCHAR(191) NULL,
     `target_id` VARCHAR(191) NULL,
     `before_value` JSON NULL,
@@ -224,6 +240,10 @@ CREATE TABLE `audit_log_archives` (
 
     INDEX `idx_audit_archive_user`(`user_id`),
     INDEX `idx_audit_archive_module`(`module`),
+    INDEX `idx_audit_archive_event`(`event`),
+    INDEX `idx_audit_archive_family`(`family_id`),
+    INDEX `idx_audit_archive_request`(`request_id`),
+    INDEX `idx_audit_archive_category`(`category`, `archived_at`),
     INDEX `idx_audit_archive_created`(`created_at`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;

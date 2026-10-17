@@ -76,10 +76,15 @@ const CODE = {
   NOT_FOUND: 1002,
   CONFLICT: 1003,
   STATE_NOT_ALLOWED: 1004,
+  // 业务校验失败（PRD-012 OBS-03：与 @fw/core ErrorCode 全集同源，axis G 门禁锁定）
+  BUSINESS: 2001,
   UNAUTHORIZED: 3001,
   FORBIDDEN: 3002,
   TOKEN_EXPIRED: 3003,
   ACCOUNT_LOCKED: 3004,
+  // M8 租户 / 9002 依赖不可用（PRD-012 OBS-03：与 @fw/core ErrorCode 全集同源，axis G 门禁锁定）
+  TENANT_INVALID: 4001,
+  DEPENDENCY_UNAVAILABLE: 9002,
   INTERNAL: 9001,
   RATE_LIMITED: 9003,
   // M9 配置中心（PRD-009 §6，与 @fw/core ErrorCode 同源）
@@ -518,6 +523,47 @@ const MOCK_AUDIT_SORT_FIELDS: Record<string, string> = {
   target_type: 'targetType',
   created_at: 'createdAt',
 };
+
+/**
+ * 审计过滤参数白名单（M12 W2 OBS-14，与 example-api 的 AUDIT_FILTER_PARAMS 逐项一致）：
+ * 未知过滤参数一律 400 / 1001，不静默忽略
+ */
+const MOCK_AUDIT_FILTER_PARAMS = [
+  'page', 'pageSize', 'user_id', 'module', 'action', 'target_type', 'target_id', 'from', 'to', 'sort',
+  'trace_id', 'request_id', 'family_id', 'category', 'event',
+];
+
+/** 白名单校验：返回首个未知过滤参数的 400 文案；全部合法返回 null（反向验证：不静默忽略） */
+function unknownMockAuditFilterParam(query: URLSearchParams): string | null {
+  for (const key of [...query.keys()]) {
+    if (!MOCK_AUDIT_FILTER_PARAMS.includes(key)) {
+      return `未知过滤参数：${key}（允许：${MOCK_AUDIT_FILTER_PARAMS.join(' / ')}）`;
+    }
+  }
+  return null;
+}
+
+/** M12 W2 OBS-14：契约字段精确过滤（列表与导出共用） */
+function applyMockAuditContractFilters<T extends { traceId?: string | null; requestId?: string | null; familyId?: string | null; category?: string | null; event?: string | null; targetType?: string | null; targetId?: string | null }>(
+  rows: T[],
+  query: URLSearchParams,
+): T[] {
+  const targetType = query.get('target_type');
+  if (targetType) rows = rows.filter((a) => a.targetType === targetType);
+  const targetId = query.get('target_id');
+  if (targetId) rows = rows.filter((a) => a.targetId === targetId);
+  const traceId = query.get('trace_id');
+  if (traceId) rows = rows.filter((a) => a.traceId === traceId);
+  const requestId = query.get('request_id');
+  if (requestId) rows = rows.filter((a) => a.requestId === requestId);
+  const familyId = query.get('family_id');
+  if (familyId) rows = rows.filter((a) => a.familyId === familyId);
+  const category = query.get('category');
+  if (category) rows = rows.filter((a) => a.category === category);
+  const event = query.get('event');
+  if (event) rows = rows.filter((a) => a.event === event);
+  return rows;
+}
 
 /**
  * 租户列表排序白名单（N-01，与 example-api 的 TENANT_SORT_FIELDS 逐项一致）
@@ -1565,6 +1611,11 @@ export async function handleMockRequest(
     }
     const page = Math.max(1, Number(query.get('page') ?? '1'));
     const pageSize = Math.min(200, Math.max(1, Number(query.get('pageSize') ?? '20')));
+    const unknownList = unknownMockAuditFilterParam(query);
+    if (unknownList) {
+      send(res, CODE.BAD_REQUEST, unknownList, null, traceId);
+      return { handled: true };
+    }
     let items = [...database.auditLogs];
     const userId = query.get('user_id');
     if (userId) items = items.filter((a) => a.userId === userId);
@@ -1576,6 +1627,7 @@ export async function handleMockRequest(
     if (from) items = items.filter((a) => a.createdAt >= from);
     const to = query.get('to');
     if (to) items = items.filter((a) => a.createdAt <= to);
+    items = applyMockAuditContractFilters(items, query);
     const parsedSort = parseMockSort(query.get('sort'), MOCK_AUDIT_SORT_FIELDS);
     if ('error' in parsedSort) {
       send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
@@ -1593,6 +1645,11 @@ export async function handleMockRequest(
       return { handled: true };
     }
     // 与列表同源的筛选条件（分页参数忽略，导出全量命中集）
+    const unknownExport = unknownMockAuditFilterParam(query);
+    if (unknownExport) {
+      send(res, CODE.BAD_REQUEST, unknownExport, null, traceId);
+      return { handled: true };
+    }
     let rows = [...database.auditLogs];
     const userId = query.get('user_id');
     if (userId) rows = rows.filter((a) => a.userId === userId);
@@ -1604,6 +1661,7 @@ export async function handleMockRequest(
     if (from) rows = rows.filter((a) => a.createdAt >= from);
     const to = query.get('to');
     if (to) rows = rows.filter((a) => a.createdAt <= to);
+    rows = applyMockAuditContractFilters(rows, query);
     const parsedSort = parseMockSort(query.get('sort'), MOCK_AUDIT_SORT_FIELDS);
     if ('error' in parsedSort) {
       send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
@@ -1614,7 +1672,7 @@ export async function handleMockRequest(
     // 产物快照在派发时固化（与后端「导出时的筛选结果」一致，不随后续新日志漂移）。
     // CSV 形状与 example-api 的 buildAuditCsv **逐字节同构**：同表头、同 BOM、同 CRLF、
     // 同引号转义——mock 与真实后端零差异，切真实 API 后下载产物行为不变。
-    const header = ['id', 'createdAt', 'userId', 'module', 'action', 'targetType', 'targetId', 'ip', 'traceId', 'before', 'after'];
+    const header = ['id', 'createdAt', 'userId', 'module', 'action', 'targetType', 'targetId', 'ip', 'traceId', 'requestId', 'familyId', 'category', 'event', 'before', 'after'];
     const csvCell = (value: unknown): string => {
       if (value === null || value === undefined) return '""';
       const text = typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
@@ -1631,6 +1689,10 @@ export async function handleMockRequest(
         csvCell(a.targetId),
         csvCell(a.ip),
         csvCell(a.traceId),
+        csvCell(a.requestId),
+        csvCell(a.familyId),
+        csvCell(a.category),
+        csvCell(a.event),
         csvCell(a.beforeValue),
         csvCell(a.afterValue),
       ].join(','),

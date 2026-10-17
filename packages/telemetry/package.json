@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "@fw/config": "workspace:*",
+    "@fw/core": "workspace:*",
     "@fw/logger": "workspace:*",
     "@nestjs/common": "^11.2.7",
     "@opentelemetry/api": "^1.9.1",

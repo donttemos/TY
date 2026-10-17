@@ -6,12 +6,15 @@
  * @created 2026-10-13
  * @modified 2026-10-16 donttemo 驱动审查修复配套：集合登记断言改「单条 Lua 原子」；
  *   parseClusterNodes 用例覆盖凭据段（密码不进 host）
+ * @modified 2026-10-17 donttemo Cache 缺陷清单复核修复配套：新增 setWithTags / invalidateByTag
+ *   原子脚本用例（C-01/C-03/A-04）与 close() 超时强制断开用例（C-05）。
  * @module @fw/cache
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { RedisCacheStore } from '../drivers/redis.driver.js';
 import { parseClusterNodes } from '../drivers/redis-client.js';
+import type { RedisClientLike } from '../drivers/redis-client.js';
 import { FakeRedisClient } from './test-helpers.js';
 
 /** 构造「驱动 + Fake 客户端」组合 */
@@ -70,6 +73,43 @@ describe('@fw/cache · redis 驱动', () => {
     expect(client.evalCalls).toBe(4);
   });
 
+  it('C-01/A-04 回归：setWithTags 单条 Lua 原子完成写值与多标签登记', async () => {
+    const { store, client } = makeStore();
+    await store.setWithTags('k', 'v', 5000, [
+      { tagKey: 'tag:1', ttlMs: 60_000 },
+      { tagKey: 'tag:2', ttlMs: 120_000 },
+    ]);
+    // 单次 eval（原子性证明），值与两个标签集合同时落位
+    expect(client.evalCalls).toBe(1);
+    expect(await store.get('k')).toBe('v');
+    expect(await store.smembers('tag:1')).toEqual(['k']);
+    expect(await store.smembers('tag:2')).toEqual(['k']);
+    // 各标签 TTL 独立生效
+    expect(await client.pexpire('tag:1', 1)).toBe(1);
+    expect(await client.pexpire('tag:2', 1)).toBe(1);
+    // 无标签时退化为普通 SET（不再走 Lua）
+    const before = client.evalCalls;
+    await store.setWithTags('k2', 'v2', 5000, []);
+    expect(client.evalCalls).toBe(before);
+    expect(await store.get('k2')).toBe('v2');
+  });
+
+  it('C-01/C-03 回归：invalidateByTag 单条 Lua 原子删除成员与索引并返回数量', async () => {
+    const { store, client } = makeStore();
+    await store.setWithTags('k1', 'v1', 5000, [{ tagKey: 'tag', ttlMs: 60_000 }]);
+    await store.setWithTags('k2', 'v2', 5000, [{ tagKey: 'tag', ttlMs: 60_000 }]);
+    await store.set('keep', 'v', 5000);
+    const before = client.evalCalls;
+    expect(await store.invalidateByTag('tag')).toBe(2);
+    expect(client.evalCalls).toBe(before + 1);
+    expect(await store.get('k1')).toBeUndefined();
+    expect(await store.get('k2')).toBeUndefined();
+    expect(await store.smembers('tag')).toEqual([]);
+    expect(await store.get('keep')).toBe('v');
+    // 索引已删：再次失效返回 0
+    expect(await store.invalidateByTag('tag')).toBe(0);
+  });
+
   it('集群驱动与单实例驱动行为一致（kind 仅用于观测区分）', async () => {
     const { store } = makeStore('redis-cluster');
     expect(store.kind).toBe('redis-cluster');
@@ -91,6 +131,41 @@ describe('@fw/cache · redis 驱动', () => {
     await store.set('a', '1', 5000);
     expect(await store.size()).toBe(1);
     await store.close();
+  });
+
+  it('C-05 回归：quit 挂起超时后强制 disconnect（优雅停机不被阻塞）', async () => {
+    vi.useFakeTimers();
+    try {
+      const disconnect = vi.fn();
+      const hangingClient = {
+        quit: () => new Promise(() => undefined), // 永不 resolve（模拟连接半开）
+        disconnect,
+      } as unknown as RedisClientLike;
+      const store = new RedisCacheStore(hangingClient);
+      const closing = store.close();
+      await vi.advanceTimersByTimeAsync(3000);
+      await closing;
+      expect(disconnect).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('C-05 回归：quit 正常完成时清理超时定时器、不触发 disconnect', async () => {
+    vi.useFakeTimers();
+    try {
+      const disconnect = vi.fn();
+      const client = {
+        quit: async () => 'OK',
+        disconnect,
+      } as unknown as RedisClientLike;
+      const store = new RedisCacheStore(client);
+      await store.close();
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(disconnect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('集群连接串解析支持协议前缀、默认端口与凭据段（密码不进 host）', () => {

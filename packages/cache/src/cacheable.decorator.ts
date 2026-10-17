@@ -6,10 +6,12 @@
  *   或 CacheModule.forRoot() 注册的全局实例（接口层无侵入，不改业务签名）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module @fw/cache
  */
 
 import { hashArgs } from './key.js';
+import { BizError, ErrorCode } from '@fw/core';
 import type { CacheService } from './cache.service.js';
 
 /** `@Cacheable` 选项（与 C-04 契约 CacheableOptions 同源） */
@@ -59,7 +61,7 @@ export function Cacheable(options: CacheableOptions): MethodDecorator {
   return (target: object, propertyKey: string | symbol, descriptor: PropertyDescriptor): PropertyDescriptor => {
     const original = descriptor.value as (...args: unknown[]) => unknown;
     if (typeof original !== 'function') {
-      throw new Error(`@Cacheable 只能作用于方法（${String(propertyKey)}）`);
+      throw new BizError(ErrorCode.BAD_REQUEST, `@Cacheable 只能作用于方法（${String(propertyKey)}）`);
     }
     const className = target.constructor?.name ?? 'Anonymous';
     const methodName = String(propertyKey);
@@ -67,7 +69,8 @@ export function Cacheable(options: CacheableOptions): MethodDecorator {
     descriptor.value = async function cacheableWrapper(this: unknown, ...args: unknown[]): Promise<unknown> {
       const service = resolveCacheService(this);
       if (!service) {
-        throw new Error(
+        throw new BizError(
+          ErrorCode.DEPENDENCY_UNAVAILABLE,
           `@Cacheable 未找到 CacheService：请在 ${className}.${methodName} 所在类注入 cacheService 属性，或先调用 CacheModule.forRoot()`,
         );
       }

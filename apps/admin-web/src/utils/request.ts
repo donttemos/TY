@@ -15,7 +15,7 @@
 import axios, { type AxiosInstance, type AxiosRequestConfig, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import { BIZ_CODE, BizError, describeBizError, toBizError, type FieldError } from './biz-error';
 import { tokenStore } from './token';
-import { rememberTraceId } from './trace';
+import { rememberTraceId, rememberRequestId } from './trace';
 
 /** 刷新进行中的 Promise（并发 401 共用，避免多次刷新互相轮换） */
 let refreshing: Promise<string> | null = null;
@@ -104,8 +104,9 @@ service.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 service.interceptors.response.use(
   (response: AxiosResponse) => {
-    // M10/E-17：记录后端 traceId（RUM 上报与后端日志同链关联）
+    // M10/E-17：记录后端 traceId（RUM 上报与后端日志同链关联）；M12 W2 同步记录 requestId
     rememberTraceId(response.headers?.['x-trace-id']);
+    rememberRequestId(response.headers?.['x-request-id']);
     const body = response.data as { code?: number; message?: string; data?: unknown; traceId?: string } | null;
     // 非信封响应（如静态资源）原样返回
     if (body === null || typeof body !== 'object' || !('code' in body)) {
@@ -114,14 +115,16 @@ service.interceptors.response.use(
     if (body.code === BIZ_CODE.OK) {
       return body.data;
     }
-    // 真实后端（GlobalExceptionFilter）把 details 放在信封顶层；兼容 data.details（历史 mock 形态）
+    // 真实后端（GlobalExceptionFilter）把 details 放在信封顶层（PRD-012 OBS-04 冻结口径）；
+    // data.details 兼容分支【Deprecated】：历史 mock 形态，一个版本后移除（勿在新代码依赖）
     const envelope = body as { details?: FieldError[]; data?: { details?: FieldError[] } };
     const details = Array.isArray(envelope.details)
       ? envelope.details
       : Array.isArray(envelope.data?.details)
         ? (envelope.data?.details as FieldError[])
         : null;
-    return Promise.reject(new BizError(body.code ?? BIZ_CODE.INTERNAL, body.message ?? '', body.traceId ?? null, details));
+    const requestId = (body as { requestId?: string }).requestId ?? null;
+    return Promise.reject(new BizError(body.code ?? BIZ_CODE.INTERNAL, body.message ?? '', body.traceId ?? null, details, requestId));
   },
   async (error: unknown) => {
     // HTTP 层错误：优先取响应信封转 BizError
@@ -129,6 +132,7 @@ service.interceptors.response.use(
     if (axiosError.response) {
       // M10/E-17：失败响应同样记录 traceId（错误现场的关联价值更高）
       rememberTraceId(axiosError.response.headers?.['x-trace-id']);
+      rememberRequestId(axiosError.response.headers?.['x-request-id']);
       const body = axiosError.response.data;
       if (body && typeof body === 'object' && typeof body.code === 'number') {
         const bizError = toBizError(body);

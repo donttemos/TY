@@ -7,12 +7,14 @@
  *   给出可读 reason（STATE_NOT_ALLOWED），不静默失败。并发重跑竞态由 store 的条件更新消解。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module example-api/jobs
  */
 
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { Logger, getTraceId } from '@fw/logger';
+import { BizError, ErrorCode } from '@fw/core';
 import type {
   JobArtifact,
   JobCenterPort,
@@ -102,7 +104,7 @@ export class DbJobDriver implements JobCenterPort {
     const runner = options.runner ?? this.registry.resolve(options.type, options.params);
     if (!runner) {
       // 编程错误：db 驱动下不留闭包的任务类型必须登记 factory —— 快速失败比落一个永远跑不了的任务好
-      throw new Error(`任务类型 ${options.type} 未注册执行体工厂（db/bullmq 驱动要求登记 JobRunnerRegistry）`);
+      throw new BizError(ErrorCode.BAD_REQUEST, `任务类型 ${options.type} 未注册执行体工厂（db/bullmq 驱动要求登记 JobRunnerRegistry）`);
     }
     const snapshot = { ...view };
     void this.executor.execute(row, runner);

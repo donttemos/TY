@@ -5,9 +5,11 @@
  *   有效性（存在 / 启用 / 未过期）由 TenantService 统一 fail-closed 判定。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module @fw/tenant
  */
 import { TENANT_CODE_PATTERN, type TenantResolutionInput, type TenantResolutionOptions, type TenantSource } from './types.js';
+import { BizError, ErrorCode } from '@fw/core';
 
 /** 从 Host 请求头剥离端口 */
 function stripPort(host: string): string {
@@ -43,10 +45,10 @@ export function parseTenantOrder(raw: string): TenantSource[] {
     .split(',')
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
-  if (list.length === 0) throw new Error(`TENANT_ORDER 非法：${raw}（至少需要一个来源）`);
+  if (list.length === 0) throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `TENANT_ORDER 非法：${raw}（至少需要一个来源）`);
   for (const item of list) {
     if (!allowed.includes(item as TenantSource)) {
-      throw new Error(`TENANT_ORDER 非法：${item}（可选值 subdomain/header/jwt，逗号分隔）`);
+      throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `TENANT_ORDER 非法：${item}（可选值 subdomain/header/jwt，逗号分隔）`);
     }
   }
   return list as TenantSource[];

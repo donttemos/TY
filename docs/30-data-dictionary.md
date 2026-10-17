@@ -398,6 +398,12 @@ erDiagram
 | `user_id` | bigint | 否 | NULL | 操作人（系统任务为 NULL） | `idx_audit_user` |
 | `module` | varchar(64) | 是 | — | 模块名 | — |
 | `action` | varchar(32) | 是 | — | `create` / `update` / `delete` / `login` / `export` | `idx_audit_action` |
+| `category` | varchar(32) | 否 | NULL | 审计大类（PRD-012 OBS-06：`auth` / `security` / `admin` / `data` / `config` / `tenant` / `system`，低基数粗筛键） | `idx_audit_category_created` |
+| `event` | varchar(64) | 否 | NULL | 点分事件名（如 `refresh.replay_detected` / `auth.login`，细分检索键） | `idx_audit_event` |
+| `result` | varchar(16) | 否 | NULL | 事件结果：`success` / `denied` / `failed` | — |
+| `family_id` | varchar(36) | 否 | NULL | 令牌家族 ID（M11.1 rotation family，安全事件关联键） | `idx_audit_family` |
+| `jti` | varchar(64) | 否 | NULL | 令牌标识（非令牌本体，可安全落库） | — |
+| `request_id` | varchar(64) | 否 | NULL | 单次请求 ID（PRD-012 OBS-09，W2 起填充；本列随 OBS-06 先行落位） | `idx_audit_request` |
 | `target_type` | varchar(64) | 否 | NULL | 对象类型 | `idx_audit_target` |
 | `target_id` | bigint | 否 | NULL | 对象 ID | `idx_audit_target` |
 | `before_value` | json | 否 | NULL | 变更前（脱敏后） | — |
@@ -410,6 +416,12 @@ erDiagram
 > 保留期默认 180 天可配（`AUDIT_ARCHIVE_RETENTION_DAYS`，M10 E-10 起）：早于保留线的记录由定时任务
 > `audit.archive`（每天 02:00，分布式锁多副本单执行）迁入 §3.17 的 `audit_log_archives` 冷存表，在线表行数持续有界；
 > 查询页按 `user_id + created_at` 组合查询。
+>
+> M12 W1（PRD-012 OBS-06，ADR-0025）起本表承载**统一审计事件契约**：`category` / `event` / `result` /
+> `family_id` / `jti` / `request_id` 六列为软增列（全 nullable，migration `20261017110000` 三方言同构，
+> 旧数据 / 旧代码零回归）；`AuditService` 落盘时**字段全量落位**（缺省 NULL，序列化形状不漂移）。
+> replay 安全事件按 `category='security' + event='refresh.replay_detected' + result='denied'` 落库，
+> `trace_id` 取自请求上下文（OBS-07 断链修复），`reason`（低基数结构化原因）与人读 `detail` 在 `after_value` 内。
 
 ### 3.14 `jobs` 任务登记表（M7 规划为 `job_records`；M10 E-01 落地为 `jobs`）
 
@@ -477,6 +489,7 @@ erDiagram
 | `user_id` | varchar(36) | 否 | NULL | 操作人（沿在线表） | `idx_audit_archive_user` |
 | `module` | varchar(64) | 是 | — | 模块名（沿在线表） | `idx_audit_archive_module` |
 | `action` | varchar(32) | 是 | — | 动作（沿在线表） | — |
+| `category` / `event` / `result` / `family_id` / `jti` / `request_id` | varchar | 否 | NULL | 统一审计事件契约（PRD-012 OBS-06，与在线表同构软增列） | `idx_audit_archive_event` / `idx_audit_archive_family` / `idx_audit_archive_request` / `idx_audit_archive_category` |
 | `target_type` / `target_id` | varchar(64) | 否 | NULL | 对象类型 / ID（沿在线表） | — |
 | `before_value` / `after_value` | json | 否 | NULL | 变更前 / 后（脱敏后，沿在线表） | — |
 | `ip` | varchar(45) | 否 | NULL | 来源 IP（沿在线表） | — |

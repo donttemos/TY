@@ -10,10 +10,12 @@
  *   安全约束：dbUrl 只经进程内上下文传递，本类与 stats() 均不输出连接串。
  * @author donttemo
  * @created 2026-10-14
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module @fw/db
  */
 
 import { getRequestContext } from '@fw/logger';
+import { BizError, ErrorCode } from '@fw/core';
 import type { PrismaClientLike } from './types.js';
 
 /** 租户数据源配置 */
@@ -154,7 +156,7 @@ export class TenantDataSource {
       }),
     );
     if (failures.length > 0) {
-      throw new Error(`TenantDataSource 断开 ${failures.length} 个租户 client 失败`);
+      throw new BizError(ErrorCode.INTERNAL, `TenantDataSource 断开 ${failures.length} 个租户 client 失败`);
     }
   }
 
@@ -183,7 +185,7 @@ export class TenantDataSource {
     try {
       const client = this.options.clientFactory(dbUrl);
       if (client && typeof (client as { then?: unknown }).then === 'function') {
-        throw new Error('TenantDataSource: clientFactory 必须同步返回 PrismaClientLike（不支持异步工厂）');
+        throw new BizError(ErrorCode.BAD_REQUEST, 'TenantDataSource: clientFactory 必须同步返回 PrismaClientLike（不支持异步工厂）');
       }
       entry.client = client;
       entry.lastUsedAt = Date.now();

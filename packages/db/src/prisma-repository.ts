@@ -8,6 +8,7 @@
  *   禁止在本类之外出现裸 delegate 调用（TC-ORM-005 由 lint 兜底）。
  * @author donttemo
  * @created 2026-10-12
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module @fw/db
  */
 
@@ -285,7 +286,7 @@ export class PrismaRepository<T extends BaseEntity> implements Repository<T> {
   /** SQL 标识符白名单：表名/字段名只允许字母数字下划线（防注入） */
   private assertIdent(name: string): void {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-      throw new Error(`非法 SQL 标识符: ${name}`);
+      throw new BizError(ErrorCode.BAD_REQUEST, `非法 SQL 标识符: ${name}`);
     }
   }
 
@@ -307,7 +308,7 @@ export class PrismaRepository<T extends BaseEntity> implements Repository<T> {
     this.assertIdent(this.tableName());
     this.assertIdent(field);
     if (driver === 'sqlite') {
-      throw new Error('jsonContains 在 SQLite 驱动下不支持：请改用 PostgreSQL/MySQL，或在方言白名单内换适配器方法');
+      throw new BizError(ErrorCode.DEPENDENCY_UNAVAILABLE, 'jsonContains 在 SQLite 驱动下不支持：请改用 PostgreSQL/MySQL，或在方言白名单内换适配器方法');
     }
     if (driver === 'postgresql') {
       // PG jsonb @> 操作符：${} 插值由 Prisma 自动参数化

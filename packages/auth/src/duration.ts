@@ -4,8 +4,11 @@
  *   注意：不使用 ms 作为单位换算基准，避免小数秒带来的取值歧义。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module @fw/auth
  */
+
+import { BizError, ErrorCode } from '@fw/core';
 
 /** 单位 → 秒 */
 const UNIT_SECONDS: Record<string, number> = {
@@ -25,14 +28,14 @@ const UNIT_SECONDS: Record<string, number> = {
  */
 export function parseDurationSeconds(value: string | number): number {
   if (typeof value === 'number') {
-    if (!Number.isFinite(value) || value <= 0) throw new Error(`非法时长: ${value}`);
+    if (!Number.isFinite(value) || value <= 0) throw new BizError(ErrorCode.BAD_REQUEST, `非法时长: ${value}`);
     return Math.max(1, Math.ceil(value));
   }
   const matched = /^(\d+(?:\.\d+)?)\s*(ms|s|m|h|d|w)?$/.exec(value.trim());
-  if (!matched) throw new Error(`非法时长格式: ${value}（示例：30s / 15m / 2h / 7d）`);
+  if (!matched) throw new BizError(ErrorCode.BAD_REQUEST, `非法时长格式: ${value}（示例：30s / 15m / 2h / 7d）`);
   const amount = Number(matched[1]);
   const unit = matched[2] ?? 's';
   const seconds = amount * UNIT_SECONDS[unit];
-  if (!Number.isFinite(seconds) || seconds <= 0) throw new Error(`非法时长: ${value}`);
+  if (!Number.isFinite(seconds) || seconds <= 0) throw new BizError(ErrorCode.BAD_REQUEST, `非法时长: ${value}`);
   return Math.max(1, Math.ceil(seconds));
 }

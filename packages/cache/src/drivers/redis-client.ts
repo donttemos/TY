@@ -16,6 +16,7 @@
  */
 
 import { Logger } from '@fw/logger';
+import { BizError, ErrorCode } from '@fw/core';
 import type { CacheDriverName } from '../types.js';
 
 const logger = Logger.for('cache.redis');
@@ -103,13 +104,18 @@ export interface ClusterNodesInfo {
  */
 export async function createRedisClient(driver: CacheDriverName, url: string | undefined): Promise<RedisClientLike> {
   if (!url) {
-    throw new Error(`CACHE_DRIVER=${driver} 时必须配置 CACHE_URL（如 redis://127.0.0.1:6379）`);
+    throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `CACHE_DRIVER=${driver} 时必须配置 CACHE_URL（如 redis://127.0.0.1:6379）`);
   }
   let mod: IoredisModule;
   try {
     mod = (await import('ioredis')) as unknown as IoredisModule;
   } catch (cause) {
-    throw new Error(`未安装 ioredis：CACHE_DRIVER=${driver} 需要 ioredis（pnpm add ioredis）。memory 驱动无需安装。`, { cause });
+    const unavailable = new BizError(
+      ErrorCode.DEPENDENCY_UNAVAILABLE,
+      `未安装 ioredis：CACHE_DRIVER=${driver} 需要 ioredis（pnpm add ioredis）。memory 驱动无需安装。`,
+    );
+    (unavailable as { cause?: unknown }).cause = cause;
+    throw unavailable;
   }
 
   let client: RedisClientLike;

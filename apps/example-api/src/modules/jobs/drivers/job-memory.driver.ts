@@ -13,6 +13,7 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { Logger, getTraceId } from '@fw/logger';
+import { BizError, ErrorCode } from '@fw/core';
 import { emitJobEvent } from '../job-events.js';
 import type {
   JobArtifact,
@@ -66,7 +67,7 @@ export class MemoryJobDriver implements JobCenterPort {
 
   /** 派发任务：立即返回视图（status=pending），执行在后台进行 */
   create(options: JobCreateOptions): JobView {
-    if (!options.runner) throw new Error('memory 驱动要求 create 提供 runner 闭包');
+    if (!options.runner) throw new BizError(ErrorCode.BAD_REQUEST, 'memory 驱动要求 create 提供 runner 闭包');
     const now = new Date().toISOString();
     const id = `job-${randomUUID()}`;
     const view: JobView = {
@@ -157,7 +158,7 @@ export class MemoryJobDriver implements JobCenterPort {
     try {
       const artifact = await entry.runner(report);
       if (artifact && artifact.content.length > this.maxArtifactChars) {
-        throw new Error(`产物超过 ${Math.round(this.maxArtifactChars / 1024 / 1024)}MB 上限，请缩小导出范围后重试`);
+        throw new BizError(ErrorCode.BAD_REQUEST, `产物超过 ${Math.round(this.maxArtifactChars / 1024 / 1024)}MB 上限，请缩小导出范围后重试`);
       }
       if (artifact) {
         entry.artifact = artifact;

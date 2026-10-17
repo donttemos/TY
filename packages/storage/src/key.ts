@@ -4,8 +4,11 @@
  *   key 形如 `202610/<uuid>.png`：段内只允许安全字符，禁止 `..`、反斜杠、绝对路径与空段。
  * @author donttemo
  * @created 2026-10-16
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module @fw/storage
  */
+
+import { BizError, ErrorCode } from '@fw/core';
 
 /** 单段合法字符：字母数字与 `-._`（uuid、扩展名、日期目录天然满足） */
 const SEGMENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -19,24 +22,24 @@ export const MAX_KEY_LENGTH = 512;
  */
 export function assertKey(key: string): void {
   if (typeof key !== 'string' || key.length === 0 || key.length > MAX_KEY_LENGTH) {
-    throw new Error(`非法存储 key：长度必须在 1~${MAX_KEY_LENGTH} 之间`);
+    throw new BizError(ErrorCode.BAD_REQUEST, `非法存储 key：长度必须在 1~${MAX_KEY_LENGTH} 之间`);
   }
   if (key.includes('\\')) {
-    throw new Error(`非法存储 key：禁止反斜杠（${JSON.stringify(key)}）`);
+    throw new BizError(ErrorCode.BAD_REQUEST, `非法存储 key：禁止反斜杠（${JSON.stringify(key)}）`);
   }
   if (key.startsWith('/')) {
-    throw new Error(`非法存储 key：禁止绝对路径（${JSON.stringify(key)}）`);
+    throw new BizError(ErrorCode.BAD_REQUEST, `非法存储 key：禁止绝对路径（${JSON.stringify(key)}）`);
   }
   const segments = key.split('/');
   for (const segment of segments) {
     if (segment.length === 0) {
-      throw new Error(`非法存储 key：存在空路径段（${JSON.stringify(key)}）`);
+      throw new BizError(ErrorCode.BAD_REQUEST, `非法存储 key：存在空路径段（${JSON.stringify(key)}）`);
     }
     if (segment === '.' || segment === '..') {
-      throw new Error(`非法存储 key：禁止相对路径段（${JSON.stringify(key)}）`);
+      throw new BizError(ErrorCode.BAD_REQUEST, `非法存储 key：禁止相对路径段（${JSON.stringify(key)}）`);
     }
     if (!SEGMENT_PATTERN.test(segment)) {
-      throw new Error(`非法存储 key：路径段含不安全字符（${JSON.stringify(segment)}）`);
+      throw new BizError(ErrorCode.BAD_REQUEST, `非法存储 key：路径段含不安全字符（${JSON.stringify(segment)}）`);
     }
   }
 }

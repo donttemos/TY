@@ -7,9 +7,11 @@
  *   @fw/queue 后参照 example-api 的 audit.controller.ts 补 export 即可。）
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-17 donttemo M12 W2（PRD-012 OBS-14）：审计查询/导出增 trace_id/request_id/family_id/category/event 过滤 + 未知过滤参数 400
  * @module __APP_NAME__/auth
  */
-import { Controller, Get, Inject, Param, Query } from '@nestjs/common';
+import { Controller, Get, Inject, Param, Query, Req } from '@nestjs/common';
+import type { Request } from 'express';
 import { BizError, ErrorCode } from '@fw/core';
 import { parseSortQuery, type PageResult } from '@fw/db';
 import {
@@ -40,6 +42,39 @@ export const AUDIT_SORT_FIELDS = {
 } as const;
 
 /**
+ * 审计过滤参数白名单（M12 W2 OBS-14）
+ *
+ * 键为 HTTP 查询参数名。白名单外的过滤字段一律 400 —— 不静默忽略（列表参数白名单解析既有约定），
+ * 防止「调用方以为在过滤实际全量返回」的排障陷阱。
+ */
+export const AUDIT_FILTER_PARAMS = [
+  'page',
+  'pageSize',
+  'user_id',
+  'module',
+  'action',
+  'target_type',
+  'target_id',
+  'from',
+  'to',
+  'sort',
+  'trace_id',
+  'request_id',
+  'family_id',
+  'category',
+  'event',
+] as const;
+
+/** 白名单校验：未知过滤参数直接 400（反向验证：不静默忽略） */
+export function assertKnownFilterParams(query: Record<string, unknown>): void {
+  for (const key of Object.keys(query)) {
+    if (!(AUDIT_FILTER_PARAMS as readonly string[]).includes(key)) {
+      throw new BizError(ErrorCode.BAD_REQUEST, `未知过滤参数：${key}（允许：${AUDIT_FILTER_PARAMS.join(' / ')}）`);
+    }
+  }
+}
+
+/**
  * 审计日志控制器：/api/v1/audit-logs
  */
 @Controller('/api/v1/audit-logs')
@@ -54,6 +89,7 @@ export class AuditController {
   @Permissions(PERM.AUDIT_READ)
   @Get()
   async list(
+    @Req() request: Request,
     @CurrentUser() user: RequestUser,
     @Query('page') page = '1',
     @Query('pageSize') pageSize = '20',
@@ -65,7 +101,13 @@ export class AuditController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('sort') sort?: string,
+    @Query('trace_id') traceId?: string,
+    @Query('request_id') requestId?: string,
+    @Query('family_id') familyId?: string,
+    @Query('category') category?: string,
+    @Query('event') event?: string,
   ): Promise<PageResult<AuditLogRecord>> {
+    assertKnownFilterParams(request.query as Record<string, unknown>);
     const scope = await resolveDataScopeFilter(user, this.org);
     // 排序解析放在数据范围解析之后、查询之前：非法 sort（未知字段 / 非法方向 / 超上限）直接 400
     const parsedSort = parseSortQuery<AuditLogRecord>(sort, AUDIT_SORT_FIELDS);
@@ -87,6 +129,11 @@ export class AuditController {
       from: from ? new Date(from) : undefined,
       to: to ? new Date(to) : undefined,
       sort: parsedSort,
+      traceId,
+      requestId,
+      familyId,
+      category,
+      event,
     });
   }
 

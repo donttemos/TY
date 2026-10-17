@@ -2,7 +2,9 @@
 
 > 一套「框架之上的框架」：用它在 1 天内搭出任意业务系统的可运行骨架，小到内部工具站、大到多租户 SaaS，规模升级时业务代码零重写。
 >
-> **当前状态：v0.5.0 已发布（2026-10-15）** —— v0.1.0 交付 M1–M4，v0.2.0 一次性纳入 **M5 管理后台前端（PRD-005）、M6 CRUD 代码生成器（PRD-006）、M7 队列与定时任务（PRD-007）、M8 多租户与规模化演进（PRD-008）**（M1–M8 全部交付），v0.3.0 做「真机可用性收口」，v0.4.0 落地 **M9 配置中心与热更新（PRD-009）全量**；本次 **v0.5.0 交付 M10（PRD-010）的 P0 + P1 阶段：多实例一致性收口**（E-01 任务中心驱动化 / E-02 配置中心多实例语义 + nacos 转正 / E-03 框架级 API 限流默认开启 / E-04 权限树契约落地）**与规模化遗留**（E-06 Redis Cluster 实测收口、E-07 OAuth2 授权码端到端 + apikey 签名验签——`AUTH_STRATEGY` 四策略名实相符），配置键 65→80，新文档 [docs/41 认证策略端到端指南](./docs/41-auth-strategies.md)。发布验收记录见 [v0.5.0 发布验收报告](./docs/90-release-v0.5.0.md)，上一版见 [v0.4.0 发布验收报告](./docs/90-release-v0.4.0.md)。
+> **当前状态：v0.5.5 已发布（2026-10-16）** —— 本次 **v0.5.5 交付 M10（PRD-010）P2/P3 在途整体成版**：E-08 admin 全栈项目模板（`fw new --template=admin`）/ E-09 文件存储端口 `@fw/storage` / E-10 审计归档 / E-12 SSE 实时推送 / E-13 站内信与通知中心 / E-14 i18n 骨架 / E-15 暗色模式 / E-16 边界上限配置化 / E-17 前端错误监控 RUM，外加 **M11（PRD-011）立项草案** 与 **@fw/auth·cache·queue 驱动审查批量修复 26 项**；配置键 80→97，全仓 15 包 + 2 应用 1205 例测试全绿后整合发版。发布验收记录见 [v0.5.5 发布验收报告](./docs/90-release-v0.5.5.md)，上一版见 [v0.5.0 发布验收报告](./docs/90-release-v0.5.0.md)。M11.1–M11.5（ADR-0020~0024，认证核心强化）已合入 main，记 CHANGELOG `[Unreleased]`，随下一版本发布。
+>
+> v0.5.0（2026-10-15）交付 M10 P0 + P1：多实例一致性收口（E-01 任务中心驱动化 / E-02 配置中心多实例语义 + nacos 转正 / E-03 框架级 API 限流默认开启 / E-04 权限树契约落地）与规模化遗留（E-06 Redis Cluster 实测收口、E-07 OAuth2 授权码端到端 + apikey 签名验签——`AUTH_STRATEGY` 四策略名实相符），配置键 65→80，新文档 [docs/41 认证策略端到端指南](./docs/41-auth-strategies.md)。
 >
 > **仓库与流水线**：[`donttemos/TY`](https://github.com/donttemos/TY)（private）。CI（GitHub Actions）在 v0.2.0 推送后**首次真实运行**；经修复 6 处「只在干净环境复现」的流水线/环境适配缺陷后，**四大作业全绿**（基础门禁 24 步 + sqlite/postgres/mysql 三库集成矩阵），见 [发布报告 §5.1 / §8](docs/archive/release/90-release-v0.2.0.md)。
 
@@ -62,7 +64,10 @@ framework/
     check-file-headers.mjs    # 文件头注释校验（中文 / 作者 / 日期）
     check-no-raw-sql.mjs      # 原生 SQL 方言标注检查（TC-ORM-005）
     check-helm-chart.mjs      # Helm Chart 离线渲染 + K8s 清单语义校验（T-M8-07，63 项）
+    check-api-parity.mjs      # 前后端接口对撞门禁（C-06：admin-web 调用面 ↔ 后端路由面）
+    check-triway-consistency.mjs # 三方一致性门禁（框架包 ↔ example-api ↔ admin 模板，六轴对撞）
     lib/mini-yaml.mjs         # 零依赖极简 YAML 解析器（供上者使用）
+    lib/api-parity-core.mjs   # 对撞共享库（路径归一化 / 调用面 / 路由面提取，两个对撞门禁同源）
   docs/
     contracts/                # 并行开发先行契约（类型即契约，只读）
       auth.ts                 # C-05 权限契约（RequestUser / 权限码 / 菜单树 / 守卫失败码）
@@ -83,6 +88,7 @@ framework/
     70-engineering-standards.md # 编码 / Git / PR 规范
     80-project-plan.md        # 项目计划与任务板
     85-parallel-workstreams.md # 并行开发工作线划分（契约 / 所有权 / 集成点）
+    90-release-v0.5.5.md      # v0.5.5 发布验收报告（M10 P2/P3 成版：E-08~E-17 + PRD-011 立项 + 驱动修复 26 项）
     90-release-v0.5.0.md      # v0.5.0 发布验收报告（PRD-010 P0+P1：多实例收口 + OAuth2/apikey 端到端）
     90-release-v0.4.0.md      # v0.4.0 发布验收报告（配置中心与热更新 + 管理面补齐）
     90-release-v0.3.0.md      # v0.3.0 发布验收报告（真机可用性收口）
@@ -149,8 +155,8 @@ fw gen crud order
 | [云服务器裸机部署手册](./docs/61-bare-metal-deploy.md) | 不用容器的服务器部署：systemd 进程托管、release 软链发版与秒级回滚、nginx 静态托管与 HTTPS、数据库档位与 provider 约束、备份监控与排障速查 |
 | [1Panel 真机部署手册](./docs/62-1panel-real-deploy.md) | 已有 1Panel 面板的服务器落地：OpenResty host 网络反代、容器化数据库的宿主端口接入、PostgreSQL schema 变体与迁移重建、2C2G 内存约束（V8 堆 + cgroup MemoryMax）、站点目录与 HTTPS |
 | [1Panel 真机部署验证报告](./docs/63-1panel-real-deploy-verification.md) | 上述手册在腾讯云 2C2G4M 上的**完整实测记录**：逐项耗时与内存数据、三条约束的实测结论、端到端冒烟结果、**5 个只有真机才会暴露的缺陷**（队列权限缺失、dedicated 租户连接串、pnpm bin 时序、迁移计数、镜像配置）与结清后的遗留清单 |
-| [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.5.0 已发布：多实例一致性收口 + 认证策略端到端） |
-| [ADR 架构决策记录](./docs/adr/README.md) | 15 条决策：NestJS / Prisma（已定稿）/ monorepo / 缓存 / 异步任务 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 / i18n / 暗色模式 |
+| [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.5.5 已发布：M10 P2/P3 成版 + PRD-011 立项 + 驱动修复 26 项） |
+| [ADR 架构决策记录](./docs/adr/README.md) | 21 条决策（0001–0024，0017–0019 跳号）：NestJS / Prisma / monorepo / 缓存 / 异步任务 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 / i18n / 暗色模式 / 存储端口 / 认证核心 M11 系列 |
 | [编码 Git PR 规范](./docs/70-engineering-standards.md) | 编码规范、**中文注释规范（文件头含作者与日期）**、反模式清单、分支与提交约定、PR 与评审规则 |
 | [项目计划与任务板](./docs/80-project-plan.md) | 15 周甘特、M1–M8 WBS（40+ 任务）、任务板列与标签、当前快照 |
 | [增强功能规划](./docs/81-enhancement-roadmap.md) | v0.5.x–v0.6.x 完善项清单：多实例一致性、规模化遗留、模板生态、体验增强（E-01~E-17，含目标/收益/验收口径） |
@@ -160,6 +166,7 @@ fw gen crud order
 | [贡献指南](./CONTRIBUTING.md) | 三步上手与硬性规则入口 |
 | [PRD 索引](./docs/prd/README.md) | 迭代清单与 PRD 模板约定 |
 | PRD-001 ~ PRD-009 | 见 `docs/prd/`，每个功能 / 迭代一份 |
+| [v0.5.5 发布验收报告](./docs/90-release-v0.5.5.md) | 「M10 P2/P3 在途交付整体成版」发布记录：E-08~E-17 交付清单、驱动审查修复 26 项、PRD-011 立项、升级影响（配置键 80→97、新增表 4 张、新权限点 2 个）、验证证据（1205 例 + 专项冒烟 + 静态门禁）、发布产物（commit/tag/CI）与遗留问题 |
 | [v0.5.0 发布验收报告](./docs/90-release-v0.5.0.md) | 「多实例一致性收口 + 认证策略端到端」发布门禁逐条判定（E-01~E-04/E-06/E-07 的 AC 证据）、升级影响（配置键 65→80、契约订正、零迁移零 seed）、验证证据清单（单测 + 冒烟 + 静态 4 项）、遗留问题与发布结论 |
 | [v0.4.0 发布验收报告](./docs/90-release-v0.4.0.md) | 「配置中心与热更新 + 管理面补齐」发布门禁逐条判定、升级影响（种子语义变更：新增参数配置/租户菜单与权限点）、验证证据清单（单测 + 冒烟 8 套 + 静态 4 项 + 真机）、遗留问题与发布结论 |
 | [v0.3.0 发布验收报告](./docs/90-release-v0.3.0.md) | 「真机可用性收口」发布门禁逐条判定、升级影响（种子语义与标签键变更）、验证证据清单（单测 782 + 冒烟 203 + 静态 4 项 + 真机）、遗留问题与发布结论（通过） |
@@ -195,6 +202,7 @@ fw gen crud order
 - 分支：`main`（可发布）/ `feat/<prd>-<短名>` / `fix/<issue>`；PR 必须关联 PRD 与验收项。
 - 提交：Conventional Commits（`feat(auth): ...`）。
 - 门禁：`pnpm lint` + `pnpm test` + 覆盖率阈值 + 变更影响到的 PRD 的 AC 全部勾选。
+- 静态门禁（CI 阻断）：`pnpm run check:headers`（文件头）、`node scripts/check-no-raw-sql.mjs`（原生 SQL 方言白名单）、`pnpm run check:helm`（Helm 离线渲染）、`pnpm run check:api-parity`（前后端接口对撞）、`pnpm run check:triway-consistency`（框架包 / example-api / admin 模板三方一致性：路由面、权限码、Prisma 共有模型、框架依赖、配置键六轴对撞）。
 - 部署模板门禁：`pnpm check:helm`（Helm Chart 离线渲染 + K8s 清单语义校验）；有集群时另跑 `helm template` + `kubectl apply --dry-run=server`。
 - 里程碑演练：`pnpm --filter example-api run drill`（三大关键演练，远程段落由 `SMOKE_DB_SWITCH` / `SMOKE_REDIS_URL` 门控）；`pnpm --filter example-api run bench`（压测基线）。
 - 文档：能力变更必须同步更新对应 PRD 的「变更记录」，禁止静默改需求。

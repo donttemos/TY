@@ -5,11 +5,13 @@
  *   单实例语义：多实例共享本地文件有覆盖竞态，多实例场景应实现 Nacos adapter（文档已明示）。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module config-center
  */
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { Logger } from '@fw/logger';
+import { BizError, ErrorCode } from '@fw/core';
 import type { ConfigDriverPort } from '../types.js';
 
 const logger = Logger.for('config.file');
@@ -144,7 +146,7 @@ export class FileConfigDriver implements ConfigDriverPort {
     try {
       const parsed: unknown = JSON.parse(text);
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('顶层必须是 JSON 对象（点路径 → 值）');
+        throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, '顶层必须是 JSON 对象（点路径 → 值）');
       }
       return parsed as Record<string, unknown>;
     } catch (error) {

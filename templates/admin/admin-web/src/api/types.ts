@@ -227,6 +227,18 @@ export interface AuditLogRecord {
   userId: ID | null;
   module: string;
   action: AuditAction;
+  /** 审计大类（PRD-012 OBS-06：auth/security/admin/data/config/tenant/system） */
+  category: string | null;
+  /** 点分事件名（如 auth.login / refresh.replay_detected） */
+  event: string | null;
+  /** 事件结果（success / denied / failed） */
+  result: string | null;
+  /** 令牌家族 ID（安全事件关联键） */
+  familyId: string | null;
+  /** 令牌标识 jti（非令牌本体） */
+  jti: string | null;
+  /** 单次请求 ID（PRD-012 OBS-09） */
+  requestId: string | null;
   targetType: string | null;
   targetId: ID | null;
   beforeValue: unknown;
@@ -250,6 +262,16 @@ export interface AuditQuery {
   to?: string;
   /** 排序（api-spec §1.5：`<snake_case 字段>:asc|desc`） */
   sort?: string;
+  /** 链路 ID 精确过滤（M12 W2 OBS-14） */
+  trace_id?: string;
+  /** 单请求 ID 精确过滤（M12 W2 OBS-14） */
+  request_id?: string;
+  /** 令牌家族 ID 精确过滤（M12 W2 OBS-14） */
+  family_id?: string;
+  /** 低基数大类过滤（M12 W2 OBS-14） */
+  category?: string;
+  /** 点分事件名精确过滤（M12 W2 OBS-14） */
+  event?: string;
 }
 
 /** 登录设备 / 会话 */

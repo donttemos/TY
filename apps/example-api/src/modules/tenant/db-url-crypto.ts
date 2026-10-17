@@ -7,11 +7,13 @@
  *   （仅限本地开发；生产必须显式配置，部署手册已注明）。
  * @author donttemo
  * @created 2026-10-14
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module example-api/tenant
  */
 
 import { createCipheriv, createDecipheriv, randomBytes, timingSafeEqual } from 'node:crypto';
 import { Logger } from '@fw/logger';
+import { BizError, ErrorCode } from '@fw/core';
 
 const logger = Logger.for('tenant');
 
@@ -36,7 +38,7 @@ function loadKey(): Buffer {
   } catch {
     /* 落到下面报错 */
   }
-  throw new Error('TENANT_DB_KEY 格式错误：需为 64 位十六进制或 base64 编码的 32 字节密钥');
+  throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, 'TENANT_DB_KEY 格式错误：需为 64 位十六进制或 base64 编码的 32 字节密钥');
 }
 
 /** 进程内密钥单例（启动后不变；轮换靠重启） */
@@ -76,7 +78,7 @@ export function encryptDbUrl(plain: string): string {
 export function decryptDbUrl(enc: string): string {
   const parts = enc.split('.');
   if (parts.length !== 4 || parts[0] !== ENC_PREFIX) {
-    throw new Error('独立库连接串密文格式错误（期望 v1.<iv>.<tag>.<ct>）');
+    throw new BizError(ErrorCode.INTERNAL, '独立库连接串密文格式错误（期望 v1.<iv>.<tag>.<ct>）');
   }
   const [, ivText, tagText, ctText] = parts;
   const decipher = createDecipheriv('aes-256-gcm', key(), b64urlDecode(ivText));

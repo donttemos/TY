@@ -6,9 +6,11 @@
  *   由 @fw/auth 的 AuthModule 注册。组织解析端口（DATA_SCOPE_ORG）与 AuthStore 同实现复用。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module __APP_NAME__/auth
  */
 import { Module } from '@nestjs/common';
+import { BizError, ErrorCode } from '@fw/core';
 import { AuthModule, AUTH_STORE, DATA_SCOPE_ORG } from '@fw/auth';
 import type { AuthStore, DataScopeOrgPort } from '@fw/auth';
 import { ADMIN_STORE, PrismaAdminStore } from '../admin/admin-store.js';
@@ -38,7 +40,7 @@ import { UsersController } from './users.controller.js';
       useFactory: (store: AuthStore): DataScopeOrgPort => {
         const candidate = store as Partial<DataScopeOrgPort>;
         if (typeof candidate.listVisibleDepartmentIds !== 'function' || typeof candidate.listUserIdsByDepartmentIds !== 'function') {
-          throw new Error('AUTH_STORE 未实现 DataScopeOrgPort：org / org_below 数据范围不可用（需 departments / user_department 查询能力）');
+          throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, 'AUTH_STORE 未实现 DataScopeOrgPort：org / org_below 数据范围不可用（需 departments / user_department 查询能力）');
         }
         // 运行时已校验方法存在；两接口无继承关系，需经 unknown 双重断言
         return store as unknown as DataScopeOrgPort;

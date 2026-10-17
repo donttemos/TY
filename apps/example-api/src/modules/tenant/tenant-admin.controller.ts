@@ -15,6 +15,7 @@
  *   该语义在接口与前端文案中明确标注，避免「点一下就搬完数据」的错误预期。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module example-api/tenant
  */
 
@@ -289,16 +290,16 @@ export class TenantAdminController {
     if (target === 'dedicated') {
       const candidate = dbUrl ?? '';
       if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(candidate) && !candidate.startsWith('file:')) {
-        throw new Error('独立库连接串格式非法（需形如 postgresql://… 或 file:…）');
+        throw new BizError(ErrorCode.BAD_REQUEST, '独立库连接串格式非法（需形如 postgresql://… 或 file:…）');
       }
     }
     await yieldToEventLoop();
 
     report(MIGRATE_STEPS[1], '确认租户当前状态与账号规模');
     const current = await this.store.findTenantViewById(id);
-    if (!current) throw new Error('租户已被移除，迁移终止');
+    if (!current) throw new BizError(ErrorCode.STATE_NOT_ALLOWED, '租户已被移除，迁移终止');
     if (current.isolation !== ctx.fromIsolation) {
-      throw new Error(`租户隔离级别已被并发修改（当前 ${current.isolation}），请刷新后重试`);
+      throw new BizError(ErrorCode.STATE_NOT_ALLOWED, `租户隔离级别已被并发修改（当前 ${current.isolation}），请刷新后重试`);
     }
     await yieldToEventLoop();
 
@@ -328,7 +329,7 @@ export class TenantAdminController {
 /** 从持久化 params 重建迁移上下文（M10 E-01：连接串密文解密还原，失败即执行失败） */
 function rebuildMigrateContext(params: Record<string, unknown>): MigrateContext {
   const target = params.to === 'dedicated' ? 'dedicated' : params.to === 'shared' ? 'shared' : undefined;
-  if (!target) throw new Error('迁移任务参数损坏（目标隔离级别缺失），请重新发起迁移');
+  if (!target) throw new BizError(ErrorCode.BAD_REQUEST, '迁移任务参数损坏（目标隔离级别缺失），请重新发起迁移');
   const dbUrlEnc = typeof params.dbUrlEnc === 'string' ? params.dbUrlEnc : null;
   return {
     id: String(params.tenantId ?? ''),

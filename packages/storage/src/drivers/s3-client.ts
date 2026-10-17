@@ -6,8 +6,11 @@
  *   测试注入 FakeS3CommandFactory + FakeS3Client，不需要真实 SDK。
  * @author donttemo
  * @created 2026-10-16
+ * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @module @fw/storage
  */
+
+import { BizError, ErrorCode } from '@fw/core';
 
 /** S3 命令最小结构（官方 SDK 的 XxxCommand 实例天然满足；测试用 fake 实现） */
 export interface S3CommandLike {
@@ -81,13 +84,14 @@ export async function createS3Client(options: S3ClientOptions): Promise<{ client
   try {
     mod = await import(/* webpackIgnore: true */ packageName);
   } catch {
-    throw new Error(
+    throw new BizError(
+      ErrorCode.DEPENDENCY_UNAVAILABLE,
       'STORAGE_DRIVER=s3 需要安装 S3 SDK：pnpm add @aws-sdk/client-s3（optional peer，local 驱动无需安装）',
     );
   }
   const sdk = mod as Partial<S3SdkModule>;
   if (!sdk.S3Client || !sdk.PutObjectCommand || !sdk.GetObjectCommand || !sdk.DeleteObjectCommand || !sdk.HeadObjectCommand) {
-    throw new Error('@aws-sdk/client-s3 版本不满足最小形状要求（需 v3：S3Client 与四类 Object Command）');
+    throw new BizError(ErrorCode.DEPENDENCY_UNAVAILABLE, '@aws-sdk/client-s3 版本不满足最小形状要求（需 v3：S3Client 与四类 Object Command）');
   }
   const client = new sdk.S3Client({
     region: options.region,
@@ -106,9 +110,9 @@ export async function createS3Client(options: S3ClientOptions): Promise<{ client
  * @param body SDK 返回体
  */
 export async function bodyToBuffer(body: unknown): Promise<Buffer> {
-  if (body === undefined || body === null) throw new Error('S3 GetObject 返回空 Body');
+  if (body === undefined || body === null) throw new BizError(ErrorCode.INTERNAL, 'S3 GetObject 返回空 Body');
   if (Buffer.isBuffer(body)) return body;
-  if (typeof body !== 'object') throw new Error(`S3 GetObject 返回了不支持的 Body 类型：${Object.prototype.toString.call(body)}`);
+  if (typeof body !== 'object') throw new BizError(ErrorCode.INTERNAL, `S3 GetObject 返回了不支持的 Body 类型：${Object.prototype.toString.call(body)}`);
   const candidate = body as { getReader?: () => { read: () => Promise<{ done: boolean; value?: Uint8Array }> } };
   if (Symbol.asyncIterator in body) {
     const chunks: Buffer[] = [];
@@ -127,5 +131,5 @@ export async function bodyToBuffer(body: unknown): Promise<Buffer> {
     }
     return Buffer.concat(chunks);
   }
-  throw new Error(`S3 GetObject 返回了不支持的 Body 类型：${Object.prototype.toString.call(body)}`);
+  throw new BizError(ErrorCode.INTERNAL, `S3 GetObject 返回了不支持的 Body 类型：${Object.prototype.toString.call(body)}`);
 }

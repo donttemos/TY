@@ -151,6 +151,18 @@ apps/<app>/modules/<业务模块>/
 - 规则：缺文件头、`@author` 或 `@created` 缺失、日期格式非 `YYYY-MM-DD`、`TODO` 无责任人 → **CI 阻断**；
 - `--fix` 仅对缺头文件按模板追加（作者取 `git config user.name`，未配置时回退默认署名 `donttemo`，日期取当天），不修改已有头。
 
+#### 1.6.8 对撞类门禁（并行架构的漂移防线）
+
+「契约先行 + mock 顶上」与「框架包 / 参考应用 / 项目模板三份同源实现」都靠对撞门禁防漂移，均在 CI 的 base 作业阻断合并：
+
+| 门禁 | 命令 | 对撞内容 |
+|---|---|---|
+| 前后端接口对撞（C-06） | `pnpm run check:api-parity` | `apps/admin-web` 前端调用面 ↔ 全仓 `*.controller.ts` 后端路由面；前端调了后端没有即失败，反方向仅提示 |
+| 三方一致性 | `pnpm run check:triway-consistency` | 框架包 ↔ example-api ↔ admin 模板六轴：① 模板前端调用面 ⊆ 模板路由面（含按装配判定的框架包控制器）；② 模板路由面 ⊆ example-api 路由面（模板是参考实现的裁剪子集）；③ 权限码以框架 `PERM`/`QUEUE_PERM_*` 为权威，两侧种子声明与控制器守卫、模板前端使用逐一闭环；④ 两 Prisma schema 共有模型字段一致（`@fw/auth` Store 契约）；⑤ 模板 `@fw/*` 依赖存在且 `workspace:*`、import 必已声明；⑥ 模板 `.env.example` 配置键 ⊆ `ENV_KEY_PATHS` ∩ example-api `.env.example` |
+
+- 两个对撞门禁共用 `scripts/lib/api-parity-core.mjs`（路径归一化 / 调用面 / 路由面提取）——同一条路径必须在两个门禁里算出同一个键；
+- 对撞门禁的护栏本身也要反向验证：注入突变（加一个只有模板有的路由 / 发明一个权限码 / 改一处依赖规格）必须挂红，已随首次交付逐轴验过。
+
 ### 1.7 反模式清单（评审直接打回）
 
 1. 业务层出现 `if (driver === 'redis')` 之类的实现分支。

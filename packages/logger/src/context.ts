@@ -1,14 +1,17 @@
 /*
  * @file 请求上下文（AsyncLocalStorage）
- * @description 进程内单例的异步上下文存储：traceId / spanId / 当前用户；由 @fw/core 的 trace 中间件写入，日志与后续 DAO 层默认携带。M8 T-M8-06 起可经 setSpanContextProvider 注入 OTel 活跃 span 提供者，使 traceId/spanId 与链路追踪对齐（未注入时行为不变）。
+ * @description 进程内单例的异步上下文存储：traceId / spanId / requestId / 当前用户身份；由 @fw/core 的 trace 中间件写入，日志与后续 DAO 层默认携带。M8 T-M8-06 起可经 setSpanContextProvider 注入 OTel 活跃 span 提供者，使 traceId/spanId 与链路追踪对齐（未注入时行为不变）。
+ *   M12 W2（PRD-012 OBS-09/10，ADR-0026）：新增 requestId（单请求 ULID，进程内唯一，不跨服务透传——
+ *   跨服务语义归 traceId）与 familyId / jti（鉴权后由 RbacGuard / RefreshTokenService 边界写入）。
  * @author donttemo
  * @created 2026-10-09
  * @modified 2026-10-14 donttemo M8 T-M8-06：新增 setSpanContextProvider 桥接（OTel 活跃 span 优先，回退请求上下文）
+ * @modified 2026-10-17 donttemo M12 W2（PRD-012 OBS-09/10）：requestId 生成与读取 + familyId/jti 上下文字段
  * @module logger
  * @since v0.1.0
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 
 /** 单次请求的上下文数据 */
 export interface RequestContext {
@@ -16,8 +19,17 @@ export interface RequestContext {
   traceId: string;
   /** span 标识，M8 接 OTel 前固定为空串 */
   spanId: string;
+  /**
+   * 单次请求 ID（M12 W2 OBS-09）：请求入口生成（ULID）或复用上游合法 X-Request-Id；
+   * 生命周期 = 单次 HTTP 请求，进程内唯一，不跨服务透传（跨服务用 traceId，ADR-0026）。
+   */
+  requestId?: string;
   /** 当前登录用户 ID（M3 起由鉴权层写入） */
   userId?: string;
+  /** 令牌家族 ID（M12 W2 OBS-10：鉴权后由 RbacGuard 写入，refresh 流程由编排边界补写） */
+  familyId?: string;
+  /** 令牌标识 jti（非令牌本体，可记录；M12 W2 OBS-10，ADR-0026 记录安全论证） */
+  jti?: string;
   /** 当前租户 ID；仅已认证请求可将候选值用于租户化数据访问 */
   tenantId?: string;
   /** Set only after the authenticated identity is matched to tenantId. */
@@ -75,6 +87,31 @@ export function generateTraceId(): string {
   return randomUUID().replace(/-/g, '');
 }
 
+/** ULID Crockford Base32 字母表（无 I/L/O/U，防误读） */
+const ULID_ENCODING = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+
+/** requestId（ULID）合法形态：26 位 Crockford Base32（大小写均接受，复用校验用） */
+export const REQUEST_ID_PATTERN = /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/;
+
+/**
+ * 生成 requestId：ULID（48 位毫秒时间 + 80 位随机，26 字符，进程内唯一且按时间有序）
+ * @returns 新 requestId
+ */
+export function generateRequestId(): string {
+  let time = Date.now();
+  let timePart = '';
+  for (let i = 0; i < 10; i++) {
+    timePart = ULID_ENCODING[time % 32] + timePart;
+    time = Math.floor(time / 32);
+  }
+  const bytes = randomBytes(16);
+  let randomPart = '';
+  for (let i = 0; i < 16; i++) {
+    randomPart += ULID_ENCODING[bytes[i]! & 31];
+  }
+  return timePart + randomPart;
+}
+
 /**
  * 在指定异步作用域内运行回调（供中间件包裹请求处理）
  * @param ctx 本次请求上下文
@@ -118,4 +155,12 @@ export function getTraceId(): string {
  */
 export function getSpanId(): string {
   return activeSpanIds()?.spanId || requestContextStorage.getStore()?.spanId || '';
+}
+
+/**
+ * 获取当前 requestId（M12 W2 OBS-09）
+ * @returns requestId；无上下文或未启用时为 undefined（如启动阶段日志）
+ */
+export function getRequestId(): string | undefined {
+  return requestContextStorage.getStore()?.requestId;
 }

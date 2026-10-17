@@ -5,7 +5,8 @@
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo 新增本人资料自助端点（GET / PUT /auth/profile）：
  *   原先个人中心借 PUT /users/:id 保存资料，该端点需 user:update，普通角色保存必 3002
- * @modified 2026-10-15 donttemo E-07：新增 fetchOAuth2Providers（已注册提供方列表，登录页渲染入口）
+ * @modified 2026-10-17 donttemo 三方一致性门禁：移除 fetchOAuth2Providers——模板服务端未接入
+ *   OAuth2（登录仅账号密码），登录页调用该端点必 404；接入时参照 apps/admin-web 同文件补回
  * @module __APP_NAME__-web/api
  */
 
@@ -55,9 +56,4 @@ export function updateProfile(data: { nickname?: string; phone?: string; email?:
 /** 下线指定设备 */
 export function revokeSession(sessionId: string): Promise<{ revoked: string }> {
   return request.delete(`/auth/sessions/${sessionId}`);
-}
-
-/** 已注册 OAuth2 提供方列表（公开；空数组 = 后端未启用 OAuth2，登录页不渲染入口） */
-export function fetchOAuth2Providers(): Promise<{ providers: string[] }> {
-  return request.get<{ providers: string[] }>('/auth/oauth2/providers');
 }
