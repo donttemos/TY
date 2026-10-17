@@ -72,6 +72,9 @@ async function startServer(port, env) {
       CACHE_FAIL_OPEN: 'false',
       CACHE_LOCK_TTL: '30',
       DEMO_ENDPOINTS_ENABLED: 'true',
+      // 放宽 grace 至 30s：CI 慢盘上 20 并发轮换实测 ~10s，会撞默认 10s 窗口边界；
+      // 本脚本考的是「并发下唯一 replacement」，不是窗口边界本身（边界由 auth 包单测锁）
+      AUTH_REFRESH_GRACE_SECONDS: '30',
       MQ_DRIVER: 'memory',
       ...env,
     },
