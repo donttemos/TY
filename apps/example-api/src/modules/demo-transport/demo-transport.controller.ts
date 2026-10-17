@@ -6,10 +6,12 @@
  *   框架自检路由，不承载业务数据。
  * @author donttemo
  * @created 2026-10-14
+ * @modified 2026-10-17 donttemo M12 W3（PRD-012 OBS-16）：演示自检端点默认非 dev 404（DemoEndpointsGuard）
  * @module example-api/demo-transport
  */
 
-import { Body, Controller, Get, Inject, Post } from '@nestjs/common';
+import { Body, Controller, Get, Inject, Post, UseGuards} from '@nestjs/common';
+import { DemoEndpointsGuard } from '../../common/demo-endpoints.guard.js';
 import { Public } from '@fw/auth';
 import { BizError, ErrorCode } from '@fw/core';
 import {
@@ -33,6 +35,7 @@ export interface EchoCallResult extends EchoResponse {
  */
 @Public()
 @Controller('/api/v1/demo-transport')
+@UseGuards(DemoEndpointsGuard)
 export class DemoTransportController {
   /**
    * @param echo 回显端口（传输代理，与驱动无关）

@@ -8,12 +8,15 @@
  *   200 状态由 Nest GET 语义保证（方法不抛错即 200）；真实三方言行为由集成矩阵覆盖。
  * @author donttemo
  * @created 2026-10-16
+ * @modified 2026-10-17 donttemo M12 W3（PRD-012 OBS-15/18）：maintenance 收敛断言 + 快照公共字段集锁定
  * @module example-api/auth
  */
 
 import { describe, expect, it } from 'vitest';
 import { JWT_CURRENT_KID, JWT_PREVIOUS_KID, MemoryAuthStore } from '@fw/auth';
 import { MaintenanceController } from './maintenance.controller.js';
+import { AuthMaintenanceJobs } from './auth-maintenance.js';
+import { AuditArchiveJobs } from './audit-archive.jobs.js';
 import { RefreshTokenService, TokenService } from '@fw/auth';
 
 const SECRET = 'contract-secret-0123456789abcdef0123456789abcdef';
@@ -125,8 +128,43 @@ describe('M11.5-final-01：/auth-maintenance/key-ring 契约（ADR-0024 决策 3
     expect(Reflect.getMetadata('method', methodMeta)).toBe(0); // RequestMethod.GET
     const headers = Reflect.getMetadata('__headers__', methodMeta) as Array<{ name: string; value: string }>;
     expect(headers).toContainEqual({ name: 'Cache-Control', value: 'no-store' });
-    // @Public() 在类级（与 refresh-cleanup/audit-archive 先例一致），无需重复断言权限面
     void JWT_CURRENT_KID;
     void JWT_PREVIOUS_KID;
+  });
+});
+
+describe('M12 W3 · maintenance 安全边界与快照契约（OBS-15/18，ADR-0027）', () => {
+  it('反向验证：类级 @Public 已移除、三条路由收敛为 ops:read 守卫 + 全端点 no-store', () => {
+    // ① 类级不再有 @Public 元数据（默认受保护，公开需显式白名单 + 理由）
+    expect(Reflect.getMetadata('fw:auth:public', MaintenanceController)).toBeUndefined();
+    // ② 类级 @Permissions = ['ops:read']（PERM.OPS_READ）
+    const perms = Reflect.getMetadata('fw:auth:permissions', MaintenanceController) as string[] | undefined;
+    expect(perms).toEqual(['ops:read']);
+    // ③ 三条路由全部 no-store（此前仅 key-ring 有）
+    for (const method of ['refreshCleanup', 'auditArchive', 'keyRing'] as const) {
+      const headers = Reflect.getMetadata('__headers__', MaintenanceController.prototype[method]) as
+        | Array<{ name: string; value: string }>
+        | undefined;
+      expect(headers, `${method} 应有 no-store`).toBeDefined();
+      expect(headers).toContainEqual({ name: 'Cache-Control', value: 'no-store' });
+    }
+  });
+
+  it('快照公共字段集统一：{ name, expression, enabled, runs, lastRunAt, lastDurationMs, lastError } + 各自特有段', () => {
+    const COMMON = ['name', 'expression', 'enabled', 'runs', 'lastRunAt', 'lastDurationMs', 'lastError'];
+    const store = new MemoryAuthStore();
+    const tokens = new TokenService({ secret: SECRET, accessTtlSeconds: 900, refreshTtlSeconds: 604800 });
+    const refresh = new RefreshTokenService(store, tokens, 10, true);
+    const refreshSnapshot = new AuthMaintenanceJobs(refresh).snapshot();
+    expect(Object.keys(refreshSnapshot)).toEqual(expect.arrayContaining(COMMON));
+    expect(typeof refreshSnapshot.enabled).toBe('boolean');
+    // 特有段：lastCutoff / lastRemoved / lastCiphersCleared
+    expect(Object.keys(refreshSnapshot)).toEqual(expect.arrayContaining(['lastCutoff', 'lastRemoved', 'lastCiphersCleared']));
+
+    const archiveSnapshot = new AuditArchiveJobs({ runOnce: async () => ({ archived: 0, batches: 0 }), counts: async () => ({ online: 0, archived: 0 }) } as never).snapshot();
+    expect(Object.keys(archiveSnapshot)).toEqual(expect.arrayContaining(COMMON));
+    expect(typeof archiveSnapshot.enabled).toBe('boolean');
+    // 特有段：retentionDays / batchSize / lastCutoff / lastArchived / lastCounts
+    expect(Object.keys(archiveSnapshot)).toEqual(expect.arrayContaining(['retentionDays', 'batchSize', 'lastArchived', 'lastCounts']));
   });
 });

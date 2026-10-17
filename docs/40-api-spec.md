@@ -20,6 +20,8 @@
 >（归档异步导出）两端点——审计归档策略的冷数据出口，数据范围与排序白名单同源收敛；归档本体为定时任务
 > `audit.archive`（@fw/queue cron + 分布式锁，不占 API 面），运行快照见 `GET /auth-maintenance/audit-archive`。
 >
+> **`/api/v1/auth-maintenance/*` 三端点（M12 W3 OBS-15/18，ADR-0027）**：由类级 `@Public` 收敛为 **`ops:read` 权限守卫**（未登录 `3001` / 无权限 `3002`），三端点统一 `Cache-Control: no-store`；零敏感契约不变（key-ring 仅 kid/来源/计数）。任务快照公共字段集冻结：`{ name, expression, enabled, runs, lastRunAt, lastDurationMs, lastError }` + 各自特有段（契约测试锁定）。运维端点全量普查矩阵见 [docs/46](./46-ops-endpoints.md)。
+>
 > 变更记录：2026-10-15 donttemo M10 E-03：业务 API 框架级限流默认开启（令牌桶按 IP，G5 兑现）——未豁免路由超限返回
 > `429/9003`（RATE_LIMITED，既有错误码段）+ `Retry-After` 头；豁免白名单 `RATE_LIMIT_WHITELIST`（默认 health/ready/metrics）；
 > 灰度 `RATE_LIMIT_DRY_RUN` 仅计数不拦截；计数进 `/metrics` 的 `fw_rate_limit_*` 段。redis 驱动下桶跨实例共享（Lua 原子）。

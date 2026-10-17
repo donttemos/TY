@@ -35,6 +35,7 @@
 | [0024](./0024-key-observability.md) | M11.5 Key Ring 可观测性：稳定 kid（secret 指纹派生，兼容回退）+ 密钥运维端点（retirable 判据）+ 安全事件审计口径 | 已采纳（2026-10-16） | 后端 |
 | [0025](./0025-unified-error-audit-contract.md) | M12 W1 统一错误与审计事件契约：错误三类治理（①继承 BizError / ②内部信号禁上浮 / ③fail-fast）+ 判别符≠错误码 + `audit_logs` 软增列六列（category/event/result/family_id/jti/request_id）+ replay 安全事件九要素 | 已采纳（2026-10-17） | 后端 / 前端契约 |
 | [0026](./0026-observability-id-layering.md) | M12 W2 可观测 ID 分层与贯穿：requestId(单请求) vs traceId(跨服务) 分层 / ALS 扩展（familyId/jti）+ logger 自动身份 / fw_auth_*·fw_security_* 指标段与基数护栏 / 审计检索键扩展 | 已采纳（2026-10-17） | 后端 / 前端契约 |
+| [0027](./0027-ops-endpoints-boundary.md) | M12 W3 运维端点安全边界：三层模型（Public 自检 / Protected maintenance / 业务公开面）+ 默认受保护原则 + OQ-4 定案权限码 ops:read（OPS_TOKEN 备选未启用）+ demo 自检面非 dev 404 + Nginx 三份一致性轴 | 已采纳（2026-10-17） | 后端 / 部署 |
 
 ## 模板
 

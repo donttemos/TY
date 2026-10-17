@@ -9,6 +9,7 @@
  *   最近一次运行快照经 MaintenanceController 暴露；手动触发走 demo-queue 的 cron-tick。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-17 donttemo M12 W3（PRD-012 OBS-18）：快照公共字段集统一（补 enabled/lastDurationMs）
  * @module example-api/auth
  */
 
@@ -32,6 +33,8 @@ export interface AuditArchiveSnapshot {
   name: string;
   /** cron 表达式 */
   expression: string;
+  /** 任务调度是否启用（MQ_CRON_ENABLED；OBS-18 公共字段集） */
+  enabled: boolean;
   /** 当前生效的保留天数 */
   retentionDays: number;
   /** 当前生效的单批条数 */
@@ -40,6 +43,8 @@ export interface AuditArchiveSnapshot {
   runs: number;
   /** 最近一次运行时间（ISO；未运行过为 null） */
   lastRunAt: string | null;
+  /** 最近一次运行耗时（毫秒；OBS-18 公共字段集统一，未运行过为 null） */
+  lastDurationMs: number | null;
   /** 最近一次迁移截止线（早于该时间的记录迁入归档表，ISO） */
   lastCutoff: string | null;
   /** 最近一次迁出在线表的条数 */
@@ -65,6 +70,8 @@ export class AuditArchiveJobs {
 
   private lastCounts: { online: number; archived: number } | null = null;
 
+  private lastDurationMs: number | null = null;
+
   private lastError: string | null = null;
 
   constructor(private readonly archive: AuditArchiveService) {}
@@ -79,10 +86,12 @@ export class AuditArchiveJobs {
     this.runs += 1;
     this.lastRunAt = new Date().toISOString();
     this.lastCutoff = cutoff.toISOString();
+    const startedAt = Date.now();
     try {
       const result: AuditArchiveRunResult = await this.archive.runOnce({ cutoff, batchSize });
       this.lastArchived = result.archived;
       this.lastCounts = await this.archive.counts();
+      this.lastDurationMs = Date.now() - startedAt;
       this.lastError = null;
       logger.info('审计归档定时任务完成', {
         cutoff: this.lastCutoff,
@@ -94,6 +103,7 @@ export class AuditArchiveJobs {
     } catch (error) {
       // 归档失败不影响业务：在线数据未动（先写后删的 fail-closed），保留错误快照等待下次调度
       this.lastError = error instanceof Error ? error.message : String(error);
+      this.lastDurationMs = Date.now() - startedAt;
       logger.error('审计归档定时任务失败', { cutoff: this.lastCutoff, error: this.lastError });
     }
   }
@@ -103,10 +113,12 @@ export class AuditArchiveJobs {
     return {
       name: AUDIT_ARCHIVE_CRON_NAME,
       expression: AUDIT_ARCHIVE_CRON_EXPRESSION,
+      enabled: loadEnv().MQ_CRON_ENABLED,
       retentionDays: loadEnv().AUDIT_ARCHIVE_RETENTION_DAYS,
       batchSize: loadEnv().AUDIT_ARCHIVE_BATCH_SIZE,
       runs: this.runs,
       lastRunAt: this.lastRunAt,
+      lastDurationMs: this.lastDurationMs,
       lastCutoff: this.lastCutoff,
       lastArchived: this.lastArchived,
       lastCounts: this.lastCounts,

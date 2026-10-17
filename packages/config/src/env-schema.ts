@@ -107,6 +107,8 @@ export const envSchema = z.object({
   REQUEST_ID_HEADER: optionalString().describe('requestId 头名（REQUEST_ID_HEADER，默认 X-Request-Id）'),
   /** auth/security 指标段开关（M12 W2 OBS-12） */
   METRICS_AUTH_SECTION_ENABLED: boolString(true).describe('fw_auth_*/fw_security_* 指标段开关（METRICS_AUTH_SECTION_ENABLED）'),
+  /** 演示自检控制器开关（M12 W3 OBS-16）：未设置按 APP_ENV/NODE_ENV 判定（dev 开，其余关） */
+  DEMO_ENDPOINTS_ENABLED: optionalString().describe('demo* 自检控制器开关（DEMO_ENDPOINTS_ENABLED；未设置时 dev 开 / 其余关）'),
   /** 数据库驱动 */
   DB_DRIVER: z.enum(DB_DRIVER_VALUES).default('sqlite').describe('数据库驱动'),
   /** 数据库连接串 */
@@ -338,6 +340,7 @@ export const ENV_KEY_PATHS = {
   REQUEST_ID_ENABLED: 'request.idEnabled',
   REQUEST_ID_HEADER: 'request.header',
   METRICS_AUTH_SECTION_ENABLED: 'metrics.authSectionEnabled',
+  DEMO_ENDPOINTS_ENABLED: 'demo.endpointsEnabled',
   DB_DRIVER: 'db.driver',
   DB_URL: 'db.url',
   DB_SLOW_MS: 'db.slowMs',
@@ -452,6 +455,8 @@ export const ENV_HOT_KEYS = {
   'request.idEnabled': 'REQUEST_ID_ENABLED',
   'request.header': 'REQUEST_ID_HEADER',
   'metrics.authSectionEnabled': 'METRICS_AUTH_SECTION_ENABLED',
+  // demo.endpointsEnabled 不入热更白名单：守卫直读 process.env（与 traceMiddleware 同款），
+  // 配置中心热更只改内存 Env 视图，登记会造成「热更成功但不生效」的误导（fail-safe：不登记即不可热更）
   'cache.ttl': 'CACHE_TTL',
   'cache.nullTtl': 'CACHE_NULL_TTL',
   'cache.ttlJitter': 'CACHE_TTL_JITTER',

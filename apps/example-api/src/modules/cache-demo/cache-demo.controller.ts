@@ -6,10 +6,12 @@
  *   与 demo 模块一致整体标 @Public()：框架自检路由，不承载业务数据。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo M12 W3（PRD-012 OBS-16）：演示自检端点默认非 dev 404（DemoEndpointsGuard）
  * @module example-api/cache-demo
  */
 
-import { Controller, Get, Post, Query } from '@nestjs/common';
+import { Controller, Get, Post, Query, UseGuards} from '@nestjs/common';
+import { DemoEndpointsGuard } from '../../common/demo-endpoints.guard.js';
 import { Public } from '@fw/auth';
 import { CacheDemoService } from './cache-demo.service.js';
 
@@ -18,6 +20,7 @@ import { CacheDemoService } from './cache-demo.service.js';
  */
 @Public()
 @Controller('/api/v1/demo-cache')
+@UseGuards(DemoEndpointsGuard)
 export class CacheDemoController {
   constructor(private readonly service: CacheDemoService) {}
 

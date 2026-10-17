@@ -1,6 +1,6 @@
 {
   "name": "@fw/transport",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "description": "微服务传输层：统一调用端口、in-process/redis 双驱动、@TransportHandler 声明式注册与客户端代理，切换不改调用方代码（PRD-008 FR-06）",
   "type": "module",
   "main": "./dist/index.js",

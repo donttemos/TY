@@ -25,6 +25,12 @@ export const META_IGNORE_TENANT = 'fw:ignore-tenant';
 /** 内置权限码（PRD-003 §3.2 / §3.3 / §3.4） */
 export const PERM = {
   TENANT_IGNORE: 'system:tenant:ignore',
+  /**
+   * 运维快照读取（M12 W3 OBS-15，ADR-0027）：/api/v1/auth-maintenance/* 三端点的守卫权限。
+   * maintenance 默认受保护、公开需显式白名单（OQ-4 定案：权限码方案，复用 RBAC 与审计链路；
+   * OPS_TOKEN 逃生门登记 ADR-0027 备选未启用）。无对应菜单——运维端点非页面能力。
+   */
+  OPS_READ: 'ops:read',
   /** 登出 */
   AUTH_LOGOUT: 'auth:logout',
   /** 当前用户资料 */

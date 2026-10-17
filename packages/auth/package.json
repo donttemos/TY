@@ -1,6 +1,6 @@
 {
   "name": "@fw/auth",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "description": "鉴权与权限：双 token 轮换、RBAC 守卫、多认证策略、审计日志与登录加固（PRD-003）",
   "type": "module",
   "main": "./dist/index.js",

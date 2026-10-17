@@ -1,6 +1,6 @@
 {
   "name": "@fw/core",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "description": "核心模块：错误码、统一响应、全局异常过滤、traceId、健康检查、优雅停机、启动引导",
   "type": "module",
   "main": "./dist/index.js",

@@ -4,7 +4,7 @@
  *   BizError 承载 code/message/traceId/details；错误码 → 用户可读提示与后续动作（是否静默刷新、是否跳登录）。
  *   与后端错误码表同源，新增码只允许加枚举，不允许改语义。
  * @author donttemo
- *  * @modified 2026-10-17 donttemo M12 W2（PRD-012 OBS-09）：BizError 增 requestId（additive）
+ * @modified 2026-10-17 donttemo M12 W2（PRD-012 OBS-09）：BizError 增 requestId（additive）
  * @created 2026-10-17
  * @module __APP_NAME__-web/utils
  */

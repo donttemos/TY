@@ -1,6 +1,6 @@
 {
   "name": "@fw/config",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "description": "配置模块：zod 校验 .env、类型安全读取、多环境覆盖",
   "type": "module",
   "main": "./dist/index.js",

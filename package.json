@@ -1,6 +1,6 @@
 {
   "name": "fw-monorepo",
-  "version": "0.5.5",
+  "version": "0.6.0",
   "private": true,
   "description": "通用应用框架 monorepo：框架包 + 应用 + 项目模板",
   "packageManager": "pnpm@11.6.0",

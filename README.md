@@ -80,6 +80,8 @@ framework/
     30-data-dictionary.md     # ER 图与数据字典
     40-api-spec.md            # API 文档
     41-auth-strategies.md     # 认证策略端到端指南（OAuth2 授权码 / API Key 签名约定）
+    45-observability-contract.md # 可观测与错误契约手册（M12：错误信封 / 双 ID / 指标段 / 排障样例）
+    46-ops-endpoints.md       # 运维端点安全边界矩阵（M12：三层边界 / demo 开关）
     50-test-cases.md          # 测试用例
     60-deployment-ops.md      # 部署与运维手册
     61-bare-metal-deploy.md   # 云服务器裸机部署手册（宿主 nginx，无容器）
@@ -88,6 +90,7 @@ framework/
     70-engineering-standards.md # 编码 / Git / PR 规范
     80-project-plan.md        # 项目计划与任务板
     85-parallel-workstreams.md # 并行开发工作线划分（契约 / 所有权 / 集成点）
+    90-release-v0.6.0.md      # v0.6.0 发布验收报告（M11 五阶段成版 + M12 W1~W3 + cache 修复 13 项）
     90-release-v0.5.5.md      # v0.5.5 发布验收报告（M10 P2/P3 成版：E-08~E-17 + PRD-011 立项 + 驱动修复 26 项）
     90-release-v0.5.0.md      # v0.5.0 发布验收报告（PRD-010 P0+P1：多实例收口 + OAuth2/apikey 端到端）
     90-release-v0.4.0.md      # v0.4.0 发布验收报告（配置中心与热更新 + 管理面补齐）
@@ -151,12 +154,14 @@ fw gen crud order
 | [ER 图与数据字典](./docs/30-data-dictionary.md) | 建模约定、权限/系统/租户三域 ER 图、15 张表字段字典 |
 | [API 文档](./docs/40-api-spec.md) | 通用约定、错误码、10 类接口清单、限流与幂等、版本策略 |
 | [认证策略端到端指南](./docs/41-auth-strategies.md) | OAuth2 授权码端到端（配置 / 流程 / 反向验证清单）与 API Key 签名约定（算法 / 示例 / 路由声明） |
+| [可观测与错误契约手册](./docs/45-observability-contract.md) | 错误信封字段级契约、requestId/traceId 双 ID 分层、日志身份字段、auth/security 指标段、审计检索键与「replay 一次拉全链」排障样例（M12/PRD-012） |
+| [运维端点安全边界矩阵](./docs/46-ops-endpoints.md) | 全仓 @Public/公开路径逐条登记（必要性/暴露面/敏感度/环境约束）、三层边界模型、demo 自检面开关（M12/PRD-012） |
 | [部署与运维手册](./docs/60-deployment-ops.md) | 三档部署、配置清单、备份恢复、监控告警、故障 Runbook、升级回滚 |
 | [云服务器裸机部署手册](./docs/61-bare-metal-deploy.md) | 不用容器的服务器部署：systemd 进程托管、release 软链发版与秒级回滚、nginx 静态托管与 HTTPS、数据库档位与 provider 约束、备份监控与排障速查 |
 | [1Panel 真机部署手册](./docs/62-1panel-real-deploy.md) | 已有 1Panel 面板的服务器落地：OpenResty host 网络反代、容器化数据库的宿主端口接入、PostgreSQL schema 变体与迁移重建、2C2G 内存约束（V8 堆 + cgroup MemoryMax）、站点目录与 HTTPS |
 | [1Panel 真机部署验证报告](./docs/63-1panel-real-deploy-verification.md) | 上述手册在腾讯云 2C2G4M 上的**完整实测记录**：逐项耗时与内存数据、三条约束的实测结论、端到端冒烟结果、**5 个只有真机才会暴露的缺陷**（队列权限缺失、dedicated 租户连接串、pnpm bin 时序、迁移计数、镜像配置）与结清后的遗留清单 |
-| [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.5.5 已发布：M10 P2/P3 成版 + PRD-011 立项 + 驱动修复 26 项） |
-| [ADR 架构决策记录](./docs/adr/README.md) | 21 条决策（0001–0024，0017–0019 跳号）：NestJS / Prisma / monorepo / 缓存 / 异步任务 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 / i18n / 暗色模式 / 存储端口 / 认证核心 M11 系列 |
+| [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（v0.6.0 已发布：M11 五阶段 + M12 W1~W3 + cache 修复 13 项） |
+| [ADR 架构决策记录](./docs/adr/README.md) | 24 条决策（0001–0027，0017–0019 跳号）：NestJS / Prisma / monorepo / 缓存 / 异步任务 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 / i18n / 暗色模式 / 存储端口 / 认证核心 M11 系列 |
 | [编码 Git PR 规范](./docs/70-engineering-standards.md) | 编码规范、**中文注释规范（文件头含作者与日期）**、反模式清单、分支与提交约定、PR 与评审规则 |
 | [项目计划与任务板](./docs/80-project-plan.md) | 15 周甘特、M1–M8 WBS（40+ 任务）、任务板列与标签、当前快照 |
 | [增强功能规划](./docs/81-enhancement-roadmap.md) | v0.5.x–v0.6.x 完善项清单：多实例一致性、规模化遗留、模板生态、体验增强（E-01~E-17，含目标/收益/验收口径） |
@@ -166,6 +171,7 @@ fw gen crud order
 | [贡献指南](./CONTRIBUTING.md) | 三步上手与硬性规则入口 |
 | [PRD 索引](./docs/prd/README.md) | 迭代清单与 PRD 模板约定 |
 | PRD-001 ~ PRD-009 | 见 `docs/prd/`，每个功能 / 迭代一份 |
+| [v0.6.0 发布验收报告](./docs/90-release-v0.6.0.md) | 「M11 认证核心强化 + M12 可观测与运维边界 + @fw/cache 缺陷修复」发布记录：M11.1~11.5（ADR-0020~0024）、M12 W1~W3（ADR-0025~0027）、cache 13 项修复与双驱动契约测试、升级影响（三批迁移、reseed `ops:read`、配置键 97→120、CSV 15 列、`@Cacheable` 键升级一次性失效）、验证证据（~1500 例 + 门禁七道 + CI 矩阵）与遗留问题 |
 | [v0.5.5 发布验收报告](./docs/90-release-v0.5.5.md) | 「M10 P2/P3 在途交付整体成版」发布记录：E-08~E-17 交付清单、驱动审查修复 26 项、PRD-011 立项、升级影响（配置键 80→97、新增表 4 张、新权限点 2 个）、验证证据（1205 例 + 专项冒烟 + 静态门禁）、发布产物（commit/tag/CI）与遗留问题 |
 | [v0.5.0 发布验收报告](./docs/90-release-v0.5.0.md) | 「多实例一致性收口 + 认证策略端到端」发布门禁逐条判定（E-01~E-04/E-06/E-07 的 AC 证据）、升级影响（配置键 65→80、契约订正、零迁移零 seed）、验证证据清单（单测 + 冒烟 + 静态 4 项）、遗留问题与发布结论 |
 | [v0.4.0 发布验收报告](./docs/90-release-v0.4.0.md) | 「配置中心与热更新 + 管理面补齐」发布门禁逐条判定、升级影响（种子语义变更：新增参数配置/租户菜单与权限点）、验证证据清单（单测 + 冒烟 8 套 + 静态 4 项 + 真机）、遗留问题与发布结论 |

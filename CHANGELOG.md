@@ -2,7 +2,7 @@
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
-> **当前状态：v0.5.5 已发布（2026-10-16）** —— M10（PRD-010）P2/P3 在途交付整体成版 + PRD-011（M11）立项 + @fw/auth·cache·queue 驱动审查批量修复 26 项；配置键 80→97，全仓 15 包 + 2 应用 1205 例测试全绿后整合发版。发布记录见 [v0.5.5 发布验收报告](./docs/90-release-v0.5.5.md)，上一版见 [v0.5.0 发布验收报告](./docs/90-release-v0.5.0.md)，M1–M8 里程碑证据见 [v0.2.0 发布验收报告](docs/archive/release/90-release-v0.2.0.md)。
+> **当前状态：v0.6.0 已发布（2026-10-17）** —— **M11（PRD-011）认证核心强化全五阶段**（Rotation CAS / 双 Key Ring / Client Fingerprint / 生命周期完整性 / Key Ring 运维端点，ADR-0020~0024）+ **M12（PRD-012）可观测与运维边界 W1~W3 全部交付**（统一审计事件契约 / 错误族收敛 / 禁裸抛 / 码表单一来源 / requestId+traceId 双 ID / auth 指标段 / 运维端点三层边界，ADR-0025~0027）+ **@fw/cache 缺陷清单 13 项修复**（标签原子协议 / 锁释放语义 / SHA-256 键哈希 / WRONGTYPE 对齐 / 限流防御纵深 + 双驱动契约测试）；新增门禁 `check-no-raw-throw` 与 `check-triway-consistency`（七轴）；配置键 97→120，全仓 13 包 + 2 应用测试全绿后整合发版。发布记录见 [v0.6.0 发布验收报告](./docs/90-release-v0.6.0.md)，上一版见 [v0.5.5 发布验收报告](./docs/90-release-v0.5.5.md)。
 >
 > v0.5.0（2026-10-15）：M10（PRD-010）的 P0 + P1 阶段整体成版：**多实例一致性收口**（E-01 任务中心驱动化 memory/db/bullmq 三驱动、E-02 配置中心多实例语义 + nacos 驱动转正、E-03 框架级 API 令牌桶限流默认开启、E-04 `/permissions/tree` 权限树契约落地）+ **规模化遗留**（E-06 bullmq/transport Redis Cluster 实测收口、**E-07 OAuth2 授权码端到端 + apikey 签名验签**，`AUTH_STRATEGY` 四策略名实相符）+ 遗留缺陷收口（N-03 整页 403 视图、bullmq rateLimit 热更重建、R4-05 工作台统计口径标注）；配置键 65→80，新文档 [docs/41 认证策略端到端指南](./docs/41-auth-strategies.md)。
 >
@@ -16,7 +16,16 @@
 - **来源**：需求变更先记入对应 PRD 的「变更记录」，发布时汇总到本文件。本文件只记**对外可见**的变更，内部重构不在此记录。
 - **频率**：每个发布版本一条记录；`Unreleased` 区间持续累积，发布时转为版本条目并清空。
 
-## [Unreleased]
+## [0.6.0] - 2026-10-17
+
+### Added（M12 W3 · 运维端点安全边界与暴露面收敛，ADR-0027，2026-10-17）
+
+- **OBS-15 maintenance 三层安全边界**：`/api/v1/auth-maintenance/{refresh-cleanup,audit-archive,key-ring}` 由类级 `@Public` 裸奔收敛为 **`ops:read` 权限守卫**（OQ-4 定案权限码方案，复用 RBAC/审计链路；`OPS_TOKEN` 逃生门登记 ADR-0027 备选未启用），未登录 `3001` / 无权限 `3002`；三端点统一 `Cache-Control: no-store`（此前仅 key-ring 有）；`PERM.OPS_READ` 进权威表 + example-api seed 声明 + admin 全量授权（**存量环境需 reseed 或手工补权限点**）。反向验证：契约测试元数据断言（类级无 `@Public` + `@Permissions('ops:read')` + 三端点 no-store）；部署侧 maintenance 不上公网（见 OBS-19）。
+- **OBS-16 运维端点全量普查与 demo 收敛**：新文档 **`docs/46-ops-endpoints.md`**——全仓 @Public/公开路径逐条登记（必要性/暴露面/敏感度/环境约束），三层模型（Public 自检 / Protected maintenance / 业务公开面）。`DEMO_ENDPOINTS_ENABLED` 新配置键（未设置按 `APP_ENV=dev`/`NODE_ENV=development` 判定）：`DemoEndpointsGuard` 应用到 demo*/cache-demo/demo-queue/demo-transport 四个自检控制器，**非 dev 默认 404**（不暴露存在性而非 403）；反向验证 `demo-endpoints.guard.spec.ts`（显式开关优先/dev 默认开/其余关/关闭 404）。
+- **OBS-17 健康语义文档化**：`/health`（liveness）/`/ready`（readiness）语义标签落 `docs/46` §1；**路径不重命名**（K8s 探针映射不变）；具名别名未做（无消费方，登记）。
+- **OBS-18 maintenance 快照契约统一**：任务快照公共字段集冻结 `{ name, expression, enabled, runs, lastRunAt, lastDurationMs, lastError }` + 各自特有段——additive 补 `enabled`（= `MQ_CRON_ENABLED`）与 audit-archive 的 `lastDurationMs`（此前缺）；`lastCutoff` 两任务语义同为「最近一次运行截止线」（非同义并存，保留）；契约测试锁定形状。
+- **OBS-19 部署侧边界同步**：`check:helm` 扩展 **Nginx 三份一致性轴**（65/65）——① 免鉴权探针白名单覆盖集一致（health/ready/metrics）；② **maintenance 不上公网**（三份均不得为 auth-maintenance 建立公开放行，应用层权限码为主、部署侧纵深）。**真机 1Panel 实测边界待执行**（与 AC-OBS-13 排障样例实测同批，需用户配合窗口）。
+- **新 ADR-0027**（运维端点安全边界：三层模型 / 默认受保护原则 / OQ-4 定案 / demo 收敛 / 部署侧一致性）；文档同步 `docs/40`（maintenance 口径）、`docs/46` 新建、`docs/60` §3（`DEMO_ENDPOINTS_ENABLED`）、`.env.example` ×2、README 导航、ADR 索引。**回归**：example-api 契约/守卫 spec 8 条新增全绿、config 门禁同步、helm 65/65、headers/no-raw-throw/triway 七轴全绿。
 
 ### Added（M12 W1 续 + W2 · 错误族收敛 / 禁裸抛 / 码表单一来源 / 契约测试 / Observability 贯穿，2026-10-17）
 
@@ -935,6 +944,7 @@
 |---|---|---|
 | `v0.1.0`（已发布 2026-10-13） | M1–M4：核心骨架 / 数据库抽象与三库切换 / 鉴权与 RBAC / 缓存层 | PRD-001 ~ PRD-004 |
 | `v0.2.0`（已发布 2026-10-14） | M5–M8：管理后台模板 / CRUD 生成器 / 队列与定时任务 / 多租户与规模化演进（OTel、Helm、三大演练） | PRD-005 ~ PRD-008 |
+| `v0.6.0`（已发布 2026-10-17） | M11–M12：认证核心强化五阶段（Rotation CAS / 双 Key Ring / 指纹 / 生命周期 / 运维端点）+ 可观测与运维边界（审计契约 / 错误族收敛 / 双 ID / 指标段 / 三层边界）+ @fw/cache 缺陷修复 13 项与双驱动契约测试 | PRD-011、PRD-012 |
 | 待规划 | 内容/门户模板、文件存储抽象、消息通知、开放平台网关、国际化 | PRD 索引「待规划」 |
 
 > 版本号随里程碑推进可能合并或拆分，以实际发布内容为准。

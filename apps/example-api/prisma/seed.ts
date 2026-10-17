@@ -123,6 +123,9 @@ const FRAMEWORK_PERMISSIONS: PermissionSeed[] = [
   // 真机部署修复：缺少这两点会让整个队列管理功能面对任何角色都返回 3002，必须随种子建出并授予 admin。
   { code: QUEUE_PERM_LIST, name: '队列查看', type: 'api', module: 'queue' },
   { code: QUEUE_PERM_MANAGE, name: '队列管理', type: 'api', module: 'queue' },
+  // M12 W3 OBS-15（ADR-0027）：/auth-maintenance/* 三端点由类级 @Public 收敛为 ops:read 守卫——
+  // maintenance 默认受保护，公开需显式白名单 + 理由 + 契约测试；admin 角色经全量授权自动持有。
+  { code: PERM.OPS_READ, name: '运维快照读取', type: 'api', module: 'system' },
   // M10 E-13：站内信消息中心（/api/v1/notifications 六个端点的守卫）。
   // 无对应菜单——铃铛是顶栏全局元素而非路由页；权限点仍显式成码，便于按岗授予 / 回收。
   { code: PERM.NOTIFICATION_READ, name: '消息中心', type: 'api', module: 'notification' },

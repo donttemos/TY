@@ -8,6 +8,7 @@
  *   渲染器为 Helm 子集（非完整实现），仅用于本仓离线门禁；真实集群以 helm template / install 为准。
  * @author donttemo
  * @created 2026-10-14
+ * @modified 2026-10-17 donttemo M12 W3（PRD-012 OBS-19）：Nginx 三份一致性轴（探针覆盖集 + maintenance 不上公网）
  * @module scripts
  */
 
@@ -793,6 +794,19 @@ function main() {
   const nginxConf = path.join(ROOT, 'deploy', 'nginx', 'fw.conf');
   const nginxTxt = fs.existsSync(nginxConf) ? fs.readFileSync(nginxConf, 'utf8') : '';
   check('L0 nginx 配置含 SPA 回退与 /api 反代与登录限流', nginxTxt.includes('try_files $uri $uri/ /index.html') && nginxTxt.includes('proxy_pass http://fw_api') && nginxTxt.includes('limit_req zone=fw_auth'));
+
+  // M12 W3 OBS-19（ADR-0027）：Nginx 三份配置一致性轴——免鉴权探针白名单覆盖集一致 + maintenance 不上公网
+  const nginxFiles = {
+    'fw.conf': path.join(ROOT, 'deploy', 'nginx', 'fw.conf'),
+    'fw-host.conf': path.join(ROOT, 'deploy', 'nginx', 'fw-host.conf'),
+    'fw-1panel-locations.conf': path.join(ROOT, 'deploy', 'nginx', 'fw-1panel-locations.conf'),
+  };
+  const nginxTexts = Object.fromEntries(Object.entries(nginxFiles).map(([k, f]) => [k, fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '']));
+  // ① 覆盖集一致：每份都必须覆盖 health / ready / metrics 三个免鉴权路径（形态可不同，覆盖必须等价）
+  const coverage = Object.fromEntries(Object.entries(nginxTexts).map(([k, txt]) => [k, ['health', 'ready', 'metrics'].every((p) => txt.includes(p))]));
+  check('L0 nginx 三份配置免鉴权探针白名单覆盖集一致（health/ready/metrics，OBS-19）', Object.values(coverage).every(Boolean));
+  // ② maintenance 不上公网：任何一份都不得为 auth-maintenance 建立公开放行（应用层 ops:read 守卫为主，部署侧不放大暴露面）
+  check('L0 nginx 三份配置均不含 auth-maintenance 公开放行（maintenance 不上公网，OBS-15/19）', Object.values(nginxTexts).every((txt) => !txt.includes('auth-maintenance')));
 
   const passed = results.filter((r) => r.ok).length;
   console.log(`\n=== 汇总：${passed}/${results.length} ===`);

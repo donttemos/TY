@@ -4,7 +4,7 @@
  *   调用 rememberTraceId）。前端 RUM 上报携带该值，使「前端报的错误」与「后端同请求的日志」
  *   在追踪系统里同链可见——不依赖 OTel 前端 SDK 的轻量关联方式。
  * @author donttemo
- *  * @modified 2026-10-17 donttemo M12 W2（PRD-012 OBS-09）：BizError 增 requestId（additive）
+ * @modified 2026-10-17 donttemo M12 W2（PRD-012 OBS-09）：BizError 增 requestId（additive）
  * @created 2026-10-17
  * @module admin-web/utils
  */

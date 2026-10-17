@@ -100,6 +100,7 @@
 | 请求 ID | `REQUEST_ID_ENABLED` | 否 | true | 单请求 ID 双 ID 分层开关（M12 W2 OBS-09）：`false` 回退仅 traceId（零行为差异）；`requestId` 不跨服务透传（ADR-0026） |
 | | `REQUEST_ID_HEADER` | 否 | `X-Request-Id` | 单请求 ID 头名（请求读取 + 响应回带同用）；上游合法 ULID 复用、非法值替换 |
 | 指标 | `METRICS_AUTH_SECTION_ENABLED` | 否 | true | `/metrics` 的 `fw_auth_*` / `fw_security_*` 段开关（M12 W2 OBS-12）；label 仅低基数 `result`/`reason`，身份字段禁止入 label |
+| 演示面 | `DEMO_ENDPOINTS_ENABLED` | 否 | 未设置按环境 | demo*/cache-demo/demo-queue/demo-transport 自检控制器开关（M12 W3 OBS-16）：显式 true/false 优先；未设置时 dev 开、test/prod/default **404 关闭**（默认安全，ADR-0027） |
 | 追踪 | `OTEL_ENABLED` | 否 | false | 链路追踪总开关（M8 T-M8-06）；关闭时全短路零开销 |
 | | `OTEL_SERVICE_NAME` | 否 | `fw:<APP_ENV>` | 服务名（采集端按 `service.name` 聚合）；多服务部署必须显式区分 |
 | | `OTEL_EXPORTER_URL` | 条件 | — | OTLP/HTTP 采集端点（如 `http://otel-collector:4318/v1/traces`）；`OTEL_ENABLED=true` 时**必填，缺失启动即失败**。导出形态为 OTLP/HTTP JSON |

@@ -8,10 +8,12 @@
  *   生产可用的管理面在 /api/v1/admin/queue（受 system:queue:* 权限保护）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo M12 W3（PRD-012 OBS-16）：演示自检端点默认非 dev 404（DemoEndpointsGuard）
  * @module example-api/demo-queue
  */
 
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards} from '@nestjs/common';
+import { DemoEndpointsGuard } from '../../common/demo-endpoints.guard.js';
 import { Public } from '@fw/auth';
 import { DemoQueueService } from './demo-queue.service.js';
 
@@ -20,6 +22,7 @@ import { DemoQueueService } from './demo-queue.service.js';
  */
 @Public()
 @Controller('/api/v1/demo-queue')
+@UseGuards(DemoEndpointsGuard)
 export class DemoQueueController {
   constructor(private readonly service: DemoQueueService) {}
 

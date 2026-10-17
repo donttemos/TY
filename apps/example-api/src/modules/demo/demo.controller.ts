@@ -10,7 +10,8 @@
  * @modified 2026-10-14 donttemo v0.2.0 发布：/demo/ok 自报版本由 v0.1.0 更新为 v0.2.0
  * @modified 2026-10-15 donttemo v0.5.0 发布：自报版本补更至 v0.5.0（v0.3/v0.4 两轮漏更，本次一并收口）
  */
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards} from '@nestjs/common';
+import { DemoEndpointsGuard } from '../../common/demo-endpoints.guard.js';
 import { BizError, ErrorCode } from '@fw/core';
 import { Logger } from '@fw/logger';
 import { Public } from '@fw/auth';

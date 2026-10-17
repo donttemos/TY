@@ -8,10 +8,12 @@
  *   MaintenanceController 暴露，冒烟与运维可通过 demo-queue 的 cron-tick 手动触发（仍走分布式锁）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-17 donttemo M12 W3（PRD-012 OBS-18）：快照公共字段集统一（补 enabled）
  * @module example-api/auth
  */
 
 import { Injectable } from '@nestjs/common';
+import { loadEnv } from '@fw/config';
 import { Cron } from '@fw/queue';
 import { Logger } from '@fw/logger';
 import { RefreshTokenService } from '@fw/auth';
@@ -27,6 +29,8 @@ export interface RefreshCleanupSnapshot {
   name: string;
   /** cron 表达式 */
   expression: string;
+  /** 任务调度是否启用（MQ_CRON_ENABLED；OBS-18 公共字段集） */
+  enabled: boolean;
   /** 累计触发次数（含手动触发） */
   runs: number;
   /** 最近一次运行时间（ISO；未运行过为 null） */
@@ -97,6 +101,7 @@ export class AuthMaintenanceJobs {
     return {
       name: 'auth.refresh-cleanup',
       expression: '0 3 * * *',
+      enabled: loadEnv().MQ_CRON_ENABLED,
       runs: this.runs,
       lastRunAt: this.lastRunAt,
       lastCutoff: this.lastCutoff,

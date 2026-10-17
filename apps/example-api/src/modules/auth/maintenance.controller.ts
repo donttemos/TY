@@ -1,17 +1,18 @@
 /*
  * @file 鉴权维护查询端点
- * @description GET /api/v1/auth-maintenance/refresh-cleanup —— 暴露 refresh 过期记录清理任务
- *   （auth.refresh-cleanup，M3 遗留项④）的注册信息与最近一次运行快照；
- *   GET /api/v1/auth-maintenance/audit-archive —— 暴露审计归档任务（audit.archive，M10 E-10）
- *   的配置与最近一次运行快照（保留线 / 迁移条数 / 在线与归档表行数）。框架自检路由，标 @Public()。
+ * @description GET /api/v1/auth-maintenance/{refresh-cleanup,audit-archive,key-ring} —— 三条运维快照端点。
+ *   M12 W3（PRD-012 OBS-15，ADR-0027）：由类级 @Public 裸奔收敛为 **ops:read 权限守卫**（默认受保护，
+ *   公开需显式白名单 + 理由 + 契约测试）；三个端点统一 `Cache-Control: no-store`（此前仅 key-ring 有）。
+ *   零敏感契约不变：快照只含任务元数据与计数（auth-maintenance.contract.spec.ts 锁定）。
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-15 donttemo E-10：新增审计归档任务快照端点
+ * @modified 2026-10-17 donttemo M12 W3（PRD-012 OBS-15/18）：@Public → ops:read 守卫 + 全端点 no-store + 快照公共字段集统一
  * @module example-api/auth
  */
 
 import { Controller, Get, Header, Inject } from '@nestjs/common';
-import { Public, TokenService, KeySource } from '@fw/auth';
+import { PERM, Permissions, TokenService, KeySource } from '@fw/auth';
 import type { AuthStore } from '@fw/auth';
 import { AUTH_STORE } from '@fw/auth';
 import { AuthMaintenanceJobs, type RefreshCleanupSnapshot } from './auth-maintenance.js';
@@ -34,8 +35,9 @@ export interface KeyRingSnapshot {
 
 /**
  * 鉴权维护控制器：路径前缀 /api/v1/auth-maintenance
+ * 守卫：需 ops:read（PERM.OPS_READ）；未登录 3001 / 无权限 3002（反向验证见契约测试元数据断言）。
  */
-@Public()
+@Permissions(PERM.OPS_READ)
 @Controller('/api/v1/auth-maintenance')
 export class MaintenanceController {
   constructor(
@@ -47,12 +49,14 @@ export class MaintenanceController {
 
   /** refresh 过期清理任务快照 */
   @Get('refresh-cleanup')
+  @Header('Cache-Control', 'no-store')
   refreshCleanup(): RefreshCleanupSnapshot {
     return this.jobs.snapshot();
   }
 
   /** 审计归档任务快照（M10 E-10） */
   @Get('audit-archive')
+  @Header('Cache-Control', 'no-store')
   auditArchive(): AuditArchiveSnapshot {
     return this.archiveJobs.snapshot();
   }
