@@ -18,6 +18,10 @@
 
 ## [Unreleased]
 
+### Known issues（登记，2026-10-18）
+
+- **`/ready` 的 db 就绪探针是启动期一次性标志，非实时探测**（独立修复项，与 Redis 双节点验收无关，登记见 `docs/96-db-readiness-probe-issue.md`）：`createDbReadinessProbe.check()` 直接返回 `markConnected()` 的启动期布尔——启动时 DB 不可达则恢复后仍永久 `db:fail`（须重启）；运行期断连却仍报 `db:ok`。同场景 cache/queue/transport 探针为实时 ping，语义不一致。建议修法：带 1~2s 超时的实时 `SELECT 1` 探测 + 连续失败 N 次翻转（防抖）。
+
 ### Added（双进程双节点一致性冒烟入 CI，2026-10-18）
 
 - **`smoke-dual-node.mjs` 进 CI base 作业**：把《Redis 多实例测试.md》真机方案（Windows↔云 30/30）的协议层断言固化为门禁——脚本自起 A/B 两个实例（3100/3101，可 `DUAL_PORT_A/B` 改），共享同一 Redis service、同一 SQLite 库与同一 `CACHE_PREFIX`，验证：T2 缓存跨实例读写与标签失效（B 命中 A 写入的缓存、B 失效后 A 回源、重建后键↔索引无孤儿）；T3 跨实例锁互斥；T4 锁 TTL 过期与旧令牌保护（旧句柄 renew/release 不伤害新持有者）；T5.1 同一旧 refresh token 经 A/B 并发刷新 ⇒ 唯一 replacement（grace + 同 UA 指纹）；`DUAL_INCLUDE_REPLAY=1` 追加 T5.2 过期 replay → family revoke（含 11s grace 等待）。未设 `DUAL_REDIS_URL` 时整脚本 SKIP；`DUAL_A/DUAL_B` 可切换为「驱动既有实例」模式（真机跨机器复跑用，不再需要本地专属 harness）。本地实测 17/17 通过。

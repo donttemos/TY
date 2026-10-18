@@ -98,6 +98,7 @@ framework/
     94-redis-cluster-live-test.md # L-04 收口：Redis Cluster 真机实跑实测记录
     94b-queue-transport-cluster-live-test.md # E-06 收口：bullmq/transport 在 Redis Cluster 上的实跑实测
     95-doc-audit.md           # 文档一致性核对报告
+    96-db-readiness-probe-issue.md # 修复项登记：/ready 的 db 就绪探针为启动期一次性标志（非实时探测）
     99-admin-web-enhancement-and-fixes.md # 管理后台前端功能补充与缺陷修复方案
     adr/                      # 架构决策记录 0001–0015
     prd/                      # 按功能 / 迭代拆分的 PRD
@@ -172,6 +173,7 @@ fw gen crud order
 | [PRD 索引](./docs/prd/README.md) | 迭代清单与 PRD 模板约定 |
 | PRD-001 ~ PRD-009 | 见 `docs/prd/`，每个功能 / 迭代一份 |
 | [v0.6.0 发布验收报告](./docs/90-release-v0.6.0.md) | 「M11 认证核心强化 + M12 可观测与运维边界 + @fw/cache 缺陷修复」发布记录：M11.1~11.5（ADR-0020~0024）、M12 W1~W3（ADR-0025~0027）、cache 13 项修复与双驱动契约测试、升级影响（三批迁移、reseed `ops:read`、配置键 97→120、CSV 15 列、`@Cacheable` 键升级一次性失效）、验证证据（~1500 例 + 门禁七道 + CI 矩阵）与遗留问题 |
+| [修复项：db 就绪探针非实时](./docs/96-db-readiness-probe-issue.md) | 独立登记（P2，不混入 Redis 双节点验收）：`/ready` 的 db 探针是启动期一次性标志，启动失败后恢复仍报 fail、运行期断连仍报 ok；证据、根因（`createDbReadinessProbe`）、建议修法（带超时实时探测 + 防抖）与验收标准 |
 | [v0.5.5 发布验收报告](./docs/90-release-v0.5.5.md) | 「M10 P2/P3 在途交付整体成版」发布记录：E-08~E-17 交付清单、驱动审查修复 26 项、PRD-011 立项、升级影响（配置键 80→97、新增表 4 张、新权限点 2 个）、验证证据（1205 例 + 专项冒烟 + 静态门禁）、发布产物（commit/tag/CI）与遗留问题 |
 | [v0.5.0 发布验收报告](./docs/90-release-v0.5.0.md) | 「多实例一致性收口 + 认证策略端到端」发布门禁逐条判定（E-01~E-04/E-06/E-07 的 AC 证据）、升级影响（配置键 65→80、契约订正、零迁移零 seed）、验证证据清单（单测 + 冒烟 + 静态 4 项）、遗留问题与发布结论 |
 | [v0.4.0 发布验收报告](./docs/90-release-v0.4.0.md) | 「配置中心与热更新 + 管理面补齐」发布门禁逐条判定、升级影响（种子语义变更：新增参数配置/租户菜单与权限点）、验证证据清单（单测 + 冒烟 8 套 + 静态 4 项 + 真机）、遗留问题与发布结论 |

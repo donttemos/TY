@@ -699,3 +699,47 @@ Refresh grace:        10s（默认）
   - 门控：未设 `DUAL_REDIS_URL` 整脚本 SKIP（本地默认形态）。
 - 依赖解析改为零硬编码：`@fw/cache` 走 `import.meta.resolve` + 动态 import（其 `exports` 只有 `import` 条件，CJS `require.resolve` 不可用），`ioredis` 以其入口为基准 `createRequire`。
 - 本机验证：17/17 通过（20 并发刷新 394ms、唯一 replacement）。
+
+---
+
+## 12. 按当前脚本重跑真机（2026-10-18 18:40，SHA `c192885`，20/20 PASS）
+
+> 不沿用旧 SHA 记录：两端固定到 **`c192885`**（含 `smoke-dual-node.mjs` 的复用模式与 `DUAL_PREFIX` 修复），
+> 由同一脚本以**复用既有实例模式**驱动（`DUAL_A/DUAL_B/DUAL_REDIS_URL/DUAL_PREFIX`），非自起模式。
+
+### 12.1 环境
+
+```
+TY commit SHA:        c192885545c9279f009ef0a9ffd2566570fae87b（两端一致）
+Redis:                8.10.2 容器 DB15（生产 DB0 未碰）；PG 18.6 fw_dual_test（生产 fw 未碰）
+CACHE_PREFIX:         fw:dual-node-it；CACHE_FAIL_OPEN=false
+模式:                 DUAL_A=http://127.0.0.1:3000 DUAL_B=http://127.0.0.1:13001（经隧道）
+脚本:                 apps/example-api/scripts/smoke-dual-node.mjs（DUAL_INCLUDE_REPLAY=1 含 T5.2）
+```
+
+### 12.2 结果
+
+| 项 | 结果 |
+|---|---|
+| T1 两节点同一 Redis | **PASS**（A 经隧道写 `ty:dual:probe=from-A-c192885` → 云端本机读到同值） |
+| T2 缓存跨实例 + 标签失效 | **PASS 5/5** |
+| T3 跨实例锁互斥 | **PASS 3/3** |
+| T4 TTL 与旧令牌保护 | **PASS 6/6** |
+| T5.1 并发刷新唯一 replacement | **PASS 2/2**（20 并发 **727ms**，unique=1） |
+| T5.2 过期 replay → family revoke | **PASS 3/3** |
+| **合计** | **20/20 全 PASS**（同脚本同断言，真机拓扑） |
+
+### 12.3 脚本侧修正（本轮）
+
+- 复用模式（`DUAL_A/DUAL_B`）原先用随机 `CACHE_PREFIX` 做键断言与清场，与既有实例真实前缀不匹配 → 新增 `DUAL_PREFIX` 显式指定（提交 `c192885`）。
+- 复跑命令模板（真机）：
+  ```bash
+  DUAL_A=http://127.0.0.1:3000 DUAL_B=http://127.0.0.1:13001 \
+  DUAL_REDIS_URL='redis://:<密码>@127.0.0.1:16379/15' \
+  DUAL_PREFIX=fw:dual-node-it DUAL_INCLUDE_REPLAY=1 \
+  node scripts/smoke-dual-node.mjs
+  ```
+
+### 12.4 顺带登记（独立项，不混入本验收）
+
+`/ready` 的 db 探针为启动期一次性标志（非实时探测）——本轮实测再次复现两个方向的失真。已作为**单独修复项**登记：`docs/96-db-readiness-probe-issue.md`（P2，含证据/根因/修法/验收标准），与本 Redis 双节点验收解耦。
