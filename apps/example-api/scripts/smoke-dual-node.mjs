@@ -27,7 +27,11 @@ const REUSE_MODE = !!(process.env.DUAL_A && process.env.DUAL_B);
 const BASE_A = process.env.DUAL_A ?? `http://127.0.0.1:${PORT_A}`;
 const BASE_B = process.env.DUAL_B ?? `http://127.0.0.1:${PORT_B}`;
 const REDIS_URL = process.env.DUAL_REDIS_URL;
-const PREFIX = `smoke-dual-${Date.now().toString(36)}`;
+/**
+ * CACHE_PREFIX：自起模式下用随机前缀（避免与既有键混）；复用模式（DUAL_A/DUAL_B）下
+ * 两实例的 CACHE_PREFIX 由启动方决定，必须用 DUAL_PREFIX 指认真实前缀，否则键断言与清场都会打空。
+ */
+const PREFIX = process.env.DUAL_PREFIX ?? `smoke-dual-${Date.now().toString(36)}`;
 const CONCURRENCY = Number(process.env.DUAL_CONCURRENCY ?? 20);
 const INCLUDE_REPLAY = process.env.DUAL_INCLUDE_REPLAY === '1';
 /** 同 UA：轮换 grace 重试绑定赢家指纹，异 UA 会被判 replay（ADR-0022） */
