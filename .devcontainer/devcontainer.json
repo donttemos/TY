@@ -1,0 +1,35 @@
+{
+  "name": "TY 通用网站框架（M13 开发容器）",
+  "image": "node:22.22.2-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22.22.2"
+    }
+  },
+  "postCreateCommand": "corepack enable && corepack prepare pnpm@11.6.0 --activate && pnpm install --frozen-lockfile && pnpm --filter @fw/db exec prisma generate --schema prisma/test-schema.prisma && DB_URL=\"file:./dev.db\" pnpm --filter example-api exec prisma generate --schema prisma/schema.prisma",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "Vue.volar",
+        "EditorConfig.EditorConfig",
+        "Prisma.prisma"
+      ],
+      "settings": {
+        "editor.formatOnSave": true
+      }
+    }
+  },
+  "forwardPorts": [3000, 3300, 3400, 3600, 3700],
+  "portsAttributes": {
+    "3000": { "label": "example-api" },
+    "3300": { "label": "smoke-tenant（冒烟专用）" },
+    "3400": { "label": "transport 冒烟（in-process/redis）" },
+    "3600": { "label": "admin-web dev" },
+    "3700": { "label": "mock server" }
+  },
+  "remoteEnv": {
+    "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0"
+  }
+}

@@ -88,7 +88,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.22.2
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
@@ -107,7 +107,7 @@ jobs:
           # Prisma.InputJsonValue / Prisma.DbNull 不存在。DB_URL 仅占位，generate 不连库。
           DB_URL="file:./dev.db" pnpm --filter example-api exec prisma generate --schema prisma/schema.prisma
           # 顺序即依赖序：config-center 依赖 config/logger/core，必须排在其后（干净环境无预热 dist）
-          for pkg in @fw/config @fw/logger @fw/core @fw/config-center @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/tenant @fw/transport @fw/telemetry @fw/storage; do
+          for pkg in @fw/config @fw/logger @fw/core @fw/config-center @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/saas @fw/tenant @fw/transport @fw/telemetry @fw/storage; do
             pnpm --filter $pkg run build
           done
           pnpm --filter example-api run build
@@ -117,7 +117,7 @@ jobs:
       # @fw/cli 的生成器测试自带临时工程与回滚断言（PRD-006 FR-07/08），不依赖真实数据库
       - name: 单元测试（SQLite）
         run: |
-          for pkg in @fw/config @fw/logger @fw/core @fw/config-center @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/tenant @fw/transport @fw/telemetry @fw/storage; do
+          for pkg in @fw/config @fw/logger @fw/core @fw/config-center @fw/db @fw/auth @fw/cache @fw/cli @fw/queue @fw/saas @fw/tenant @fw/transport @fw/telemetry @fw/storage; do
             pnpm --filter $pkg run test:coverage
           done
 
@@ -215,6 +215,13 @@ jobs:
         working-directory: apps/example-api
         run: node scripts/smoke-tenant.mjs
 
+      # M13 SaaS 运营闭环端到端冒烟（PRD-013 G13-1，ADR-0029~0031）：开通 → 限额 4029 → 幂等去重
+      # → 冻结 4031（业务入口）→ 恢复 → 注销 + fw_saas_* 指标段；前置数据由脚本直写 dev.db
+      # （配额字典 + default 套餐配额项；种子权限点已随 db:seed 步骤写入）
+      - name: M13 SaaS 运营闭环端到端冒烟（SQLite）
+        working-directory: apps/example-api
+        run: node scripts/smoke-saas-ops.mjs
+
       # M8 传输层切换端到端冒烟：in-process 往返/统计/就绪探针/错误传播 + 配置守卫（PRD-008 FR-06 / TC-TNT-005）
       # 脚本自带服务生命周期（端口 3400/3401，分阶段以不同 TRANSPORT_* 配置起停）；
       # redis 阶段（单进程往返/双进程跨进程/超时 fail-fast）需 SMOKE_REDIS_URL，未设置则跳过
@@ -311,7 +318,7 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.22.2
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 

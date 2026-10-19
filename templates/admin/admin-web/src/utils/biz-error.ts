@@ -22,6 +22,12 @@ export const BIZ_CODE = {
   TOKEN_EXPIRED: 3003,
   ACCOUNT_LOCKED: 3004,
   TENANT_INVALID: 4001,
+  /** 配额已达上限（M13/ADR-0030：details 带 metricKey 与升级指引） */
+  QUOTA_EXCEEDED: 4029,
+  /** 非法生命周期迁移（M13/ADR-0031） */
+  LIFECYCLE_TRANSITION_INVALID: 4030,
+  /** 租户已冻结或终止（M13/ADR-0031） */
+  TENANT_SUSPENDED: 4031,
   /** 该配置键不可热更新（M9/PRD-009：boot 键或不在白名单） */
   CONFIG_NOT_HOT: 5001,
   /** 配置新值非法（M9/PRD-009：details 带原因） */

@@ -584,3 +584,52 @@ export interface NotificationCreatedPayload {
   ownerId: string;
   notification: NotificationView;
 }
+
+// ===== M13 SaaS 运营（api-spec §3.21；与 @fw/saas 领域视图同构，BigInt 值后端转 string） =====
+
+/** 套餐定义（GET /saas/plans） */
+export interface PlanView {
+  id: string;
+  code: string;
+  name: string;
+  description: string | null;
+}
+
+/** 套餐版本（发布后不可变） */
+export interface PlanVersionView {
+  id: string;
+  planId: string;
+  version: number;
+  status: 'draft' | 'published' | 'deprecated';
+  remark: string | null;
+  publishedAt: string | null;
+}
+
+/** 租户订阅（一租户至多一个 active） */
+export interface SubscriptionView {
+  id: string;
+  tenantId: string;
+  planId: string;
+  planVersionId: string;
+  status: 'active' | 'expired' | 'cancelled';
+  effectiveAt: string;
+  expireAt: string | null;
+  closedAt: string | null;
+  reason: string | null;
+}
+
+/** 生命周期迁移日志（只增不改不删） */
+export interface LifecycleLog {
+  tenantId: string;
+  fromStatus: string | null;
+  toStatus: string;
+  action: string;
+  actorType: 'system' | 'user';
+  actorId: string | null;
+  reason: string | null;
+  ip: string | null;
+  userAgent: string | null;
+  traceId: string | null;
+  requestId: string | null;
+  createdAt: string;
+}

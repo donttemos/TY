@@ -6,6 +6,7 @@
  * @author donttemo
  * @created 2026-10-09
  * @modified 2026-10-17 donttemo M12 W1（OBS-03）码表单一来源登记 + W2（OBS-09）ErrorBody 增 requestId
+ * @modified 2026-10-19 donttemo M13（PRD-013）：增 4029 配额超限 / 4030 非法生命周期迁移 / 4031 租户冻结（ADR-0030/0031）
  * @module core
  * @since v0.1.0
  */
@@ -34,6 +35,12 @@ export const ErrorCode = {
   ACCOUNT_LOCKED: 3004,
   /** 租户无效或已过期（403，M8） */
   TENANT_INVALID: 4001,
+  /** 配额硬限额超限（429，M13/ADR-0030：details 带 metricKey、窗口用量与升级指引） */
+  QUOTA_EXCEEDED: 4029,
+  /** 非法生命周期迁移（409，M13/ADR-0031：details 含 from/action/to） */
+  LIFECYCLE_TRANSITION_INVALID: 4030,
+  /** 租户已冻结/终止，业务访问被拒（403，M13/ADR-0031） */
+  TENANT_SUSPENDED: 4031,
   /** 该配置键不可热更新（400，M9/PRD-009：boot 键或不在白名单） */
   CONFIG_NOT_HOT: 5001,
   /** 配置新值非法（400，M9/PRD-009：zod 校验失败，details 带原因） */
@@ -71,6 +78,9 @@ export const ERROR_CODE_META: Record<BizErrorCode, ErrorCodeMeta> = {
   [ErrorCode.TOKEN_EXPIRED]: { http: 401, message: '令牌已过期' },
   [ErrorCode.ACCOUNT_LOCKED]: { http: 403, message: '账号已锁定' },
   [ErrorCode.TENANT_INVALID]: { http: 403, message: '租户无效或已过期' },
+  [ErrorCode.QUOTA_EXCEEDED]: { http: 429, message: '配额已达上限' },
+  [ErrorCode.LIFECYCLE_TRANSITION_INVALID]: { http: 409, message: '生命周期状态不允许该操作' },
+  [ErrorCode.TENANT_SUSPENDED]: { http: 403, message: '租户已冻结或终止' },
   [ErrorCode.CONFIG_NOT_HOT]: { http: 400, message: '该配置键不可热更新' },
   [ErrorCode.CONFIG_INVALID_VALUE]: { http: 400, message: '配置新值非法' },
   [ErrorCode.CONFIG_NOT_FOUND]: { http: 404, message: '配置键不存在' },

@@ -157,6 +157,11 @@ fw gen crud order
 | [认证策略端到端指南](./docs/41-auth-strategies.md) | OAuth2 授权码端到端（配置 / 流程 / 反向验证清单）与 API Key 签名约定（算法 / 示例 / 路由声明） |
 | [可观测与错误契约手册](./docs/45-observability-contract.md) | 错误信封字段级契约、requestId/traceId 双 ID 分层、日志身份字段、auth/security 指标段、审计检索键与「replay 一次拉全链」排障样例（M12/PRD-012） |
 | [运维端点安全边界矩阵](./docs/46-ops-endpoints.md) | 全仓 @Public/公开路径逐条登记（必要性/暴露面/敏感度/环境约束）、三层边界模型、demo 自检面开关（M12/PRD-012） |
+| [SaaS 运营基础开发指南](./docs/47-saas-foundation-dev-guide.md) | 套餐/订阅/配额/用量/生命周期领域划分、ADR-0029~0031 契约、M13 任务拆解（PRD-013） |
+| [开发环境指南](./docs/42-development-environment.md) | 运行时基线（Node 22.22.2 / pnpm 11.6.0）、安装步骤、常用命令、端口表、已知环境坑 |
+| [可复现构建规范](./docs/48-reproducible-builds.md) | 单一权威来源、版本冻结矩阵（.nvmrc/CI/devcontainer/真机脚本）、安装构建纪律、平台差异登记 |
+| [Dev Container 指南](./docs/49-devcontainer.md) | 一键同版本开发容器（基镜像/后置命令/端口转发/常见问题） |
+| [可复现性验证清单](./docs/97-reproducibility-verification.md) | 工具链版本矩阵逐项核对 + 干净构建五步 + 门禁/行为一致性抽检（升级后必须重跑） |
 | [部署与运维手册](./docs/60-deployment-ops.md) | 三档部署、配置清单、备份恢复、监控告警、故障 Runbook、升级回滚 |
 | [云服务器裸机部署手册](./docs/61-bare-metal-deploy.md) | 不用容器的服务器部署：systemd 进程托管、release 软链发版与秒级回滚、nginx 静态托管与 HTTPS、数据库档位与 provider 约束、备份监控与排障速查 |
 | [1Panel 真机部署手册](./docs/62-1panel-real-deploy.md) | 已有 1Panel 面板的服务器落地：OpenResty host 网络反代、容器化数据库的宿主端口接入、PostgreSQL schema 变体与迁移重建、2C2G 内存约束（V8 堆 + cgroup MemoryMax）、站点目录与 HTTPS |

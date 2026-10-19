@@ -376,3 +376,186 @@ CREATE TABLE `upload_files` (
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
+-- CreateTable
+CREATE TABLE `plans` (
+    `id` VARCHAR(191) NOT NULL,
+    `code` VARCHAR(191) NOT NULL,
+    `name` VARCHAR(191) NOT NULL,
+    `description` VARCHAR(191) NULL,
+    `deleted_at` DATETIME(3) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updated_at` DATETIME(3) NOT NULL,
+    `created_by` VARCHAR(191) NOT NULL DEFAULT 'system',
+    `updated_by` VARCHAR(191) NOT NULL DEFAULT 'system',
+
+    UNIQUE INDEX `plans_code_key`(`code`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `plan_versions` (
+    `id` VARCHAR(191) NOT NULL,
+    `plan_id` VARCHAR(191) NOT NULL,
+    `version` INTEGER NOT NULL,
+    `status` VARCHAR(191) NOT NULL DEFAULT 'published',
+    `remark` VARCHAR(191) NULL,
+    `published_at` DATETIME(3) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updated_at` DATETIME(3) NOT NULL,
+    `created_by` VARCHAR(191) NOT NULL DEFAULT 'system',
+    `updated_by` VARCHAR(191) NOT NULL DEFAULT 'system',
+
+    INDEX `idx_plan_versions_plan`(`plan_id`),
+    UNIQUE INDEX `uk_plan_versions_plan_version`(`plan_id`, `version`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `quota_definitions` (
+    `id` VARCHAR(191) NOT NULL,
+    `key` VARCHAR(191) NOT NULL,
+    `name` VARCHAR(191) NOT NULL,
+    `unit` VARCHAR(191) NOT NULL,
+    `window_type` VARCHAR(191) NOT NULL DEFAULT 'day',
+    `execution` VARCHAR(191) NOT NULL DEFAULT 'hard',
+    `description` VARCHAR(191) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updated_at` DATETIME(3) NOT NULL,
+    `created_by` VARCHAR(191) NOT NULL DEFAULT 'system',
+    `updated_by` VARCHAR(191) NOT NULL DEFAULT 'system',
+
+    UNIQUE INDEX `quota_definitions_key_key`(`key`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `plan_quotas` (
+    `id` VARCHAR(191) NOT NULL,
+    `plan_version_id` VARCHAR(191) NOT NULL,
+    `quota_key` VARCHAR(191) NOT NULL,
+    `limit_value` BIGINT NOT NULL,
+    `execution` VARCHAR(191) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updated_at` DATETIME(3) NOT NULL,
+    `created_by` VARCHAR(191) NOT NULL DEFAULT 'system',
+    `updated_by` VARCHAR(191) NOT NULL DEFAULT 'system',
+
+    INDEX `idx_plan_quotas_version`(`plan_version_id`),
+    UNIQUE INDEX `uk_plan_quotas_version_key`(`plan_version_id`, `quota_key`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `tenant_subscriptions` (
+    `id` VARCHAR(191) NOT NULL,
+    `tenant_id` VARCHAR(191) NOT NULL,
+    `plan_id` VARCHAR(191) NOT NULL,
+    `plan_version_id` VARCHAR(191) NOT NULL,
+    `status` VARCHAR(191) NOT NULL DEFAULT 'active',
+    `active_marker` VARCHAR(191) NULL,
+    `effective_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `expire_at` DATETIME(3) NULL,
+    `closed_at` DATETIME(3) NULL,
+    `reason` VARCHAR(191) NULL,
+    `deleted_at` DATETIME(3) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updated_at` DATETIME(3) NOT NULL,
+    `created_by` VARCHAR(191) NOT NULL DEFAULT 'system',
+    `updated_by` VARCHAR(191) NOT NULL DEFAULT 'system',
+
+    UNIQUE INDEX `tenant_subscriptions_active_marker_key`(`active_marker`),
+    INDEX `idx_tenant_subscriptions_tenant`(`tenant_id`),
+    INDEX `idx_tenant_subscriptions_version`(`plan_version_id`),
+    INDEX `idx_tenant_subscriptions_status`(`status`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `tenant_quotas` (
+    `id` VARCHAR(191) NOT NULL,
+    `tenant_id` VARCHAR(191) NOT NULL,
+    `quota_key` VARCHAR(191) NOT NULL,
+    `override_value` BIGINT NOT NULL,
+    `execution` VARCHAR(191) NULL,
+    `source` VARCHAR(191) NOT NULL DEFAULT 'manual',
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `updated_at` DATETIME(3) NOT NULL,
+    `created_by` VARCHAR(191) NOT NULL DEFAULT 'system',
+    `updated_by` VARCHAR(191) NOT NULL DEFAULT 'system',
+
+    INDEX `idx_tenant_quotas_tenant`(`tenant_id`),
+    UNIQUE INDEX `uk_tenant_quotas_tenant_key`(`tenant_id`, `quota_key`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `tenant_quota_windows` (
+    `id` VARCHAR(191) NOT NULL,
+    `tenant_id` VARCHAR(191) NOT NULL,
+    `quota_key` VARCHAR(191) NOT NULL,
+    `window_type` VARCHAR(191) NOT NULL,
+    `window_start` DATETIME(3) NOT NULL,
+    `used` BIGINT NOT NULL DEFAULT 0,
+    `limit_value` BIGINT NOT NULL,
+    `execution` VARCHAR(191) NOT NULL DEFAULT 'hard',
+    `warned_at` DATETIME(3) NULL,
+    `updated_at` DATETIME(3) NOT NULL,
+
+    INDEX `idx_tenant_quota_windows_tenant`(`tenant_id`),
+    UNIQUE INDEX `uk_tenant_quota_windows_window`(`tenant_id`, `quota_key`, `window_type`, `window_start`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `usage_events` (
+    `id` VARCHAR(191) NOT NULL,
+    `tenant_id` VARCHAR(191) NOT NULL,
+    `quota_key` VARCHAR(191) NOT NULL,
+    `quantity` BIGINT NOT NULL,
+    `occurred_at` DATETIME(3) NOT NULL,
+    `source` VARCHAR(191) NOT NULL DEFAULT 'api',
+    `idempotency_key` VARCHAR(191) NOT NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+
+    UNIQUE INDEX `usage_events_idempotency_key_key`(`idempotency_key`),
+    INDEX `idx_usage_events_tenant_metric_time`(`tenant_id`, `quota_key`, `occurred_at`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `usage_rollups` (
+    `id` VARCHAR(191) NOT NULL,
+    `tenant_id` VARCHAR(191) NOT NULL,
+    `quota_key` VARCHAR(191) NOT NULL,
+    `window_type` VARCHAR(191) NOT NULL,
+    `window_start` DATETIME(3) NOT NULL,
+    `total_quantity` BIGINT NOT NULL,
+    `event_count` INTEGER NOT NULL DEFAULT 0,
+    `updated_at` DATETIME(3) NOT NULL,
+
+    INDEX `idx_usage_rollups_tenant`(`tenant_id`),
+    UNIQUE INDEX `uk_usage_rollups_window`(`tenant_id`, `quota_key`, `window_type`, `window_start`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- CreateTable
+CREATE TABLE `tenant_lifecycle_logs` (
+    `id` VARCHAR(191) NOT NULL,
+    `tenant_id` VARCHAR(191) NOT NULL,
+    `from_status` VARCHAR(191) NULL,
+    `toStatus` VARCHAR(191) NOT NULL,
+    `action` VARCHAR(191) NOT NULL,
+    `actor_type` VARCHAR(191) NOT NULL DEFAULT 'user',
+    `actor_id` VARCHAR(191) NULL,
+    `reason` VARCHAR(191) NULL,
+    `ip` VARCHAR(191) NULL,
+    `user_agent` VARCHAR(191) NULL,
+    `trace_id` VARCHAR(191) NULL,
+    `request_id` VARCHAR(191) NULL,
+    `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+
+    INDEX `idx_tenant_lifecycle_tenant_time`(`tenant_id`, `created_at`),
+    INDEX `idx_tenant_lifecycle_action`(`action`),
+    PRIMARY KEY (`id`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+

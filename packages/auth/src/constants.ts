@@ -10,6 +10,7 @@
  * @modified 2026-10-15 donttemo M9/PRD-009 FR-06：新增 system:config:read / system:config:write（配置中心
  *   管理端点守卫；读写分离——只读用户可查当前生效值，写权限独立授予）
  * @modified 2026-10-15 donttemo M10 E-13：新增 notification:read（站内信消息中心守卫）
+ * @modified 2026-10-19 donttemo M13（PRD-013）：新增 ops:saas:read / ops:saas:write（SaaS 运营面守卫，与 system:tenant:ignore 与关系）
  * @module @fw/auth
  */
 
@@ -31,6 +32,13 @@ export const PERM = {
    * OPS_TOKEN 逃生门登记 ADR-0027 备选未启用）。无对应菜单——运维端点非页面能力。
    */
   OPS_READ: 'ops:read',
+  /**
+   * SaaS 运营读（M13/PRD-013 FR-13-15）：套餐/订阅/生效配额/用量/生命周期历史的查询面。
+   * 运营面整类 @IgnoreTenant()（平台管理员视角），与本码 + ops:saas:write 组成跨租户维护路径。
+   */
+  OPS_SAAS_READ: 'ops:saas:read',
+  /** SaaS 运营写（M13）：订阅创建/取消、生命周期迁移（activate/freeze/resume/terminate） */
+  OPS_SAAS_WRITE: 'ops:saas:write',
   /** 登出 */
   AUTH_LOGOUT: 'auth:logout',
   /** 当前用户资料 */

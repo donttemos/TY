@@ -404,3 +404,189 @@ model UploadFile {
   @@index([ownerId], map: "idx_upload_owner")
   @@map("upload_files")
 }
+
+// ---------- M13 SaaS 运营基础（PRD-013，ADR-0029~0031；数据字典 §3.20~3.29） ----------
+// 运营域表的 tenantId 与 tenants.id 同型（String），区别于请求上下文 BigInt 约定；
+// 关联列裸 String（无 @relation），写前经服务层 assert*Ids 校验（M8 约定）。
+// ★ 本段与 pg/schema.prisma、mysql/schema.prisma 逐字节一致（校验命令见各变体文件头）。
+
+/// 套餐定义（ADR-0029：code 唯一；权益描述层数据，不承载配额值）
+model Plan {
+  id          String    @id @default(uuid())
+  code        String    @unique
+  name        String
+  description String?
+  deletedAt   DateTime? @map("deleted_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  createdBy   String    @default("system") @map("created_by")
+  updatedBy   String    @default("system") @map("updated_by")
+
+  @@map("plans")
+}
+
+/// 套餐版本（ADR-0029：发布后不可变；订阅绑定版本而非最新定义）
+model PlanVersion {
+  id          String    @id @default(uuid())
+  planId      String    @map("plan_id")
+  version     Int
+  status      String    @default("published")
+  remark      String?
+  publishedAt DateTime? @map("published_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  createdBy   String    @default("system") @map("created_by")
+  updatedBy   String    @default("system") @map("updated_by")
+
+  @@unique([planId, version], map: "uk_plan_versions_plan_version")
+  @@index([planId], map: "idx_plan_versions_plan")
+  @@map("plan_versions")
+}
+
+/// 配额字典（指标维度定义；execution 为默认执行方式，可被 plan_quotas.execution 覆盖）
+model QuotaDefinition {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  name        String
+  unit        String
+  windowType  String   @default("day") @map("window_type")
+  execution   String   @default("hard")
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdBy   String   @default("system") @map("created_by")
+  updatedBy   String   @default("system") @map("updated_by")
+
+  @@map("quota_definitions")
+}
+
+/// 套餐版本配额默认项（ADR-0029：生效值 = tenant_quotas.override_value ?? 本表 limit_value）
+model PlanQuota {
+  id            String   @id @default(uuid())
+  planVersionId String   @map("plan_version_id")
+  quotaKey      String   @map("quota_key")
+  limitValue    BigInt   @map("limit_value")
+  execution     String?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  createdBy     String   @default("system") @map("created_by")
+  updatedBy     String   @default("system") @map("updated_by")
+
+  @@unique([planVersionId, quotaKey], map: "uk_plan_quotas_version_key")
+  @@index([planVersionId], map: "idx_plan_quotas_version")
+  @@map("plan_quotas")
+}
+
+/// 租户订阅（ADR-0029：一租户至多一个生效订阅——active_marker 非空时 = tenantId，
+/// 三库唯一索引对 NULL 不去重，无需 partial index 即可表达，triway 零方言分叉）
+model TenantSubscription {
+  id            String    @id @default(uuid())
+  tenantId      String    @map("tenant_id")
+  planId        String    @map("plan_id")
+  planVersionId String    @map("plan_version_id")
+  status        String    @default("active")
+  activeMarker  String?   @unique @map("active_marker")
+  effectiveAt   DateTime  @default(now()) @map("effective_at")
+  expireAt      DateTime? @map("expire_at")
+  closedAt      DateTime? @map("closed_at")
+  reason        String?
+  deletedAt     DateTime? @map("deleted_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  createdBy     String    @default("system") @map("created_by")
+  updatedBy     String    @default("system") @map("updated_by")
+
+  @@index([tenantId], map: "idx_tenant_subscriptions_tenant")
+  @@index([planVersionId], map: "idx_tenant_subscriptions_version")
+  @@index([status], map: "idx_tenant_subscriptions_status")
+  @@map("tenant_subscriptions")
+}
+
+/// 租户配额覆盖（生效值 = override_value ?? 套餐默认；source 标记 plan_snapshot/manual）
+model TenantQuota {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  quotaKey      String   @map("quota_key")
+  overrideValue BigInt   @map("override_value")
+  execution     String?
+  source        String   @default("manual")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+  createdBy     String   @default("system") @map("created_by")
+  updatedBy     String   @default("system") @map("updated_by")
+
+  @@unique([tenantId, quotaKey], map: "uk_tenant_quotas_tenant_key")
+  @@index([tenantId], map: "idx_tenant_quotas_tenant")
+  @@map("tenant_quotas")
+}
+
+/// 用量窗口行（ADR-0030：硬限额原子扣减的事实行——
+/// 扣减 = UPDATE ... SET used = used + qty WHERE used + qty <= limit_value，affected=0 即超限）
+model TenantQuotaWindow {
+  id          String    @id @default(uuid())
+  tenantId    String    @map("tenant_id")
+  quotaKey    String    @map("quota_key")
+  windowType  String    @map("window_type")
+  windowStart DateTime  @map("window_start")
+  used        BigInt    @default(0)
+  limitValue  BigInt    @map("limit_value")
+  execution   String    @default("hard")
+  warnedAt    DateTime? @map("warned_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@unique([tenantId, quotaKey, windowType, windowStart], map: "uk_tenant_quota_windows_window")
+  @@index([tenantId], map: "idx_tenant_quota_windows_tenant")
+  @@map("tenant_quota_windows")
+}
+
+/// 原始用量事件（幂等键唯一约束：重复投递不重复计量；本表为事实源，rollup 可由此重建）
+model UsageEvent {
+  id             String   @id @default(uuid())
+  tenantId       String   @map("tenant_id")
+  quotaKey       String   @map("quota_key")
+  quantity       BigInt
+  occurredAt     DateTime @map("occurred_at")
+  source         String   @default("api")
+  idempotencyKey String   @unique @map("idempotency_key")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId, quotaKey, occurredAt], map: "idx_usage_events_tenant_metric_time")
+  @@map("usage_events")
+}
+
+/// 用量窗口汇总（usage_rollups：可随时从 usage_events 重算重建；缓存不作事实来源）
+model UsageRollup {
+  id            String   @id @default(uuid())
+  tenantId      String   @map("tenant_id")
+  quotaKey      String   @map("quota_key")
+  windowType    String   @map("window_type")
+  windowStart   DateTime @map("window_start")
+  totalQuantity BigInt   @map("total_quantity")
+  eventCount    Int      @default(0) @map("event_count")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@unique([tenantId, quotaKey, windowType, windowStart], map: "uk_usage_rollups_window")
+  @@index([tenantId], map: "idx_usage_rollups_tenant")
+  @@map("usage_rollups")
+}
+
+/// 租户生命周期日志（ADR-0031：只增不改不删；迁移唯一权威的留痕面，审计字段随 M12 契约）
+model TenantLifecycleLog {
+  id         String   @id @default(uuid())
+  tenantId   String   @map("tenant_id")
+  fromStatus String?  @map("from_status")
+  toStatus   String
+  action     String
+  actorType  String   @default("user") @map("actor_type")
+  actorId    String?  @map("actor_id")
+  reason     String?
+  ip         String?
+  userAgent  String?  @map("user_agent")
+  traceId    String?  @map("trace_id")
+  requestId  String?  @map("request_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId, createdAt], map: "idx_tenant_lifecycle_tenant_time")
+  @@index([action], map: "idx_tenant_lifecycle_action")
+  @@map("tenant_lifecycle_logs")
+}

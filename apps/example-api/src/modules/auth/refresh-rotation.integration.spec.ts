@@ -21,6 +21,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import fs from 'node:fs';
 import { PrismaClient } from '@prisma/client';
+import { ensureSqliteMigrationsApplied } from '../../testing/apply-sqlite-migrations.js';
 import { ErrorCode } from '@fw/core';
 import { TokenService, RefreshTokenService, hashToken } from '@fw/auth';
 import { PrismaAuthStore } from './prisma-auth-store.js';
@@ -53,6 +54,8 @@ async function migrateDeployWithRetry(): Promise<void> {
         shell: true,
         env: { ...process.env, DB_URL: LOCAL_DB_URL },
       });
+      // 受限环境 deploy 静默不落盘（exit 0 无副作用）：基线表缺失时按序直建全量迁移 DDL
+      await ensureSqliteMigrationsApplied(LOCAL_DB_URL);
       return;
     } catch (error) {
       lastError = error;

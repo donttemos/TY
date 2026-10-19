@@ -37,6 +37,9 @@
 | [0026](./0026-observability-id-layering.md) | M12 W2 可观测 ID 分层与贯穿：requestId(单请求) vs traceId(跨服务) 分层 / ALS 扩展（familyId/jti）+ logger 自动身份 / fw_auth_*·fw_security_* 指标段与基数护栏 / 审计检索键扩展 | 已采纳（2026-10-17） | 后端 / 前端契约 |
 | [0027](./0027-ops-endpoints-boundary.md) | M12 W3 运维端点安全边界：三层模型（Public 自检 / Protected maintenance / 业务公开面）+ 默认受保护原则 + OQ-4 定案权限码 ops:read（OPS_TOKEN 备选未启用）+ demo 自检面非 dev 404 + Nginx 三份一致性轴 | 已采纳（2026-10-17） | 后端 / 部署 |
 | [0028](./0028-cache-tag-index-cluster-compatibility.md) | 缓存标签索引的 Redis Cluster 兼容策略：多键 Lua 的 slot 约束分析（值键 ↔ 标签键 N:M，必须全部同 slot）+ hash tag 四方案评估（A 全局 / B prefix 作用域【推荐】/ C tenant / D 重设计放弃原子性）+ 当前版本限制登记与方案 B 键格式版本化演进 + 单实例/Cluster 验证矩阵 | 已采纳（2026-10-17） | 后端 / 缓存 |
+| [0029](./0029-plan-subscription-quota-model.md) | M13 套餐/订阅/生效配额三层模型：plans→plan_versions 版本化发布、订阅绑定版本 + 一租户一生效订阅、生效值 = 租户覆盖 ?? 套餐默认；tenants.plan/status/expireAt 转派生只读列（写权收口领域服务）+ 幂等回填 + M14 退役里程碑 | 已采纳（2026-10-19） | 后端 / 数据 |
+| [0030](./0030-hard-quota-concurrency.md) | M13 硬限额并发扣减：DB 事务 + 条件 UPDATE 为唯一事实源（扣减与 usage_events 留痕同事务），Redis 余量仅预检加速（漏判 DB 兜底不超发）；软限额同窗幂等告警；窗口翻转按 window_start 切片；Cluster 边界按 ADR-0028 声明 | 已采纳（2026-10-19） | 后端 / 数据 / 缓存 |
+| [0031](./0031-tenant-lifecycle-state-machine.md) | M13 租户五态生命周期：pending/active/grace/frozen/terminated 合法迁移表唯一权威 + 迁移写权唯一归属 TenantLifecycleService + 条件更新幂等（正确性不依赖分布式锁）+ 冻结 4031 作用于业务入口（白名单走 @LifecycleExempt 元数据）+ terminated 数据保留策略（审计永不删除） | 已采纳（2026-10-19） | 后端 / 数据 |
 
 ## 模板
 

@@ -129,6 +129,9 @@
 | `3003` | 401 | 令牌已过期 | 静默刷新 |
 | `3004` | 403 | 账号已锁定 | 提示等待时间 |
 | `4001` | 403 | 租户无效或已过期（M8） | 提示联系管理员 |
+| `4029` | 429 | 配额已达上限（M13/ADR-0030，`details` 带 `metricKey`/`used`/`limit`） | 展示用量与升级指引 |
+| `4030` | 409 | 生命周期状态不允许该操作（M13/ADR-0031，`details` 含 from/action/to） | 检查租户当前状态 |
+| `4031` | 403 | 租户已冻结或终止（M13/ADR-0031） | 提示联系平台运营 |
 | `5001` | 400 | 该配置键不可热更新（boot 键或不在白名单，M9） | 该键走环境变量 + 重启 |
 | `5002` | 400 | 配置新值非法（M9） | 展示 `details` 中的拒绝原因 |
 | `5003` | 404 | 配置键不存在（M9） | 检查键名拼写 |
@@ -413,6 +416,26 @@
 | POST | `/files` | `file:create` | 上传附件（multipart/form-data，字段名 `file`）。响应 `{id, url, originalName, size, mimeType}`，`url` 为 `/api/v1/files/:id/download` 相对路径。超限 / 白名单外扩展名 / 缺 file 段 → `400/1001` |
 | GET | `/files/:id` | 登录 | 元数据 `{id, originalName, size, mimeType, createdAt}`；不存在或已软删 → `404/1002`（不泄露存在性） |
 | GET | `/files/:id/download` | 登录 | 文件字节流（非统一信封；`Content-Disposition` 带 RFC 5987 编码原始文件名）。不存在或已软删 → `404/1002` |
+
+### 3.21 SaaS 运营面（M13 / PRD-013 FR-13-15）
+
+> 平台运营视角端点：整类 `@IgnoreTenant()`（跨租户维护路径，与 `system:tenant:ignore` 权限码为「与」关系，
+> 沿 `/tenants` 管理面先例）+ 读写分离（`ops:saas:read` / `ops:saas:write`）。类级 `@LifecycleExempt()`：
+> frozen/terminated 租户的运营面（含迁移出口 resume）保持可用（ADR-0031 §3.2）。
+> 全部操作经 M12 审计契约（六字段）；生命周期迁移由 `@fw/saas` 状态机校验，非法迁移 `409/4030`（details 含 from/action/to）。
+> 写操作请求体均含可选 `reason`。到期/宽限处置由定时任务自动执行（`SAAS_GRACE_PERIOD_DAYS`，默认 7）。
+
+| 方法 | 路径 | 权限点 | 说明 |
+|---|---|---|---|
+| GET | `/saas/plans` | `ops:saas:read` | 套餐列表 |
+| GET | `/saas/plans/:id/versions` | `ops:saas:read` | 套餐版本列表（含各版本配额默认项；发布后不可变） |
+| POST | `/saas/tenant-subscriptions` | `ops:saas:write` | 创建订阅 `{tenantId, planCode, planVersion?, expireAt?}`；已有生效订阅 → `409/1003`；创建即按版本快照生成 tenant_quotas |
+| POST | `/saas/tenant-subscriptions/:id/cancel` | `ops:saas:write` | 取消订阅（幂等：已关闭直接成功） |
+| GET | `/saas/tenants/:id/subscription` | `ops:saas:read` | 当前生效订阅（无则 data=null） |
+| GET | `/saas/tenants/:id/quotas` | `ops:saas:read` | 生效配额列表（生效值 = 租户覆盖 ?? 套餐默认，ADR-0029） |
+| GET | `/saas/tenants/:id/usage?quotaKey=&at=` | `ops:saas:read` | 窗口用量（rollup 重算后返回，附 limitValue/execution/windowEnd） |
+| POST | `/saas/tenants/:id/lifecycle` | `ops:saas:write` | 生命周期迁移 `{action, reason?}`，action ∈ activate/expire/freeze/resume/terminate/dispose；非法 → `409/4030`；重复执行幂等（`alreadyApplied: true`） |
+| GET | `/saas/tenants/:id/lifecycle/logs` | `ops:saas:read` | 迁移历史（只增不改不删） |
 
 ## 4. 限流与幂等
 

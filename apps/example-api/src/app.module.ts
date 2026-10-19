@@ -25,6 +25,7 @@
  * @modified 2026-10-15 donttemo M10 E-13：接入 NotificationsModule（站内信订阅事件面落库 + 用户面端点）
  * @modified 2026-10-15 donttemo M10 E-17：接入 ClientErrorsModule（前端 RUM 错误上报接收面
  *   /api/v1/telemetry/client-errors，@Public + error 级结构化日志 + 进程内计数）
+ * @modified 2026-10-19 donttemo M13（PRD-013）接入 SaasModule（@fw/saas 五服务 + PrismaSaasStore 装配）
  * @module example-api
  */
 import { Module, type MiddlewareConsumer, type NestModule } from '@nestjs/common';
@@ -51,6 +52,7 @@ import { JobsModule } from './modules/jobs/jobs.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { TenantAdminModule } from './modules/tenant/tenant-admin.module.js';
 import { PrismaTenantStore } from './modules/tenant/prisma-tenant-store.js';
+import { SaasModule } from './modules/saas/saas.module.js';
 import { UploadModule } from './modules/upload/upload.module.js';
 
 /** 缓存就绪探针：与 CacheModule.forRoot 共用同一实例（装配后由模块绑定缓存服务） */
@@ -142,6 +144,8 @@ function parseWhitelist(raw: string): string[] {
     NotificationsModule,
     // N-01：租户管理端点（/api/v1/tenants 五端点；跨租户维护面，标 @IgnoreTenant）
     TenantAdminModule,
+    // M13：SaaS 运营基础（@fw/saas 领域服务装配；运营 API/到期任务/Guard 随后续批次消费）
+    SaasModule,
     // M9：配置中心（/api/v1/configs 查/改两端点；CONFIG_CENTER_ENABLED=false 时零开销仅 env 视图）
     ConfigCenterModule.forRoot(),
     // M10 E-09：附件上传（/api/v1/files 三端点；文件内容经 @fw/storage 端口，

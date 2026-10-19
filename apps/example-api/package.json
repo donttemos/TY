@@ -26,6 +26,7 @@
     "@fw/db": "workspace:*",
     "@fw/logger": "workspace:*",
     "@fw/queue": "workspace:*",
+    "@fw/saas": "workspace:*",
     "@fw/storage": "workspace:*",
     "@fw/telemetry": "workspace:*",
     "@fw/tenant": "workspace:*",

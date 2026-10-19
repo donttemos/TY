@@ -84,6 +84,10 @@ const CODE = {
   ACCOUNT_LOCKED: 3004,
   // M8 租户 / 9002 依赖不可用（PRD-012 OBS-03：与 @fw/core ErrorCode 全集同源，axis G 门禁锁定）
   TENANT_INVALID: 4001,
+  // M13 SaaS 运营（PRD-013 / ADR-0030~0031，与 @fw/core ErrorCode 同源，axis G 门禁锁定）
+  QUOTA_EXCEEDED: 4029,
+  LIFECYCLE_TRANSITION_INVALID: 4030,
+  TENANT_SUSPENDED: 4031,
   DEPENDENCY_UNAVAILABLE: 9002,
   INTERNAL: 9001,
   RATE_LIMITED: 9003,
@@ -1993,6 +1997,11 @@ export async function handleMockRequest(
 
   // ---- N-01 租户域（五端点；管理面是 @IgnoreTenant 的，权限双重要求：tenant:* + system:tenant:ignore） ----
   // 豁免校验只作用于 /tenants* 路径，避免把未命中请求从 404 变成 403
+  // M13 SaaS 运营面（api-spec §3.21）：@IgnoreTenant 跨租户维护路径 + ops:saas:* 读写分离
+  if (path === '/saas' || path.startsWith('/saas/')) {
+    return await handleSaasRoutes(req, res, database, ctx, path, method, query, traceId);
+  }
+
   if (path === '/tenants' || path.startsWith('/tenants/')) {
     const hasTenantIgnore = requirePermission(database, ctx, 'system:tenant:ignore');
     if (!hasTenantIgnore.ok) {
@@ -2698,4 +2707,261 @@ function mockRecordConfigAudit(
     traceId,
     createdAt: new Date().toISOString(),
   });
+}
+
+
+/** M13 生命周期合法迁移表（与 @fw/saas lifecycle.machine 逐条一致；mock 与真实后端同语义） */
+const SAAS_TRANSITIONS: Record<string, Partial<Record<string, string>>> = {
+  pending: { activate: 'active' },
+  active: { expire: 'grace', freeze: 'frozen', terminate: 'terminated' },
+  grace: { freeze: 'frozen', resume: 'active', terminate: 'terminated' },
+  frozen: { resume: 'active', terminate: 'terminated' },
+  terminated: { dispose: 'terminated' },
+};
+
+/** M13 SaaS 运营九端点（api-spec §3.21）：mock 与 @fw/saas 领域语义逐条对应 */
+async function handleSaasRoutes(
+  req: IncomingMessage,
+  res: ServerResponse,
+  database: MockDb,
+  ctx: AuthContext,
+  path: string,
+  method: string,
+  query: URLSearchParams,
+  traceId: string,
+): Promise<HandleResult> {
+  const saas = database.saas;
+
+  // ---- 套餐（读） ----
+  if (path === '/saas/plans' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'ops:saas:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    send(res, 0, 'ok', saas.plans, traceId);
+    return { handled: true };
+  }
+
+  const versionMatch = path.match(/^\/saas\/plans\/([^/]+)\/versions$/);
+  if (versionMatch && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'ops:saas:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const versions = saas.planVersions.filter((v) => v.planId === versionMatch[1]);
+    send(res, 0, 'ok', versions.map((v) => ({ ...v, quotas: saas.planQuotas.filter((q) => q.planVersionId === v.id) })), traceId);
+    return { handled: true };
+  }
+
+  // ---- 订阅（写 + 读） ----
+  if (path === '/saas/tenant-subscriptions' && method === 'POST') {
+    const perm = requirePermission(database, ctx, 'ops:saas:write');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const body = await readBody(req);
+    const tenantId = String(body.tenantId ?? '');
+    const planCode = String(body.planCode ?? 'default');
+    if (!tenantId) {
+      send(res, 1001, '参数错误', null, traceId, [{ field: 'tenantId', message: '必填' }]);
+      return { handled: true };
+    }
+    if (saas.subscriptions.some((s) => s.tenantId === tenantId && s.status === 'active')) {
+      send(res, 1003, '唯一约束冲突', null, traceId);
+      return { handled: true };
+    }
+    const plan = saas.plans.find((p) => p.code === planCode);
+    const version = plan ? saas.planVersions.filter((v) => v.planId === plan.id && v.status === 'published').sort((a, b) => b.version - a.version)[0] : undefined;
+    if (!plan || !version) {
+      send(res, 1002, '资源不存在', null, traceId);
+      return { handled: true };
+    }
+    const sub = {
+      id: `sub-mock-${saas.subscriptions.length + 1}`,
+      tenantId,
+      planId: plan.id,
+      planVersionId: version.id,
+      status: 'active',
+      effectiveAt: new Date().toISOString(),
+      expireAt: body.expireAt ? String(body.expireAt) : null,
+      closedAt: null,
+      reason: null,
+    };
+    saas.subscriptions.push(sub);
+    // 版本快照：plan_quotas → tenant_quotas（source=plan_snapshot）
+    for (const q of saas.planQuotas.filter((q) => q.planVersionId === version.id)) {
+      const existing = saas.tenantQuotas.find((o) => o.tenantId === tenantId && o.quotaKey === q.quotaKey);
+      if (existing) {
+        existing.overrideValue = q.limitValue;
+        existing.source = 'plan_snapshot';
+      } else {
+        saas.tenantQuotas.push({ tenantId, quotaKey: q.quotaKey, overrideValue: q.limitValue, execution: q.execution, source: 'plan_snapshot' });
+      }
+    }
+    send(res, 0, 'ok', sub, traceId);
+    return { handled: true };
+  }
+
+  const cancelMatch = path.match(/^\/saas\/tenant-subscriptions\/([^/]+)\/cancel$/);
+  if (cancelMatch && method === 'POST') {
+    const perm = requirePermission(database, ctx, 'ops:saas:write');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const body = await readBody(req);
+    const sub = saas.subscriptions.find((s) => s.id === cancelMatch[1]);
+    if (!sub) {
+      send(res, 1002, '资源不存在', null, traceId);
+      return { handled: true };
+    }
+    if (sub.status === 'active') {
+      sub.status = 'cancelled';
+      sub.closedAt = new Date().toISOString();
+      sub.reason = body.reason ? String(body.reason) : null;
+    }
+    send(res, 0, 'ok', { id: sub.id, cancelled: true }, traceId);
+    return { handled: true };
+  }
+
+  // ---- 按租户的读/写端点 ----
+  const tenantMatch = path.match(/^\/saas\/tenants\/([^/]+)(?:\/(.*))?$/);
+  if (tenantMatch) {
+    const tenantId = tenantMatch[1];
+    const subPath = tenantMatch[2] ?? '';
+
+    if (subPath === 'subscription' && method === 'GET') {
+      const perm = requirePermission(database, ctx, 'ops:saas:read');
+      if (!perm.ok) {
+        send(res, perm.code, perm.message, null, traceId);
+        return { handled: true };
+      }
+      send(res, 0, 'ok', saas.subscriptions.find((s) => s.tenantId === tenantId && s.status === 'active') ?? null, traceId);
+      return { handled: true };
+    }
+
+    if (subPath === 'quotas' && method === 'GET') {
+      const perm = requirePermission(database, ctx, 'ops:saas:read');
+      if (!perm.ok) {
+        send(res, perm.code, perm.message, null, traceId);
+        return { handled: true };
+      }
+      const effective = saas.tenantQuotas.filter((o) => o.tenantId === tenantId).map((o) => ({
+        tenantId,
+        quotaKey: o.quotaKey,
+        limitValue: o.overrideValue,
+        execution: o.execution ?? 'hard',
+        source: o.source,
+      }));
+      send(res, 0, 'ok', effective, traceId);
+      return { handled: true };
+    }
+
+    if (subPath === 'usage' && method === 'GET') {
+      const perm = requirePermission(database, ctx, 'ops:saas:read');
+      if (!perm.ok) {
+        send(res, perm.code, perm.message, null, traceId);
+        return { handled: true };
+      }
+      const quotaKey = query.get('quotaKey') ?? '';
+      const override = saas.tenantQuotas.find((o) => o.tenantId === tenantId && o.quotaKey === quotaKey);
+      const def = saas.quotaDefinitions.find((d) => d.key === quotaKey);
+      const windowStart = new Date().toISOString().slice(0, 10);
+      const win = saas.usageWindows[`${tenantId}|${quotaKey}|${windowStart}`] ?? { used: '0', limitValue: override?.overrideValue ?? '0', execution: def?.execution ?? 'hard' };
+      send(res, 0, 'ok', { totalQuantity: win.used, eventCount: Number(win.used), limitValue: win.limitValue, execution: win.execution, windowStart: `${windowStart}T00:00:00.000Z`, windowEnd: `${windowStart}T23:59:59.999Z` }, traceId);
+      return { handled: true };
+    }
+
+    if (subPath === 'usage/events' && method === 'POST') {
+      const perm = requirePermission(database, ctx, 'ops:saas:write');
+      if (!perm.ok) {
+        send(res, perm.code, perm.message, null, traceId);
+        return { handled: true };
+      }
+      const body = await readBody(req);
+      const quotaKey = String(body.quotaKey ?? '');
+      const quantity = Number(body.quantity ?? 0);
+      const idempotencyKey = String(body.idempotencyKey ?? '');
+      if (!quotaKey || !(quantity > 0) || !idempotencyKey) {
+        send(res, 1001, '参数错误', null, traceId, [{ field: 'quotaKey', message: 'quotaKey / quantity(正数) / idempotencyKey 必填' }]);
+        return { handled: true };
+      }
+      const windowStart = new Date().toISOString().slice(0, 10);
+      const winKey = `${tenantId}|${quotaKey}|${windowStart}`;
+      const idemKey = `${winKey}|${idempotencyKey}`;
+      if (saas.usageWindows[idemKey] !== undefined) {
+        send(res, 0, 'ok', { result: 'deduped' }, traceId);
+        return { handled: true };
+      }
+      const def = saas.quotaDefinitions.find((d) => d.key === quotaKey);
+      const override = saas.tenantQuotas.find((o) => o.tenantId === tenantId && o.quotaKey === quotaKey);
+      const limit = BigInt(override?.overrideValue ?? '0');
+      const win = saas.usageWindows[winKey] ?? { used: '0', limitValue: limit.toString(), execution: def?.execution ?? 'hard' };
+      if (BigInt(win.used) + BigInt(quantity) > limit) {
+        send(res, 4029, '配额已达上限', null, traceId, [
+          { field: 'metricKey', message: quotaKey },
+          { field: 'used', message: win.used },
+          { field: 'limit', message: win.limitValue },
+        ]);
+        return { handled: true };
+      }
+      win.used = (BigInt(win.used) + BigInt(quantity)).toString();
+      saas.usageWindows[winKey] = win;
+      saas.usageWindows[idemKey] = { used: '1', limitValue: '0', execution: 'deduped-marker' };
+      send(res, 0, 'ok', { result: 'ok', used: win.used, limit: win.limitValue }, traceId);
+      return { handled: true };
+    }
+
+    if (subPath === 'lifecycle' && method === 'POST') {
+      const perm = requirePermission(database, ctx, 'ops:saas:write');
+      if (!perm.ok) {
+        send(res, perm.code, perm.message, null, traceId);
+        return { handled: true };
+      }
+      const body = await readBody(req);
+      const action = String(body.action ?? '');
+      const from = saas.lifecycleLogs.filter((l) => l.tenantId === tenantId).slice(-1)[0]?.toStatus ?? 'pending';
+      const to = SAAS_TRANSITIONS[from]?.[action];
+      if (!to) {
+        // 幂等重入：当前态已是该动作的合法目标态 → alreadyApplied（与 @fw/saas 语义一致）
+        const reachedFrom = Object.keys(SAAS_TRANSITIONS).find((s) => SAAS_TRANSITIONS[s]?.[action] === from);
+        if (reachedFrom) {
+          send(res, 0, 'ok', { from, to: from, alreadyApplied: true }, traceId);
+          return { handled: true };
+        }
+        send(res, 4030, '生命周期状态不允许该操作', null, traceId, [
+          { field: 'from', message: from },
+          { field: 'action', message: action },
+        ]);
+        return { handled: true };
+      }
+      saas.lifecycleLogs.push({
+        tenantId,
+        fromStatus: from,
+        toStatus: to,
+        action,
+        actorType: 'user',
+        actorId: ctx.user.id,
+        reason: body.reason ? String(body.reason) : null,
+        createdAt: new Date().toISOString(),
+      });
+      send(res, 0, 'ok', { from, to, alreadyApplied: false }, traceId);
+      return { handled: true };
+    }
+
+    if (subPath === 'lifecycle/logs' && method === 'GET') {
+      const perm = requirePermission(database, ctx, 'ops:saas:read');
+      if (!perm.ok) {
+        send(res, perm.code, perm.message, null, traceId);
+        return { handled: true };
+      }
+      send(res, 0, 'ok', saas.lifecycleLogs.filter((l) => l.tenantId === tenantId), traceId);
+      return { handled: true };
+    }
+  }
+
+  return { handled: false };
 }

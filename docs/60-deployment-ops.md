@@ -68,6 +68,7 @@
 | | `AUTH_OAUTH2_PROVIDERS` | 否 | 空 | OAuth2 提供方配置（M10/E-07）：JSON 对象串 `{ provider: { clientId, clientSecret, authorizeUrl, tokenUrl, userInfoUrl, scope? } }`；空 = 未启用（`/auth/oauth2/providers` 返回空列表，登录页不渲染入口） |
 | | `AUTH_OAUTH2_REDIRECT_WHITELIST` | 否 | 空 | OAuth2 回调地址白名单（M10/E-07）：逗号分隔 URL 前缀；**空 = 拒绝一切回调地址（默认安全）**，启用 OAuth2 端到端必须显式配置 |
 | 队列 | `MQ_DRIVER` | 否 | memory | `memory` / `bullmq`；`kafka` 尚未实现 |
+| SaaS | `SAAS_GRACE_PERIOD_DAYS` | 否 | 7 | 订阅到期宽限天数（M13/ADR-0031）：active --expire--> grace --满 N 天--> frozen；到期任务每小时巡检，非法取值（非正整数）回退默认并告警 |
 | | `MQ_URL` | 条件 | — | bullmq 的 Redis 连接串；留空回退 `CACHE_URL`，两者皆空则启动失败 |
 | | `MQ_PREFIX` | 否 | `fw:<APP_ENV>` | 队列键前缀，部署间须隔离 |
 | | **Redis Cluster 形态**（M10 E-06） | — | — | `MQ_URL` 支持逗号分隔多节点（自动走 `ioredis.Cluster`）；**cluster 下必须 `MQ_PREFIX={...}:`（hash-tag，BullMQ 键族同槽）**，缺失时启动 WARN；`@fw/transport` 的 redis 驱动同样支持多节点串且**无 hash-tag 要求**（键操作全单键）；实测见 [94b](./94b-queue-transport-cluster-live-test.md) |

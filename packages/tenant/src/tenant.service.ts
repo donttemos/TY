@@ -6,6 +6,7 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：新增 updateRuntimeOptions——tenant.cacheTtl 经配置中心订阅热更（对新缓存条目生效）
+ * @modified 2026-10-19 donttemo M13（ADR-0031 §3）：assertUsable 仅拒存量停用（0）——grace/frozen/terminated 放行至业务面由 SaasLifecycleGuard 4031 拦截（冻结租户登录/导出白名单面必须可达）
  * @module @fw/tenant
  */
 import { BizError, ErrorCode } from '@fw/core';
@@ -95,7 +96,10 @@ export class TenantService {
   }
 
   private assertUsable(tenant: TenantInfo): void {
-    if (tenant.status !== 1) {
+    // 仅存量停用（0）在解析层拒绝（M8 既有语义）；grace/frozen/terminated（2/3/4）放行至
+    // 业务面，由 M13 SaasLifecycleGuard 以 4031 拦截——冻结租户的管理端登录与导出必须可用
+    //（ADR-0031 §3.2 白名单），在此 4001 会把白名单面一并挡掉。
+    if (tenant.status === 0) {
       throw new BizError(ErrorCode.TENANT_INVALID, `租户已停用：${tenant.code}`);
     }
     if (tenant.expireAt && new Date(tenant.expireAt).getTime() <= this.now()) {

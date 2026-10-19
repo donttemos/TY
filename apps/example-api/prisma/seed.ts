@@ -126,6 +126,11 @@ const FRAMEWORK_PERMISSIONS: PermissionSeed[] = [
   // M12 W3 OBS-15（ADR-0027）：/auth-maintenance/* 三端点由类级 @Public 收敛为 ops:read 守卫——
   // maintenance 默认受保护，公开需显式白名单 + 理由 + 契约测试；admin 角色经全量授权自动持有。
   { code: PERM.OPS_READ, name: '运维快照读取', type: 'api', module: 'system' },
+  // M13 SaaS 运营面（PRD-013 FR-13-15，api-spec §3.21）：/api/v1/saas/* 平台运营端点。
+  // 读写分离；运营面整类 @IgnoreTenant()，与 system:tenant:ignore 组成跨租户维护路径（与关系）。
+  // admin 角色经全量授权自动持有；存量环境需 reseed + 重登（登录快照含权限码）。
+  { code: PERM.OPS_SAAS_READ, name: 'SaaS 运营查询', type: 'api', module: 'saas' },
+  { code: PERM.OPS_SAAS_WRITE, name: 'SaaS 运营操作', type: 'api', module: 'saas' },
   // M10 E-13：站内信消息中心（/api/v1/notifications 六个端点的守卫）。
   // 无对应菜单——铃铛是顶栏全局元素而非路由页；权限点仍显式成码，便于按岗授予 / 回收。
   { code: PERM.NOTIFICATION_READ, name: '消息中心', type: 'api', module: 'notification' },
@@ -205,6 +210,12 @@ const MENU_TREE: MenuSeed[] = [
       { name: '租户管理', path: '/system/tenants', component: 'system/tenants', icon: 'office-building', permissionCode: PERM.TENANT_READ, sort: 7 },
       // M9 参数配置页（views/system/configs）：键值列表 / 在线修改 / 变更历史（PRD-009 FR-07）
       { name: '参数配置', path: '/system/configs', component: 'system/configs', icon: 'tool', permissionCode: PERM.CONFIG_READ, sort: 8 },
+      // M13 SaaS 运营四页（views/saas/*，PRD-013 §2.3）：套餐 / 订阅 / 生命周期 / 用量看板。
+      // 动态路由由菜单树生成，缺此四条则页面不可达（直输 URL 落 403）；存量环境需 reseed + 重登。
+      { name: '套餐管理', path: '/saas/plans', component: 'saas/plans', icon: 'box', permissionCode: PERM.OPS_SAAS_READ, sort: 9 },
+      { name: '订阅管理', path: '/saas/subscriptions', component: 'saas/subscriptions', icon: 'ticket', permissionCode: PERM.OPS_SAAS_READ, sort: 10 },
+      { name: '租户生命周期', path: '/saas/lifecycle', component: 'saas/lifecycle', icon: 'switch-button', permissionCode: PERM.OPS_SAAS_READ, sort: 11 },
+      { name: '用量看板', path: '/saas/usage', component: 'saas/usage', icon: 'data-line', permissionCode: PERM.OPS_SAAS_READ, sort: 12 },
     ],
   },
   // 注意：历史种子在此挂了「订单中心 /order → 订单退款(order/refund)」，但 views/order/refund 视图

@@ -18,6 +18,65 @@
 
 ## [Unreleased]
 
+### Added（M13 第六批：主线 B 文档四件套 + 工具链冻结落地，2026-10-19）
+
+- **docs/42 开发环境指南**（OQ-13-4 定案：与 47 并列，42 号落地）：运行时基线、安装七步、常用命令、端口表、已知环境坑（沙箱 tsc/deploy 静默等四项）。
+- **docs/48 可复现构建规范**：单一权威来源（packageManager/`.nvmrc`/lockfile/engines）、版本冻结矩阵（六处）、安装构建纪律（frozen-lockfile、依赖序、Prisma 双 generate、无隐式网络）、平台差异登记、历史违规示例（v0.2.0 双写 version / `@fw/tenant` 漏 CI 循环 / 三处同步假绿）。
+- **docs/49 Dev Container 指南 + `.devcontainer/devcontainer.json`**：`node:22.22.2-bookworm` 基镜像、postCreateCommand（corepack + frozen-lockfile 安装 + Prisma 双 generate）、五端口转发命名、corepack/引擎平台/权限三项 FAQ。
+- **docs/97 可复现性验证清单**：工具链版本矩阵八项 + 干净构建五步 + 门禁抽检 + 行为一致性抽检（4029/4031/metrics）+ 已知差异豁免口径 + 首次留痕。
+- **工具链冻结实改**：新增 `.nvmrc`（22.22.2）；CI `setup-node.node-version` 由浮动 `22` pin 为 `22.22.2`（两处）——minor 漂移曾是 engine 行为差异来源。
+- **docs/47 §2.4** 主线 B 表更新为实际交付位与状态；README 文档索引补 47/42/48/49/97 五条。
+
+### Added（M13 第五批：admin-web 运营四页——SaaS 运营面用户可见交付，2026-10-19）
+
+- **四页（views/saas/*，PRD-013 §2.3）**：套餐管理（列表 + 版本/配额抽屉，发布后不可变语义标注）、订阅管理（查询/开通/取消，一租户一生效 1003 前端提示）、租户生命周期（六动作迁移 + alreadyApplied 幂等提示 + 历史日志表）、用量看板（生效配额 + 窗口用量进度条 + 运营补录上报，4029/deduped 文案区分）。动态路由经菜单树生成（views glob 自动解析），无权限菜单不出现。
+- **API 模块 `src/api/saas.ts`**（九端点封装）+ types 四视图（BigInt 值后端已转 string）。
+- **菜单入 seed**（系统管理目录 4 项，permissionCode=ops:saas:read）+ mock 同步（菜单 4 条 + 权限点 2 条 + saas 预置数据）；**存量环境需 reseed + 重登**。
+- **mock handlers /saas/* 九端点**（迁移表与 @fw/saas 逐条同语义：4030/幂等/1003/4029 details/deduped），smoke-mock **140/140**。
+- **错误码文案表**：4029/4030/4031 入 zh-CN/en-US locale（ErrorMessages 键集与 BIZ_CODE 编译期同构，缺键即构建失败）。
+- **门禁修复**：`@Controller('/api/v1/saas')` 前导斜杠（既有约定，api-parity 路径归一按字面拼接）；模板不引 saas 调用面（模板 server 无 saas 域，triway A 轴提示保持零）。triway 七轴 / api-parity / headers 664 全绿。
+- **验证**：admin-web 186/186 + build ✓ + smoke-mock 140/140 + example-api saas 17/17 + smoke-saas-ops 22/22。
+
+### Added（M13 第四批：fw_saas_* 指标段 + smoke-saas-ops 端到端 + 集成建库兜底，2026-10-19）
+
+- **`fw_saas_*` 指标段（@fw/saas saas-metrics.ts，M12 契约范式）**：`fw_saas_quota_checks_total{execution}` / `quota_exceeded_total`（4029）/ `usage_deduped_total` / `lifecycle_transitions_total{action}` / `lifecycle_invalid_total`（4030）/ `tenant_suspended_rejected_total`（4031）/ `sweep_total{result}`；低基数护栏（禁 tenantId/metricKey 入 label）；段开关 `METRICS_SAAS_SECTION_ENABLED`；埋点在 UsageService/LifecycleService/Guard。
+- **`POST /saas/tenants/:id/usage/events`**：用量事件上报端点（运营补录/业务对接面，走 ADR-0030 全语义；4029 时补 `saas.quota.exceeded` 审计事件）。
+- **`smoke-saas-ops.mjs`（22/22，入 CI）**：SaaS 闭环端到端——admin 登录 → 开租户+订阅 → 一租户一生效 1003 → 用量 ×10 + 超限 4029（details 三字段）→ 幂等键重放 deduped → 用量查询 → **冻结租户仍可登录 + 业务请求 4031（acme 租户 + acmeadmin 自身身份命中业务面）** → legacy 租户不受影响 → resume 恢复 → terminate → 迁移历史 + `/metrics` 三指标断言；前置数据自足（default 套餐/v1/配额项不存在时自建，不依赖 backfill）。
+- **租户五态透传（@fw/tenant，ADR-0031 §3 衔接）**：`TenantInfo.status` 扩为 0~4 五态 Int；`assertUsable` 仅拒存量停用（0，M8 既有语义）——grace/frozen/terminated 放行至业务面由 SaasLifecycleGuard 4031 拦截（**冻结租户登录/导出白名单面必须可达**，此前在解析层即 4001）。tenant 包 34/34 零回归。
+- **配置键登记补全**：`SAAS_GRACE_PERIOD_DAYS` 入 envSchema（zod 正整数默认 7）+ ENV_KEY_PATHS（`saas.gracePeriodDays`，非热更 boot 键）——triway F 轴修复。
+- **集成测试建库兜底（`src/testing/apply-sqlite-migrations.ts`）**：沙箱 `migrate deploy` 出现**完全静默不落盘**（exit 0、0 表；与 turbo 231 同族环境症状）——deploy 后校验基线表、缺失则按序直建全量迁移 DDL（逐行剥注释）；refresh-rotation / observability-chain / saas 三个集成 spec 共用。**沙箱环境症状登记，CI（Linux）deploy 正常不受影响**。
+- **验证**：example-api 全量 **138/138**（含修复的 auth 集成 12 例）+ @fw/saas 23/23 + @fw/tenant 34/34 + smoke 22/22；门禁 triway 七轴 / headers 659 / api-parity / no-raw-sql 全绿。
+
+### Added（M13 第三批：运营 API + 冻结 Guard + 到期任务——SaaS 后端闭环，2026-10-19）
+
+- **权限码（PERM）**：`ops:saas:read` / `ops:saas:write`（SaaS 运营面读写分离；与 `system:tenant:ignore` 组成跨租户维护路径，沿 /tenants 管理面先例）+ seed 权限点两条（admin 全量授权自动持有；**存量环境需 reseed + 重登**）。
+- **运营端点 `/api/v1/saas/*` 九个（api-spec §3.21）**：套餐列表/版本、订阅创建/取消/查询、生效配额、窗口用量（rollup 重算）、生命周期迁移（非法 4030 / 幂等 alreadyApplied）与历史。整类 `@IgnoreTenant()` + `@LifecycleExempt()`，写操作带审计（M12 六字段 + after 快照）。
+- **业务入口冻结拦截（`SaasLifecycleGuard`，APP_GUARD 注册序在 RbacGuard 后）**：frozen/terminated 租户业务请求 4031；放行面 = @Public + @LifecycleExempt 白名单（默认拒绝）+ 无租户上下文（单租户模式沿既有行为）。余量缓存优化（60s + 迁移失效）登记待办，当前直查以正确性优先。
+- **到期处置任务（`SaasLifecycleJobs`，@Cron 每小时 + 分布式锁）**：active 订阅到期 → 租户 grace + 订阅置 expired；宽限期满（`SAAS_GRACE_PERIOD_DAYS`，默认 7）→ frozen；条件更新幂等（重复执行 alreadyApplied 短路不重复记日志）；单条失败不中断整批。配置键三处登记（.env.example / docs/60 / api-spec §3.21）。
+- **端口扩展**：SaasStore 增 `listPlans` / `listActiveSubscriptionsExpiredAt` / `listGraceTenantsPastGrace`（Fake + Prisma 同步）。
+- **测试**：saas 模块 17/17（集成 9：并发零超发等；守卫/任务 8：ALS 上下文经 runWithRequestContext 驱动）；auth 包 227/227 零回归。门禁：triway 七轴（含新权限码）/ headers 656 / no-raw-sql / api-parity 全绿。
+- **坑（登记）**：迁移 SQL 按「分号切分 + 整段以 `--` 开头即丢弃」会把与注释同段的 CREATE TABLE 一并吞掉（departments 缺表连锁 no such table）——本地临时库建库已改为逐行剥注释 + 全量 DDL 直建（不与 deploy 部分应用态混跑）。
+
+### Added（M13 第二批：Prisma 驱动接线 + 集成验证 + 存量回填，2026-10-19）
+
+- **PrismaSaasStore（`SaasStore` 端口的 example-api 适配器）**：M13 十表映射；`consumeAtomic` 单事务落地 ADR-0030 不变量（事件幂等键唯一约束 → 窗口行初始化撞唯一键重读 → 条件 UPDATE 扣减，exceeded 整体回滚不留痕）；`conditionalUpdateStatus` 五态 Int 映射（0 存量停用 → frozen，1 → active）；`active_marker` 唯一兜底一租户一生效订阅（服务层校验 + 1003）。
+- **SaasModule（example-api）**：`SAAS_STORE` token + 五服务装配（Plan/Quota/Subscription/Usage/TenantLifecycle），已接入 app.module；运营 API/到期任务/业务入口 Guard 随后续批次消费。
+- **集成测试（`prisma-saas-store.integration.spec`，9/9）**：本地临时 sqlite + migrate deploy（受限环境 DDL 兜底按序执行、已存在对象幂等跳过）；覆盖超限事件回滚语义、**12 线程并发逼近硬限额零超发（AC-13-04）**、幂等键去重不重复计量、软限额告警同窗幂等、observe 仅留痕、active_marker 唯一冲突 1003、生命周期条件更新幂等 + 日志逐条。CI 矩阵可经 `SAAS_TEST_DB_URL` 直连 service DB。
+- **存量回填脚本（`apps/example-api/scripts/backfill-saas.mjs`，ADR-0029 §2.2）**：确保 default 套餐 + v1；status=1 → active 订阅（expireAt 沿用）、status=0 → cancelled（不占 marker）；按租户无订阅才建，**幂等**（本机 dev.db 实测：首跑 3 active + 1 cancelled，重跑 4 全跳过）；`--dry-run` 支持；不改写 tenants 三列。
+
+### Added（M13 SaaS 运营基础：契约冻结 + 领域包首批发起，2026-10-19）
+
+- **ADR-0029/0030/0031 已采纳**（编号顺延：0028 已被 cache 标签 Cluster 兼容策略占用）：0029 套餐/订阅/生效配额三层模型（`tenants.plan/status/expireAt` 转派生只读 + active_marker 三库一致方案）；0030 硬限额并发扣减（DB 条件 UPDATE 唯一事实源 + Redis 仅预检 + 软限额同窗幂等告警 + observe 仅统计）；0031 租户五态生命周期（迁移表唯一权威 + 条件更新幂等 + 冻结 4031 作用于业务入口）。
+- **错误码登记（三副本 + 工件同源）**：4029 配额超限（429）/ 4030 非法生命周期迁移（409）/ 4031 租户冻结（403）——core 源 + error-codes.json 工件 + 前端/模板/mock 副本 + `docs/40` 码表；`check-triway-consistency` 七轴全绿。
+- **Schema 三库同构**：`example-api` 新增 M13 十表（plans/plan_versions/plan_quotas/quota_definitions/tenant_subscriptions/tenant_quotas/tenant_quota_windows/usage_events/usage_rollups/tenant_lifecycle_logs）+ 迁移 sqlite `20261019130000`（已在本机 dev.db 执行，10 表落库）与 pg 增量（migrate diff 生成）；mysql init 重新生成（19→29 表）；模型段逐字节一致校验通过（仅既有登记差异）；数据字典 `docs/30` §3.20~3.29。
+- **新包 `@fw/saas`（领域逻辑首批发起）**：PlanService（版本递增发布、发布后不可变）/ SubscriptionService（一租户一生效 + plan_quotas 快照）/ QuotaService（生效值 = manual 覆盖 ?? 套餐默认、窗口切片）/ UsageService（consumeAtomic 限额编排、软限额幂等告警钩子、rollup 重算闭环）/ TenantLifecycleService（迁移编排 + 幂等重入判定 + 4031 断言）；持久化经 `SaasStore` 端口（Fake 驱动单测 23/23，覆盖率 92/84/92/95 过门禁；Prisma 驱动随 example-api 接入批次交付）；CI 包列表（build/test 两处循环）已同步。
+- **注意（沙箱环境登记）**：本机 `prisma migrate deploy` 静默不执行（CLI 输出异常，与 turbo 231 同类症状）——sqlite 迁移经直连 SQL 执行并回填 `_prisma_migrations`；pg/mysql 迁移在真机部署窗口按既有流程执行前需人工核对。
+
+### Added（文档：M13 立项草案，2026-10-19）
+
+- **[PRD-013](./docs/prd/prd-013-saas-operations-foundation.md)（M13 草案）**：SaaS 运营基础落地（主线 A：套餐/订阅/配额模型、用量幂等与硬限额并发执行、租户五态生命周期、运营 API 与管理端、账单基础，FR-13-01~16 映射 PRD-011 S-01~S-07，不另建第二套需求体系）+ 可复现开发环境（主线 B：工具链冻结、开发环境文档四件套、验证矩阵边界声明，FR-13-17~21）；验收 AC-13-01~14，关键设计待 ADR-0029~0031 冻结（ADR-0028 已被 cache 标签 Cluster 兼容策略占用，编号顺延）。
+- **[docs/47 开发文档](./docs/47-saas-foundation-dev-guide.md)**：PRD-013 配套技术设计——技术架构（新增 `@fw/saas` 领域包七模块）、关键接口（plans/tenant-subscriptions/quotas/usage/lifecycle/bills 六资源 + 错误码 4029/4030/4031）、数据结构（9 组新表 + `tenants` 存量字段派生化兼容策略 + 五态状态机）、五阶段实施计划（P0 基线 → P1 契约冻结 → P2 环境自动化 → P3 核心闭环 → P4 实机验证）。
+
 ### Fixed（P1 加固：标签脚本写序与失效返回值口径，2026-10-19）
 
 - **`SET_TAGS_LUA` 写序重排（P1 加固）**：预检只能收敛**确定性**错误（WRONGTYPE / 标签键撞值键），预检通过后的**资源类**故障（OOM / 只读副本）仍会中止脚本并保留已执行命令。写序由「写值 → 登记索引」改为「**预检 → 登记索引 → 最后写值**」：残余故障的最坏结果由不可回收的**孤儿缓存**（有值无索引，标签失效永远触达不到）翻转为无害的**幽灵索引**（索引指向不存在的键：失效时 DEL 不存在的键无副作用，标签集合 TTL 到期自回收）。`store.port` 契约同步登记写序约束。

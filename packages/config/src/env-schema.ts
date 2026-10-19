@@ -7,6 +7,7 @@
  * @modified 2026-10-13 donttemo M4 新增 9 个 CACHE_* 键（前缀/TTL/容量/降级/空值/抖动/锁/慢操作/大key）
  * @modified 2026-10-13 donttemo M7 新增 10 个 MQ_* 键（连接/前缀/并发/尝试/退避/超时/cron/限速/死信上限/停机等待）
  * @modified 2026-10-13 donttemo M8 新增 6 个 TENANT_* 键（总开关/解析顺序/请求头名/基准域名/JWT claim/缓存TTL）
+ * @modified 2026-10-19 donttemo M13（PRD-013）新增 SAAS_GRACE_PERIOD_DAYS（订阅到期宽限天数，非热更 boot 键）
  * @modified 2026-10-14 donttemo M8 T-M8-02 新增 TENANT_DB_KEY（dedicated 租户独立库连接串加密密钥）
  * @modified 2026-10-14 donttemo M8 T-M8-05 新增 7 个 TRANSPORT_* 键（驱动/连接/前缀/超时/角色/实例标识/停机等待）
  * @modified 2026-10-14 donttemo M8 T-M8-06 新增 5 个 OTEL_* 键（总开关/服务名/导出端点/采样比例/错误全采）
@@ -155,6 +156,8 @@ export const envSchema = z.object({
   AUTH_PASSWORD_POLICY: z.enum(AUTH_PASSWORD_POLICY_VALUES).default('medium').describe('密码强度策略'),
   /** 是否开放自助注册 */
   AUTH_ALLOW_REGISTER: boolString(false).describe('是否开放自助注册（默认关闭：框架「默认安全」原则，开放注册须显式开启）'),
+  /** M13 SaaS 运营（PRD-013/ADR-0031）：订阅到期宽限天数（非热更键，到期任务每次执行时读取） */
+  SAAS_GRACE_PERIOD_DAYS: z.coerce.number().int().positive().default(7).describe('订阅到期宽限天数（active→grace→frozen 的 grace 时长；非法取值回退默认 7 并告警）'),
   /** JWT 签名密钥（M3 起由 @fw/auth 消费；缺失时鉴权模块启动即失败） */
   JWT_SECRET: optionalString().describe('JWT 签名密钥'),
   /** 上一版 JWT 签名密钥：密钥轮换过渡期用于验签旧令牌（TC-AUTH-014） */
@@ -363,6 +366,7 @@ export const ENV_KEY_PATHS = {
   AUTH_LOCK_MINUTES: 'auth.lockMinutes',
   AUTH_REFRESH_GRACE_SECONDS: 'auth.refreshGraceSeconds',
   AUTH_FINGERPRINT: 'auth.fingerprintEnabled',
+  SAAS_GRACE_PERIOD_DAYS: 'saas.gracePeriodDays',
   AUTH_REPLACEMENT_KEYS: 'auth.replacementKeys',
   AUTH_PASSWORD_POLICY: 'auth.passwordPolicy',
   AUTH_ALLOW_REGISTER: 'auth.allowRegister',

@@ -546,6 +546,173 @@ erDiagram
 | `created_by` | varchar(36) | 是 | system | 创建人（BaseEntity 约定） | — |
 | `updated_by` | varchar(36) | 是 | system | 更新人（BaseEntity 约定） | — |
 
+### 3.20 `plans` 套餐定义（M13，ADR-0029）
+
+> SaaS 运营基础的权益描述层：**套餐是数据不是代码**，新增套餐零发布。本表不承载配额值
+> （值在 `plan_quotas` 按版本锁定），`code` 唯一且用于 `tenants.plan` 派生列回写。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
+|---|---|---|---|---|---|
+| `id` | varchar(36) | 是 | uuid | 主键 | PK |
+| `code` | varchar(191) | 是 | — | 套餐编码（`default` / `pro` 等，唯一） | **UNIQUE** |
+| `name` | varchar(255) | 是 | — | 展示名 | — |
+| `description` | text | 否 | NULL | 描述 | — |
+| `deleted_at` | datetime(3) | 否 | NULL | 软删 | — |
+| `created_at` / `updated_at` / `created_by` / `updated_by` | — | 是 | — | BaseEntity 约定 | — |
+
+### 3.21 `plan_versions` 套餐版本（M13，ADR-0029）
+
+> **发布后不可变**：订阅绑定版本而非最新定义，历史账单与用量据此对账（AC-13-02）。
+> 套餐升级 = 发布新版本；旧订阅继续读自己绑定的版本。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
+|---|---|---|---|---|---|
+| `id` | varchar(36) | 是 | uuid | 主键 | PK |
+| `plan_id` | varchar(36) | 是 | — | 所属套餐（逻辑外键 → `plans.id`） | `idx_plan_versions_plan` / **UNIQUE** `(plan_id, version)` |
+| `version` | int | 是 | — | 递增版本号 | 同上 |
+| `status` | varchar(32) | 是 | published | `draft` / `published` / `deprecated` | — |
+| `remark` | text | 否 | NULL | 版本说明 | — |
+| `published_at` | datetime(3) | 否 | NULL | 发布时刻 | — |
+| `created_at` / `updated_at` / `created_by` / `updated_by` | — | 是 | — | BaseEntity 约定 | — |
+
+### 3.22 `quota_definitions` 配额字典（M13，ADR-0029/0030）
+
+> 指标维度定义：`key` 唯一（如 `api_calls`），`window_type` 决定统计窗口，
+> `execution` 为默认执行方式（可被 `plan_quotas.execution` 按版本覆盖）。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
+|---|---|---|---|---|---|
+| `id` | varchar(36) | 是 | uuid | 主键 | PK |
+| `key` | varchar(64) | 是 | — | 指标键（唯一） | **UNIQUE** |
+| `name` | varchar(255) | 是 | — | 展示名 | — |
+| `unit` | varchar(32) | 是 | — | 单位（`count` / `gb` 等） | — |
+| `window_type` | varchar(16) | 是 | day | 统计窗口：`day` / `month` / `total` | — |
+| `execution` | varchar(16) | 是 | hard | 执行方式：`soft`（告警放行）/ `hard`（拒绝超额）/ `observe`（仅统计） | — |
+| `description` | text | 否 | NULL | 说明 | — |
+| `created_at` / `updated_at` / `created_by` / `updated_by` | — | 是 | — | BaseEntity 约定 | — |
+
+### 3.23 `plan_quotas` 套餐版本配额默认项（M13，ADR-0029）
+
+> 生效值解析规则唯一归属 QuotaService：`tenant_quotas.override_value ?? 本表 limit_value`。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
+|---|---|---|---|---|---|
+| `id` | varchar(36) | 是 | uuid | 主键 | PK |
+| `plan_version_id` | varchar(36) | 是 | — | 所属版本（逻辑外键 → `plan_versions.id`） | `idx_plan_quotas_version` / **UNIQUE** `(plan_version_id, quota_key)` |
+| `quota_key` | varchar(64) | 是 | — | 指标键（逻辑外键 → `quota_definitions.key`） | 同上 |
+| `limit_value` | bigint | 是 | — | 默认限额 | — |
+| `execution` | varchar(16) | 否 | NULL | 覆盖字典默认执行方式（NULL = 用字典默认） | — |
+| `created_at` / `updated_at` / `created_by` / `updated_by` | — | 是 | — | BaseEntity 约定 | — |
+
+### 3.24 `tenant_subscriptions` 租户订阅（M13，ADR-0029）
+
+> 一租户至多一个生效订阅：**`active_marker` 方案**——生效时写入 `tenant_id`、关闭时置 NULL；
+> 三库唯一索引对 NULL 不去重，无需 partial index 即可表达，triway 零方言分叉。
+> 订阅创建即按 `plan_quotas` 快照生成 `tenant_quotas`（source=plan_snapshot）。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
+|---|---|---|---|---|---|
+| `id` | varchar(36) | 是 | uuid | 主键 | PK |
+| `tenant_id` | varchar(36) | 是 | — | 租户（逻辑外键 → `tenants.id`；运营域表与 `tenants.id` 同型 String） | `idx_tenant_subscriptions_tenant` |
+| `plan_id` | varchar(36) | 是 | — | 套餐（逻辑外键 → `plans.id`，冗余便于按套餐统计） | — |
+| `plan_version_id` | varchar(36) | 是 | — | 绑定版本（历史对账锚点） | `idx_tenant_subscriptions_version` |
+| `status` | varchar(32) | 是 | active | `active` / `expired` / `cancelled` | `idx_tenant_subscriptions_status` |
+| `active_marker` | varchar(36) | 否 | NULL | 生效标记 = `tenant_id`（active 时），关闭置 NULL | **UNIQUE**（NULL 可重复） |
+| `effective_at` | datetime(3) | 是 | now | 生效时刻 | — |
+| `expire_at` | datetime(3) | 否 | NULL | 到期时刻（NULL = 无期限；到期任务扫描依据） | — |
+| `closed_at` | datetime(3) | 否 | NULL | 关闭时刻（expired/cancelled） | — |
+| `reason` | text | 否 | NULL | 变更原因（审计口径） | — |
+| `deleted_at` | datetime(3) | 否 | NULL | 软删 | — |
+| `created_at` / `updated_at` / `created_by` / `updated_by` | — | 是 | — | BaseEntity 约定 | — |
+
+### 3.25 `tenant_quotas` 租户配额覆盖（M13，ADR-0029）
+
+> 租户最终生效值的覆盖层；`source=plan_snapshot` 为订阅创建时的版本快照行（随订阅重算），
+> `manual` 为运营手工调整。唯一键 `(tenant_id, quota_key)`。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
+|---|---|---|---|---|---|
+| `id` | varchar(36) | 是 | uuid | 主键 | PK |
+| `tenant_id` | varchar(36) | 是 | — | 租户（逻辑外键 → `tenants.id`） | `idx_tenant_quotas_tenant` / **UNIQUE** `(tenant_id, quota_key)` |
+| `quota_key` | varchar(64) | 是 | — | 指标键 | 同上 |
+| `override_value` | bigint | 是 | — | 覆盖限额值 | — |
+| `execution` | varchar(16) | 否 | NULL | 覆盖执行方式（NULL = 下沉到套餐默认） | — |
+| `source` | varchar(32) | 是 | manual | `plan_snapshot` / `manual` | — |
+| `created_at` / `updated_at` / `created_by` / `updated_by` | — | 是 | — | BaseEntity 约定 | — |
+
+### 3.26 `tenant_quota_windows` 用量窗口行（M13，ADR-0030）
+
+> **硬限额扣减的事实行**：扣减 = `UPDATE ... SET used = used + qty
+> WHERE used + qty <= limit_value`（affected=0 即超限 4029）。窗口按 `window_start`
+> 切片翻转，旧窗只读，无需清零任务。`warned_at` 支撑软限额同窗口幂等告警。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
+|---|---|---|---|---|---|
+| `id` | varchar(36) | 是 | uuid | 主键 | PK |
+| `tenant_id` | varchar(36) | 是 | — | 租户 | `idx_tenant_quota_windows_tenant` / **UNIQUE** `(tenant_id, quota_key, window_type, window_start)` |
+| `quota_key` | varchar(64) | 是 | — | 指标键 | 同上 |
+| `window_type` | varchar(16) | 是 | — | 窗口类型（沿字典） | 同上 |
+| `window_start` | datetime(3) | 是 | — | 窗口起点（日窗取当日 00:00） | 同上 |
+| `used` | bigint | 是 | 0 | 已用量（条件更新自增） | — |
+| `limit_value` | bigint | 是 | — | 本窗生效限额（快照，含覆盖） | — |
+| `execution` | varchar(16) | 是 | hard | 本窗执行方式快照 | — |
+| `warned_at` | datetime(3) | 否 | NULL | 软限额告警时刻（非 NULL 同窗不再告警） | — |
+| `updated_at` | datetime(3) | 是 | — | 更新时刻 | — |
+
+### 3.27 `usage_events` 原始用量事件（M13，ADR-0030）
+
+> **用量事实源**：`idempotency_key` 唯一约束去重——重复投递不重复计量（AC-13-05）。
+> 汇总（§3.28）随时可由本表重算重建；缓存余量只是加速视图。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
+|---|---|---|---|---|---|
+| `id` | varchar(36) | 是 | uuid | 主键 | PK |
+| `tenant_id` | varchar(36) | 是 | — | 租户 | `idx_usage_events_tenant_metric_time` |
+| `quota_key` | varchar(64) | 是 | — | 指标键 | 同上 |
+| `quantity` | bigint | 是 | — | 本次用量 | — |
+| `occurred_at` | datetime(3) | 是 | — | 发生时刻（调用方传入，非落库时刻） | 同上 |
+| `source` | varchar(32) | 是 | api | 来源：`api` / `job` / `import` 等 | — |
+| `idempotency_key` | varchar(128) | 是 | — | 幂等键（如 `<tenantId>:<metricKey>:<bizEventId>`） | **UNIQUE** |
+| `created_at` | datetime(3) | 是 | now | 落库时刻 | — |
+
+### 3.28 `usage_rollups` 用量窗口汇总（M13，ADR-0030）
+
+> 窗口聚合缓存表：与 `usage_events` 同事务写入保证一致；提供重算命令可从原始事件
+> 重建任意窗口（AC-13-06）。唯一键同 §3.26。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
+|---|---|---|---|---|---|
+| `id` | varchar(36) | 是 | uuid | 主键 | PK |
+| `tenant_id` | varchar(36) | 是 | — | 租户 | `idx_usage_rollups_tenant` / **UNIQUE** `(tenant_id, quota_key, window_type, window_start)` |
+| `quota_key` | varchar(64) | 是 | — | 指标键 | 同上 |
+| `window_type` | varchar(16) | 是 | — | 窗口类型 | 同上 |
+| `window_start` | datetime(3) | 是 | — | 窗口起点 | 同上 |
+| `total_quantity` | bigint | 是 | — | 汇总用量 | — |
+| `event_count` | int | 是 | 0 | 事件条数（重算核对锚点） | — |
+| `updated_at` | datetime(3) | 是 | — | 更新时刻 | — |
+
+### 3.29 `tenant_lifecycle_logs` 租户生命周期日志（M13，ADR-0031）
+
+> 五态状态机迁移的留痕面，**只增不改不删**（与审计同类）。迁移唯一权威为
+> `TenantLifecycleService`；ip/ua/trace_id/request_id 随 M12 审计契约六字段口径。
+> 终止后的处置完成也以 `action=dispose` 记录于本表（处置幂等判据）。
+
+| 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
+|---|---|---|---|---|---|
+| `id` | varchar(36) | 是 | uuid | 主键 | PK |
+| `tenant_id` | varchar(36) | 是 | — | 租户 | `idx_tenant_lifecycle_tenant_time` |
+| `from_status` | varchar(16) | 否 | NULL | 迁移前状态（初始开通为 NULL） | — |
+| `to_status` | varchar(16) | 是 | — | 迁移后状态：`pending`/`active`/`grace`/`frozen`/`terminated` | — |
+| `action` | varchar(32) | 是 | — | 动作：`activate`/`expire`/`freeze`/`resume`/`terminate`/`dispose` | `idx_tenant_lifecycle_action` |
+| `actor_type` | varchar(16) | 是 | user | `system`（任务）/ `user`（运营） | — |
+| `actor_id` | varchar(36) | 否 | NULL | 操作人（system 时 NULL） | — |
+| `reason` | text | 否 | NULL | 原因 | — |
+| `ip` | varchar(45) | 否 | NULL | 来源 IP | — |
+| `user_agent` | varchar(255) | 否 | NULL | 客户端标识 | — |
+| `trace_id` | varchar(64) | 否 | NULL | 链路 ID | — |
+| `request_id` | varchar(64) | 否 | NULL | 请求 ID | — |
+| `created_at` | datetime(3) | 是 | now | 迁移时刻 | — |
+
 ## 4. 迁移与数据治理
 
 - 一次变更一个 migration，命名 `<序号>_<动作>_<表>`；禁止修改已提交迁移文件。

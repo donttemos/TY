@@ -317,6 +317,20 @@ export interface MockDb {
   refreshTokens: Record<string, string>;
   /** 已使用过的 refresh token 明文（检测复用泄漏） */
   usedRefreshTokens: Set<string>;
+  /** M13 SaaS 运营（PRD-013）：套餐/订阅/配额/生命周期 mock 数据源 */
+  saas: MockSaasState;
+}
+
+/** M13 SaaS 运营 mock 数据（与 @fw/saas 领域视图同构；BigInt 值以 string 承载） */
+export interface MockSaasState {
+  plans: Array<{ id: string; code: string; name: string; description: string | null }>;
+  planVersions: Array<{ id: string; planId: string; version: number; status: string; remark: string | null; publishedAt: string | null }>;
+  planQuotas: Array<{ planVersionId: string; quotaKey: string; limitValue: string; execution: string | null }>;
+  quotaDefinitions: Array<{ key: string; name: string; unit: string; windowType: string; execution: string }>;
+  subscriptions: Array<{ id: string; tenantId: string; planId: string; planVersionId: string; status: string; effectiveAt: string; expireAt: string | null; closedAt: string | null; reason: string | null }>;
+  tenantQuotas: Array<{ tenantId: string; quotaKey: string; overrideValue: string; execution: string | null; source: string }>;
+  usageWindows: Record<string, { used: string; limitValue: string; execution: string }>;
+  lifecycleLogs: Array<{ tenantId: string; fromStatus: string | null; toStatus: string; action: string; actorType: string; actorId: string | null; reason: string | null; createdAt: string }>;
 }
 
 /** 权限点清单：与 seed.ts 的 FRAMEWORK_PERMISSIONS + BUSINESS_PERMISSIONS 同源，另补字典 4 项（API 规格 §3.6） */
@@ -365,6 +379,9 @@ const PERMISSIONS: MockPermission[] = [
   { id: 'p-notification-read', code: 'notification:read', name: '消息中心', type: 'api', module: 'notification' },
   // M10 E-09：附件上传（api-spec §3.19 POST /files 守卫；无菜单——上传是表单内嵌能力）
   { id: 'p-file-create', code: 'file:create', name: '附件上传', type: 'api', module: 'file' },
+  // M13 SaaS 运营面（api-spec §3.21）：读写分离；admin 全量授权自动持有
+  { id: 'p-ops-saas-read', code: 'ops:saas:read', name: 'SaaS 运营查询', type: 'api', module: 'saas' },
+  { id: 'p-ops-saas-write', code: 'ops:saas:write', name: 'SaaS 运营操作', type: 'api', module: 'saas' },
 ];
 
 /** 普通用户角色默认权限（刻意不含 role:read / audit:read / user:assign-role，用于验证越权拦截） */
@@ -380,6 +397,10 @@ const MENUS: MockMenu[] = [
   { id: 'm-system-dict', parentId: 'm-system', name: '字典管理', path: '/system/dict', component: 'system/dict', icon: 'collection', permissionCode: 'dict:read', visible: true, sort: 4 },
   { id: 'm-system-audit', parentId: 'm-system', name: '审计日志', path: '/system/audit-logs', component: 'system/audit-logs', icon: 'file-text', permissionCode: 'audit:read', visible: true, sort: 5 },
   { id: 'm-system-queue', parentId: 'm-system', name: '队列管理', path: '/system/queue', component: 'system/queue', icon: 'clock', permissionCode: 'system:queue:list', visible: true, sort: 6 },
+  { id: 'm-saas-plans', parentId: 'm-system', name: '套餐管理', path: '/saas/plans', component: 'saas/plans', icon: 'box', permissionCode: 'ops:saas:read', visible: true, sort: 9 },
+  { id: 'm-saas-subscriptions', parentId: 'm-system', name: '订阅管理', path: '/saas/subscriptions', component: 'saas/subscriptions', icon: 'ticket', permissionCode: 'ops:saas:read', visible: true, sort: 10 },
+  { id: 'm-saas-lifecycle', parentId: 'm-system', name: '租户生命周期', path: '/saas/lifecycle', component: 'saas/lifecycle', icon: 'switch-button', permissionCode: 'ops:saas:read', visible: true, sort: 11 },
+  { id: 'm-saas-usage', parentId: 'm-system', name: '用量看板', path: '/saas/usage', component: 'saas/usage', icon: 'data-line', permissionCode: 'ops:saas:read', visible: true, sort: 12 },
   { id: 'm-system-tenants', parentId: 'm-system', name: '租户管理', path: '/system/tenants', component: 'system/tenants', icon: 'office-building', permissionCode: 'tenant:read', visible: true, sort: 7 },
   // M9 参数配置页（views/system/configs）：与后端 seed 同形（PRD-009 FR-07）
   { id: 'm-system-configs', parentId: 'm-system', name: '参数配置', path: '/system/configs', component: 'system/configs', icon: 'tool', permissionCode: 'system:config:read', visible: true, sort: 8 },
@@ -627,6 +648,31 @@ export function createDb(): MockDb {
     configUpdatedAt: {},
     configVersion: 1,
     configLastError: null,
+    saas: {
+      plans: [
+        { id: 'plan-default', code: 'default', name: '基础版', description: '默认套餐（M13 mock 预置）' },
+        { id: 'plan-pro', code: 'pro', name: '专业版', description: '更大配额与优先支持' },
+      ],
+      planVersions: [
+        { id: 'pv-default-1', planId: 'plan-default', version: 1, status: 'published', remark: null, publishedAt: '2026-10-19T00:00:00.000Z' },
+        { id: 'pv-pro-1', planId: 'plan-pro', version: 1, status: 'published', remark: null, publishedAt: '2026-10-19T00:00:00.000Z' },
+      ],
+      planQuotas: [
+        { planVersionId: 'pv-default-1', quotaKey: 'api_calls', limitValue: '10000', execution: 'hard' },
+        { planVersionId: 'pv-pro-1', quotaKey: 'api_calls', limitValue: '100000', execution: 'hard' },
+      ],
+      quotaDefinitions: [{ key: 'api_calls', name: 'API 调用数', unit: 'count', windowType: 'day', execution: 'hard' }],
+      subscriptions: [
+        { id: 'sub-mock-1', tenantId: '1', planId: 'plan-default', planVersionId: 'pv-default-1', status: 'active', effectiveAt: '2026-10-19T00:00:00.000Z', expireAt: null, closedAt: null, reason: null },
+      ],
+      tenantQuotas: [
+        { tenantId: '1', quotaKey: 'api_calls', overrideValue: '10000', execution: 'hard', source: 'plan_snapshot' },
+      ],
+      usageWindows: {},
+      lifecycleLogs: [
+        { tenantId: '1', fromStatus: 'pending', toStatus: 'active', action: 'activate', actorType: 'system', actorId: null, reason: 'mock 预置', createdAt: '2026-10-19T00:00:00.000Z' },
+      ],
+    },
     refreshTokens: {},
     usedRefreshTokens: new Set<string>(),
   };
