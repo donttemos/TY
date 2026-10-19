@@ -51,6 +51,17 @@
 | 3.4 | 租户订阅回填 | `tenant_subscriptions` 行数 = 启用租户数（backfill 报告输出） |
 | 3.5 | 前端站点 | 含 saas 四页产物（assets 中 saas/ 路由 chunk） |
 
+## 4. 真机验收结论（2026-10-19，106.55.32.251 / 1Panel）
+
+- 部署：release `202655019215533`（build/switch 两段脚本 `wb-ssh/release11.sh`），原子切换 `/opt/fw/current`：`20261017201501-v0.6.0-fix` → 新 release；`fw-api` active，/health 200，/ready 四探针 ok。
+- 迁移：`20261019130000_add_saas_operations` applied；PG 内 M13 十表 = 10。
+- seed：45 权限点 / 14 菜单（M13 四页菜单在列）；**存量用户需重登**。
+- backfill：default 套餐 v1（fa50269c）+ 订阅 active=3 / cancelled=1（4 租户）。
+- 验收：`/metrics` 含 `fw_saas_*` 28 行；E2E（服务器侧 127.0.0.1）——admin 登录 → GET /saas/plans（default）→ acme freeze（frozen 落库）→ acmeadmin 登录（白名单面可用）→ resume（active）→ 迁移历史 freeze,resume ✓。
+- **HTTPS 外网**：`https://cs.donttemo.top/` 200，前端产物含 saas 引用。
+- **登记（非缺陷）**：真机 `.env` `TENANT_ENABLED=false`（单租户模式）——4031 冻结拦截按 ADR-0031 §3 设计在此模式下不生效（无租户上下文放行）；生命周期迁移本身正常（条件更新/日志全链 ✓）。启用多租户拦截 = `TENANT_ENABLED=true` + 重启（数据层 M8 迁移就绪），属产品形态决策，未擅自变更。
+- HTTPS `/api/v1/health` 404 为既有 nginx 路径布局（/health 不在 /api/v1 前缀下），与本版无关。
+
 ## 4. 遗留
 
 - 三库矩阵已由 CI 完成（pg/mysql/sqlite 三腿）；真机为 PG 单库；
