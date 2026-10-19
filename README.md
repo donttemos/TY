@@ -46,6 +46,7 @@ framework/
     cache/                    # M4 缓存
     queue/                    # M7 队列与调度
     tenant/ transport/ telemetry/  # M8 多租户 / 传输层 / 链路追踪
+    saas/                     # M13 SaaS 运营领域（套餐/订阅/配额/用量/生命周期，端口驱动 ADR-0029~0031）
   templates/
     admin/ api/ cms/          # 项目模板（M5 起）
   apps/
@@ -65,6 +66,7 @@ framework/
     check-no-raw-sql.mjs      # 原生 SQL 方言标注检查（TC-ORM-005）
     check-helm-chart.mjs      # Helm Chart 离线渲染 + K8s 清单语义校验（T-M8-07，63 项）
     check-api-parity.mjs      # 前后端接口对撞门禁（C-06：admin-web 调用面 ↔ 后端路由面）
+    check-no-raw-throw.mjs    # 裸抛检查（ADR-0025 三类治理：②类内部信号行尾标注白名单）
     check-triway-consistency.mjs # 三方一致性门禁（框架包 ↔ example-api ↔ admin 模板，六轴对撞）
     lib/mini-yaml.mjs         # 零依赖极简 YAML 解析器（供上者使用）
     lib/api-parity-core.mjs   # 对撞共享库（路径归一化 / 调用面 / 路由面提取，两个对撞门禁同源）
@@ -82,6 +84,10 @@ framework/
     41-auth-strategies.md     # 认证策略端到端指南（OAuth2 授权码 / API Key 签名约定）
     45-observability-contract.md # 可观测与错误契约手册（M12：错误信封 / 双 ID / 指标段 / 排障样例）
     46-ops-endpoints.md       # 运维端点安全边界矩阵（M12：三层边界 / demo 开关）
+    47-saas-foundation-dev-guide.md # M13 SaaS 运营开发指南（领域划分 / ADR-0029~0031 / 任务拆解）
+    42-development-environment.md   # 开发环境指南（运行时基线 / 安装步骤 / 端口表 / 环境坑）
+    48-reproducible-builds.md       # 可复现构建规范（单一权威 / 版本冻结矩阵 / 构建纪律）
+    49-devcontainer.md              # Dev Container 指南（一键同版本开发容器）
     50-test-cases.md          # 测试用例
     60-deployment-ops.md      # 部署与运维手册
     61-bare-metal-deploy.md   # 云服务器裸机部署手册（宿主 nginx，无容器）
@@ -90,6 +96,7 @@ framework/
     70-engineering-standards.md # 编码 / Git / PR 规范
     80-project-plan.md        # 项目计划与任务板
     85-parallel-workstreams.md # 并行开发工作线划分（契约 / 所有权 / 集成点）
+    90-release-v0.7.0.md      # v0.7.0 发布记录（M13 SaaS 运营基础 + 主线 B + 真机验收结论）
     90-release-v0.6.0.md      # v0.6.0 发布验收报告（M11 五阶段成版 + M12 W1~W3 + cache 修复 13 项）
     90-release-v0.5.5.md      # v0.5.5 发布验收报告（M10 P2/P3 成版：E-08~E-17 + PRD-011 立项 + 驱动修复 26 项）
     90-release-v0.5.0.md      # v0.5.0 发布验收报告（PRD-010 P0+P1：多实例收口 + OAuth2/apikey 端到端）
@@ -98,6 +105,7 @@ framework/
     94-redis-cluster-live-test.md # L-04 收口：Redis Cluster 真机实跑实测记录
     94b-queue-transport-cluster-live-test.md # E-06 收口：bullmq/transport 在 Redis Cluster 上的实跑实测
     95-doc-audit.md           # 文档一致性核对报告
+    97-reproducibility-verification.md # 可复现性验证清单（版本矩阵 / 干净构建五步 / 行为抽检）
     96-db-readiness-probe-issue.md # 修复项登记：/ready 的 db 就绪探针为启动期一次性标志（非实时探测）
     99-admin-web-enhancement-and-fixes.md # 管理后台前端功能补充与缺陷修复方案
     adr/                      # 架构决策记录 0001–0015
@@ -143,6 +151,9 @@ fw gen crud order
 | 多租户与规模化 | `@fw/tenant`（三级回退租户解析 + fail-closed + 上下文透传）+ `@fw/db` TenantDataSource（dedicated 独立库路由：懒创建 + LRU/空闲淘汰 + Repository 按上下文选路）+ `@fw/auth` 数据权限四档（`DataScopeOrgPort` + all/org_below/org/self 解析与详情越权校验 + `departments`/`user_department` 模型）+ `@fw/transport` 传输层（in-process/redis 双驱动端口 + redis RPC 协议 + `@TransportHandler` 声明式注册 + 客户端代理，切换不改调用方代码）+ `@fw/telemetry` 链路追踪（OTel：HTTP 中间件 + 尾采样错误全采 + OTLP 导出 + 日志 span 桥接 + DB/缓存/队列/传输插桩）+ **部署模板（Helm Chart + compose + Nginx）与三大演练**；冒烟 48/48 + 17/17 + 14/14，演练 25/25、Chart 校验 63/63 | M8 | ✅ 已发布 v0.2.0（条件通过） |
 | 配置中心与热更新 | `@fw/config-center`（ConfigCenterPort + 本地 file 适配 mtime 轮询 + 原子写 + 单一生效管道：校验→审计→持久化→应用→通知，fail-keep / 先审计后生效）+ 热更新白名单 11 键从 env-schema 键注册表派生（完整性单测防键集漂移）+ 四框架服务订阅热更（Logger / Cache / Queue / OTel / Tenant）+ `/api/v1/configs` 查改端点（5001/5002/5003 错误码段）+ admin 参数配置页与变更历史 + mock 同构；单测 34/34，`smoke-config.mjs` 27/27、`smoke-mock` 119/119 | M9 | ✅ 已发布 v0.4.0 |
 | 文件存储端口 | `@fw/storage`（StoragePort + local/s3 双驱动 + `STORAGE_DRIVER` 枚举装配（非法取值启动即失败）+ 类型/大小白名单默认收紧 + 服务端生成存储 key 免疫路径穿越；S3 走 optional peer 懒加载，local 零依赖）+ `/api/v1/files` 三端点（上传 `file:create` / 元数据与下载登录即可）+ codegen 附件字段（`*FileId` → FileUpload 上传控件）+ mock 逐字节同构与 admin 模板收编（决策见 [ADR-0016](./docs/adr/0016-storage-port-fw-storage.md)）；单测 45/45、smoke-mock 140/140、smoke-template-admin 7/7 | M10（PRD-010 E-09） | ✅ 已交付（Unreleased） |
+| 认证核心 M11 系列 | refresh 轮换 CAS（单 replacement + AES-GCM grace 恢复 + replay 族撤销）+ 生命周期完整性 + Client Fingerprint + 双 Key Ring + Key 可观测（ADR-0020~0024）；auth 单测 224 | M11（PRD-011） | ✅ 已发布 v0.6.0 |
+| 可观测与统一契约 | 错误三类治理 + 判别符 + 审计六列（ADR-0025）+ requestId/traceId 双 ID 分层与 ALS 扩展（ADR-0026）+ 运维端点三层边界（ADR-0027）+ 缓存标签 Cluster 兼容策略与修复 13 项（ADR-0028） | M12（PRD-012 W1~W3） | ✅ 已发布 v0.6.0 |
+| SaaS 运营基础 | `@fw/saas` 领域包（套餐版本化 / 订阅 / 生效配额 = 覆盖 ?? 默认 / 用量幂等与硬限额原子扣减 / 五态生命周期，端口驱动 ADR-0029~0031）+ `/api/v1/saas/*` 九端点（ops:saas:* 读写分离）+ 冻结 Guard 4031 + 到期任务（@Cron 分布锁）+ `fw_saas_*` 指标段 + admin-web 运营四页；saas 26/26、smoke-saas-ops 22/22（入 CI）、并发零超发集成 9/9 | M13（PRD-013） | ✅ 已发布 v0.7.0（真机已部署验收） |
 
 ## 文档索引
 
@@ -209,13 +220,18 @@ fw gen crud order
 | M7 | 队列与定时任务 | [007](./docs/prd/prd-007-queue-scheduler.md) | ✅ 已发布 v0.2.0 |
 | M8 | 多租户与规模化 | [008](./docs/prd/prd-008-multitenancy-scale.md) | ✅ 已发布 v0.2.0（条件通过） |
 | M9 | 配置中心与热更新（L-02 / FR-08 收口） | [009](./docs/prd/prd-009-config-center.md) | ✅ 已发布 v0.4.0 |
+| M10 | 增强与规模化收口（E-01~E-17） | [010](./docs/prd/prd-010-enhancement-roadmap.md) | ✅ 已发布 v0.5.x |
+| M11 | 认证核心强化（轮换 CAS / 指纹 / Key Ring） | [011](./docs/prd/prd-011-auth-core-hardening.md) | ✅ 已发布 v0.6.0 |
+| M12 | 可观测与统一契约（W1~W3） | [012](./docs/prd/prd-012-observability-contract.md) | ✅ 已发布 v0.6.0 |
+| M13 | SaaS 运营基础 + 主线 B | [013](./docs/prd/prd-013-saas-operations-foundation.md) | ✅ 已发布 v0.7.0（真机已验收） |
 
 ## 开发规范
 
 - 分支：`main`（可发布）/ `feat/<prd>-<短名>` / `fix/<issue>`；PR 必须关联 PRD 与验收项。
 - 提交：Conventional Commits（`feat(auth): ...`）。
 - 门禁：`pnpm lint` + `pnpm test` + 覆盖率阈值 + 变更影响到的 PRD 的 AC 全部勾选。
-- 静态门禁（CI 阻断）：`pnpm run check:headers`（文件头）、`node scripts/check-no-raw-sql.mjs`（原生 SQL 方言白名单）、`pnpm run check:helm`（Helm 离线渲染）、`pnpm run check:api-parity`（前后端接口对撞）、`pnpm run check:triway-consistency`（框架包 / example-api / admin 模板三方一致性：路由面、权限码、Prisma 共有模型、框架依赖、配置键六轴对撞）。
+- 静态门禁（CI 阻断）：`pnpm run check:headers`（文件头）、`node scripts/check-no-raw-sql.mjs`（原生 SQL 方言白名单）、`node scripts/check-no-raw-throw.mjs`（裸抛三类治理，ADR-0025）、`pnpm run check:helm`（Helm 离线渲染）、`pnpm run check:api-parity`（前后端接口对撞）、`pnpm run check:triway-consistency`（框架包 / example-api / admin 模板三方一致性：路由×2、权限码、模型、依赖、配置键、错误码表七轴）。
+- 可复现性：版本冻结矩阵与构建纪律见 [48](./docs/48-reproducible-builds.md)；升级 Node/pnpm 或新增框架包后必须全项重跑 [97 验证清单](./docs/97-reproducibility-verification.md)（新包推送前必须 `test:coverage` 而非裸 `vitest run`——CI 阈值与本地裸跑口径不同）。
 - 部署模板门禁：`pnpm check:helm`（Helm Chart 离线渲染 + K8s 清单语义校验）；有集群时另跑 `helm template` + `kubectl apply --dry-run=server`。
 - 里程碑演练：`pnpm --filter example-api run drill`（三大关键演练，远程段落由 `SMOKE_DB_SWITCH` / `SMOKE_REDIS_URL` 门控）；`pnpm --filter example-api run bench`（压测基线）。
 - 文档：能力变更必须同步更新对应 PRD 的「变更记录」，禁止静默改需求。
