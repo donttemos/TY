@@ -63,6 +63,8 @@
 - HTTPS `/api/v1/health` 404 为既有 nginx 路径布局（/health 不在 /api/v1 前缀下），与本版无关。
 - **发版后浏览器 404 事故与根治（2026-10-19 晚）**：用户浏览器缓存了发版前的旧 `index.html`（旧 JS 壳无 /saas/* 路由，前端守卫重定向 /404）——服务器侧菜单树/产物/SPA 回退均正常（`/saas/plans` 服务器返回 200）。根因：真机 1Panel 站点实际配置粘贴时**漏掉了参考片段 `deploy/nginx/fw-1panel-locations.conf` §A 的 index.html no-cache 头**。已根治：`/opt/1panel/www/conf.d/fw-locations.inc` 的 `location /` 补 `add_header Cache-Control "no-cache" always;`（备份 `.bak-v070`，nginx -t 通过后 reload，实测响应头已出现）。用户侧操作：Ctrl+F5 强刷 + 退出重登（拿 ops:saas:read 权限快照）。
 - **发版检查项新增**：以后每次前端发版后必须 `curl -skI https://<域名>/ | grep -i cache-control` 验证 no-cache 头在位；用户报「新页面 404」先分清**服务器 SPA 回退 200**还是**浏览器旧壳**（无痕窗口验证）。
+- **404 真根因（2026-10-19 深夜，第二次修复 7eabfc2）**：no-cache 只是表层——真因是 **M13 四页被 seed 挂在「系统管理」（/system）目录 children 下，而页面 path=/saas/***。前端 `buildChildren` 按父前缀切相对路径 → 实际注册路由 `/system/saas/plans`，访问 `/saas/plans` 无匹配 → 守卫 404（换设备/清缓存均无法解决，路由数据结构性错误）。修复：seed/mock 建顶层「SaaS 运营」目录（path=/saas，layout/blank），四页移入（与 /system/users 模式一致）；真机以新 seed.ts 覆盖当前 release 后重跑 db:seed，PG 与 /auth/menus 嵌套已验证（四页 parent=/saas，/system 无残留）。**用户操作：刷新页面或重登即可**。
+- **新增编码约定（入 70 工程规范候选）**：菜单子页 path **必须与父目录 path 同前缀**（父 /saas → 子 /saas/*），跨前缀挂载会被前端嵌套路由拼接改写实际路由；新增菜单后必须在真机以「登录 → /auth/menus 嵌套核对」验证，不能只验后端返回含 path。
 
 ## 4. 遗留
 

@@ -23,6 +23,7 @@
 - 版本升版 17 个 package.json（0.6.0 → 0.7.0）；发版记录见 docs/90-release-v0.7.0.md（部署步骤/验证矩阵/遗留）。
 - 真机部署按 release10 范式执行：M13 十表 PG 迁移 + seed 重跑（权限点/菜单，用户需重登）+ backfill 幂等回填 + 原子切换。
 - **真机验收通过**（106.55.32.251）：迁移/seed/backfill/切换/HTTPS 全链 ✓；冻结-恢复 E2E 落库与日志 ✓；4031 拦截在单租户模式（TENANT_ENABLED=false）按设计不生效，启用为环境决策项（详见 docs/90 §4）。
+- **修复：SaaS 四页真机 404**——四页误挂 /system 目录导致前端嵌套路由拼成 /system/saas/*；seed/mock 改为顶层「SaaS 运营」目录（/saas），真机重跑 seed 已验证（用户刷新/重登即恢复）。附带根治：1Panel 站点 index.html 补 no-cache 头（详见 docs/90 §4）。
 
 ## [Unreleased]
 
