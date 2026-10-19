@@ -17,6 +17,9 @@
  *        / fw_saas_tenant_suspended_rejected_total（NFR-13-5 指标段）
  *   S12 POST lifecycle terminate → 业务请求仍 4031（terminated）
  *   S13 GET  lifecycle/logs 动作序列含 freeze/resume/terminate（审计留痕）
+ *   S14 M14 B2 新端点：POST /saas/plans（重复 → 1003）→ POST versions（版本 +1、配额字典未登记 → 1002）
+ *        → GET /saas/tenant-subscriptions 列表过滤与 planCode 补全 → GET subscriptions/history
+ *        → GET lifecycle/status（terminated → allowedActions=[dispose]）
  *   前置数据（dev.db，脚本直写）：quota_definitions.api_calls(day/hard) + default 套餐 v1 的
  *   plan_quota(limit=10)。业务面用 /api/v1/demo-items（既有演示 CRUD，租户过滤 fail-closed）。
  *   说明：运营面端点类级 @IgnoreTenant，登录态即可调（admin 持有全部权限码）。
@@ -226,6 +229,31 @@ async function main() {
     check('S13 迁移历史含 freeze/resume/terminate（审计留痕）',
       acmeActions.includes('freeze') && acmeActions.includes('resume') && smokeActions.includes('terminate'),
       `acme=${acmeActions.join(',')} smoke=${smokeActions.join(',')}`);
+
+    // S14 M14 B2：套餐创建 / 版本发布 / 订阅列表与历史 / 状态端点
+    const planCode = `smoke-plan-${Date.now()}`;
+    const newPlan = await call('/api/v1/saas/plans', { method: 'POST', body: { code: planCode, name: '冒烟套餐', description: 'S14 自建' } }, auth.admin);
+    check('S14.1 创建套餐成功', isOk(newPlan.status) && newPlan.body.data?.id, `http=${newPlan.status} code=${newPlan.body.code}`);
+    const dupPlan = await call('/api/v1/saas/plans', { method: 'POST', body: { code: planCode, name: '重复' } }, auth.admin);
+    check('S14.2 重复套餐编码 → 409/1003', dupPlan.status === 409 && dupPlan.body.code === 1003, `http=${dupPlan.status} code=${dupPlan.body.code}`);
+    const badVer = await call(`/api/v1/saas/plans/${newPlan.body.data.id}/versions`, { method: 'POST', body: { quotas: [{ quotaKey: 'ghost_metric', limitValue: 1 }] } }, auth.admin);
+    check('S14.3 配额字典未登记 → 404/1002', badVer.status === 404 && badVer.body.code === 1002, `http=${badVer.status} code=${badVer.body.code}`);
+    const newVer = await call(`/api/v1/saas/plans/${newPlan.body.data.id}/versions`, { method: 'POST', body: { remark: 'S14', quotas: [{ quotaKey: METRIC_KEY, limitValue: '10', execution: 'hard' }] } }, auth.admin);
+    check('S14.4 发布版本 v1 + 配额默认项（limitValue 归一 string）',
+      isOk(newVer.status) && newVer.body.data?.version === 1 && newVer.body.data?.quotas?.[0]?.limitValue === '10',
+      `http=${newVer.status} version=${newVer.body.data?.version}`);
+    const subList = await call(`/api/v1/saas/tenant-subscriptions?tenantId=${tenantId}&pageSize=50`, {}, auth.admin);
+    check('S14.5 订阅列表：命中冒烟租户 + planCode 补全',
+      isOk(subList.status) && subList.body.data?.total >= 1 && subList.body.data?.items?.[0]?.planCode === 'default',
+      `http=${subList.status} total=${subList.body.data?.total}`);
+    const subHistory = await call(`/api/v1/saas/tenants/${tenantId}/subscriptions/history`, {}, auth.admin);
+    check('S14.6 订阅历史：完整列表 + planVersion 补全',
+      isOk(subHistory.status) && (subHistory.body.data ?? []).length >= 1 && typeof subHistory.body.data?.[0]?.planVersion === 'number',
+      `http=${subHistory.status} rows=${(subHistory.body.data ?? []).length}`);
+    const statusNow = await call(`/api/v1/saas/tenants/${tenantId}/lifecycle/status`, {}, auth.admin);
+    check('S14.7 状态端点：terminated → allowedActions=[dispose]（真实状态非日志推导）',
+      isOk(statusNow.status) && statusNow.body.data?.status === 'terminated' && JSON.stringify(statusNow.body.data?.allowedActions) === '["dispose"]',
+      `http=${statusNow.status} data=${JSON.stringify(statusNow.body.data)}`);
   } finally {
     await stopServer(server);
   }

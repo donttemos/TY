@@ -18,7 +18,8 @@
 | [PRD-010](./prd-010-next-stage-enhancements.md) | M10 | 下一阶段增强：多实例一致性收口与模板生态 | M7、M4、M9 | P1 | 已发布 v0.5.0（P0/P1 已交付，P2 过半，P3 全部落地） |
 | [PRD-011](./prd-011-saas-operations-and-ecosystem.md) | M11 | SaaS 运营能力与生态扩展（多租户运营 / 插件市场 / 更多适配器 / 通知渠道 / 生成器增强 / 微服务拆分 / 可观测告警 / 安全合规 / 开发者体验） | M1–M10（重点 M8、M9、M10） | P1 | 草案（2026-10-17） |
 | [PRD-012](./prd-012-observability-error-contract.md) | M12 | 统一可观测契约与运维暴露（W1 统一 Error/Audit Contract → W2 Observability 贯穿 → W3 Maintenance/Health 暴露） | M1–M11（重点 M1、M3、M8、M10、M11.3/11.5） | P1 | 草案（2026-10-17） |
-| [PRD-013](./prd-013-saas-operations-foundation.md) | M13 | SaaS 运营基础落地与可复现开发环境（主线 A 套餐/订阅/配额/用量/生命周期/运营端/账单，细化 PRD-011 S-01~S-07；主线 B 工具链冻结与开发环境文档四件套） | M1–M12（重点 M8、M12） | P0 | 草案（2026-10-19） |
+| [PRD-013](./prd-013-saas-operations-foundation.md) | M13 | SaaS 运营基础落地与可复现开发环境（主线 A 套餐/订阅/配额/用量/生命周期/运营端/账单，细化 PRD-011 S-01~S-07；主线 B 工具链冻结与开发环境文档四件套） | M1–M12（重点 M8、M12） | P0 | 已发布 v0.7.0（2026-10-19） |
+| [PRD-014](./prd-014-admin-web-productization.md) | M14 | Admin Web 产品化与 SaaS 运营体验升级（B1 正确性修复 → B2 运营 API 闭环 → B3 页面产品化 → B4 看板与运营首页） | M13（重点 M12 契约、M13 领域服务与运营 API） | P1 | 草案（2026-10-19） |
 
 ## 待规划 PRD（尚未排期）
 

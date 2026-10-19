@@ -2719,7 +2719,7 @@ const SAAS_TRANSITIONS: Record<string, Partial<Record<string, string>>> = {
   terminated: { dispose: 'terminated' },
 };
 
-/** M13 SaaS 运营九端点（api-spec §3.21）：mock 与 @fw/saas 领域语义逐条对应 */
+/** M13/M14 SaaS 运营端点（api-spec §3.21）：mock 与 @fw/saas 领域语义逐条对应 */
 async function handleSaasRoutes(
   req: IncomingMessage,
   res: ServerResponse,
@@ -2732,7 +2732,7 @@ async function handleSaasRoutes(
 ): Promise<HandleResult> {
   const saas = database.saas;
 
-  // ---- 套餐（读） ----
+  // ---- 套餐（读 + 写） ----
   if (path === '/saas/plans' && method === 'GET') {
     const perm = requirePermission(database, ctx, 'ops:saas:read');
     if (!perm.ok) {
@@ -2740,6 +2740,30 @@ async function handleSaasRoutes(
       return { handled: true };
     }
     send(res, 0, 'ok', saas.plans, traceId);
+    return { handled: true };
+  }
+
+  // M14 FR-14-05：创建套餐（code 唯一 → 1003，与 PlanService.createPlan 同语义）
+  if (path === '/saas/plans' && method === 'POST') {
+    const perm = requirePermission(database, ctx, 'ops:saas:write');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const body = await readBody(req);
+    const code = String(body.code ?? '').trim();
+    const name = String(body.name ?? '').trim();
+    if (!code || !name) {
+      send(res, 1001, 'code 与 name 必填', null, traceId);
+      return { handled: true };
+    }
+    if (saas.plans.some((p) => p.code === code)) {
+      send(res, 1003, `套餐编码已存在：${code}`, null, traceId);
+      return { handled: true };
+    }
+    const plan = { id: `plan-mock-${saas.plans.length + 1}-${Date.now()}`, code, name, description: body.description ? String(body.description) : null };
+    saas.plans.push(plan);
+    send(res, 0, 'ok', plan, traceId);
     return { handled: true };
   }
 
@@ -2752,6 +2776,48 @@ async function handleSaasRoutes(
     }
     const versions = saas.planVersions.filter((v) => v.planId === versionMatch[1]);
     send(res, 0, 'ok', versions.map((v) => ({ ...v, quotas: saas.planQuotas.filter((q) => q.planVersionId === v.id) })), traceId);
+    return { handled: true };
+  }
+
+  // M14 FR-14-06：发布新版本（版本 = 最大 +1，发布后不可变；配额字典缺失 → 1002，与 publishVersion 同语义）
+  if (versionMatch && method === 'POST') {
+    const perm = requirePermission(database, ctx, 'ops:saas:write');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const planId = versionMatch[1];
+    const plan = saas.plans.find((p) => p.id === planId);
+    if (!plan) {
+      send(res, 1002, `套餐不存在：${planId}`, null, traceId);
+      return { handled: true };
+    }
+    const body = await readBody(req);
+    const quotas = Array.isArray(body.quotas) ? body.quotas : [];
+    if (quotas.length === 0) {
+      send(res, 1001, 'quotas 必填且至少一条', null, traceId);
+      return { handled: true };
+    }
+    for (const q of quotas) {
+      if (!q?.quotaKey || !saas.quotaDefinitions.some((d) => d.key === q.quotaKey)) {
+        send(res, 1002, `配额字典未登记：${q?.quotaKey ?? '(empty)'}`, null, traceId);
+        return { handled: true };
+      }
+      if (!Number.isFinite(Number(q.limitValue)) || Number(q.limitValue) < 0) {
+        send(res, 1001, `quotas[].limitValue 非法：${String(q?.limitValue)}`, null, traceId);
+        return { handled: true };
+      }
+    }
+    const next = saas.planVersions.filter((v) => v.planId === planId).reduce((max, v) => Math.max(max, v.version), 0) + 1;
+    const version = { id: `pv-mock-${planId}-${next}`, planId, version: next, status: 'published', remark: body.remark ? String(body.remark) : null, publishedAt: new Date().toISOString() };
+    saas.planVersions.push(version);
+    for (const q of quotas) {
+      const existing = saas.planQuotas.find((x) => x.planVersionId === version.id && x.quotaKey === q.quotaKey);
+      const row = { planVersionId: version.id, quotaKey: q.quotaKey, limitValue: String(Math.floor(Number(q.limitValue))), execution: q.execution ?? null };
+      if (existing) Object.assign(existing, row);
+      else saas.planQuotas.push(row);
+    }
+    send(res, 0, 'ok', { ...version, quotas: saas.planQuotas.filter((x) => x.planVersionId === version.id) }, traceId);
     return { handled: true };
   }
 
@@ -2824,6 +2890,53 @@ async function handleSaasRoutes(
       sub.reason = body.reason ? String(body.reason) : null;
     }
     send(res, 0, 'ok', { id: sub.id, cancelled: true }, traceId);
+    return { handled: true };
+  }
+
+  // M14 FR-14-07：订阅分页列表（tenantId/planCode/status/expireFrom/expireTo 过滤 + plan 信息补全，
+  // 排序 effectiveAt desc + id asc，与 Prisma/Fake 实现同语义）
+  if (path === '/saas/tenant-subscriptions' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'ops:saas:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const page = Math.max(1, Number(query.get('page') ?? '1') || 1);
+    const pageSize = Math.min(200, Math.max(1, Number(query.get('pageSize') ?? '20') || 20));
+    const tenantIdFilter = query.get('tenantId') ?? '';
+    const planCodeFilter = query.get('planCode') ?? '';
+    const statusFilter = query.get('status') ?? '';
+    const expireFrom = query.get('expireFrom') ? new Date(query.get('expireFrom')!) : null;
+    const expireTo = query.get('expireTo') ? new Date(query.get('expireTo')!) : null;
+    if (statusFilter && !['active', 'expired', 'cancelled'].includes(statusFilter)) {
+      send(res, 1001, 'status 仅支持 active/expired/cancelled', null, traceId);
+      return { handled: true };
+    }
+    const planIdFilter = planCodeFilter ? saas.plans.find((p) => p.code === planCodeFilter)?.id ?? null : null;
+    if (planCodeFilter && !planIdFilter) {
+      send(res, 0, 'ok', { items: [], total: 0, page, pageSize }, traceId);
+      return { handled: true };
+    }
+    const rows = saas.subscriptions
+      .filter((s) => {
+        if (tenantIdFilter && s.tenantId !== tenantIdFilter) return false;
+        if (planIdFilter && s.planId !== planIdFilter) return false;
+        if (statusFilter && s.status !== statusFilter) return false;
+        const exp = s.expireAt ? new Date(s.expireAt) : null;
+        if (expireFrom && (exp === null || exp < expireFrom)) return false;
+        if (expireTo && (exp === null || exp > expireTo)) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const t = new Date(b.effectiveAt).getTime() - new Date(a.effectiveAt).getTime();
+        return t !== 0 ? t : a.id.localeCompare(b.id);
+      });
+    const enrich = (s: (typeof saas.subscriptions)[number]) => {
+      const plan = saas.plans.find((p) => p.id === s.planId);
+      const version = saas.planVersions.find((v) => v.id === s.planVersionId);
+      return { ...s, planCode: plan?.code ?? null, planName: plan?.name ?? null, planVersion: version?.version ?? null };
+    };
+    send(res, 0, 'ok', { items: rows.slice((page - 1) * pageSize, page * pageSize).map(enrich), total: rows.length, page, pageSize }, traceId);
     return { handled: true };
   }
 
@@ -2949,6 +3062,40 @@ async function handleSaasRoutes(
         createdAt: new Date().toISOString(),
       });
       send(res, 0, 'ok', { from, to, alreadyApplied: false }, traceId);
+      return { handled: true };
+    }
+
+    // M14 FR-14-07：租户订阅历史（完整列表，含 cancelled/expired；排序与 plan 信息补全同列表端点）
+    if (subPath === 'subscriptions/history' && method === 'GET') {
+      const perm = requirePermission(database, ctx, 'ops:saas:read');
+      if (!perm.ok) {
+        send(res, perm.code, perm.message, null, traceId);
+        return { handled: true };
+      }
+      const rows = saas.subscriptions
+        .filter((s) => s.tenantId === tenantId)
+        .sort((a, b) => {
+          const t = new Date(b.effectiveAt).getTime() - new Date(a.effectiveAt).getTime();
+          return t !== 0 ? t : a.id.localeCompare(b.id);
+        })
+        .map((s) => {
+          const plan = saas.plans.find((p) => p.id === s.planId);
+          const version = saas.planVersions.find((v) => v.id === s.planVersionId);
+          return { ...s, planCode: plan?.code ?? null, planName: plan?.name ?? null, planVersion: version?.version ?? null };
+        });
+      send(res, 0, 'ok', rows, traceId);
+      return { handled: true };
+    }
+
+    // M14 FR-14-03：状态推导与 POST lifecycle 同源（日志末条 ?? pending）；allowedActions 由迁移表派生（与真实后端同语义）
+    if (subPath === 'lifecycle/status' && method === 'GET') {
+      const perm = requirePermission(database, ctx, 'ops:saas:read');
+      if (!perm.ok) {
+        send(res, perm.code, perm.message, null, traceId);
+        return { handled: true };
+      }
+      const status = saas.lifecycleLogs.filter((l) => l.tenantId === tenantId).slice(-1)[0]?.toStatus ?? 'pending';
+      send(res, 0, 'ok', { status, allowedActions: Object.keys(SAAS_TRANSITIONS[status] ?? {}) }, traceId);
       return { handled: true };
     }
 

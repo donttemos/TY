@@ -2,7 +2,7 @@
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
-> **当前状态：v0.6.0 已发布（2026-10-17）** —— **M11（PRD-011）认证核心强化全五阶段**（Rotation CAS / 双 Key Ring / Client Fingerprint / 生命周期完整性 / Key Ring 运维端点，ADR-0020~0024）+ **M12（PRD-012）可观测与运维边界 W1~W3 全部交付**（统一审计事件契约 / 错误族收敛 / 禁裸抛 / 码表单一来源 / requestId+traceId 双 ID / auth 指标段 / 运维端点三层边界，ADR-0025~0027）+ **@fw/cache 缺陷清单 13 项修复**（标签原子协议 / 锁释放语义 / SHA-256 键哈希 / WRONGTYPE 对齐 / 限流防御纵深 + 双驱动契约测试）；新增门禁 `check-no-raw-throw` 与 `check-triway-consistency`（七轴）；配置键 97→120，全仓 13 包 + 2 应用测试全绿后整合发版。发布记录见 [v0.6.0 发布验收报告](./docs/90-release-v0.6.0.md)，上一版见 [v0.5.5 发布验收报告](./docs/90-release-v0.5.5.md)。
+> **当前状态：v0.7.5 已发布（2026-10-20）** —— 本次 **v0.7.5 交付 M14（PRD-014）Admin Web 产品化与 SaaS 运营体验升级 B1~B3 全量**：B1 正确性修复（操作原因端到端落库 / 写按钮 v-permission 权限渲染 / 生命周期真实状态驱动 `GET /saas/tenants/:id/lifecycle/status` / 查询状态隔离）+ B2 运营 API 闭环（`POST /saas/plans` 创建、`POST /saas/plans/:id/versions` 版本发布、`GET /saas/tenant-subscriptions` 分页列表与 `GET /saas/tenants/:id/subscriptions/history` 历史，存储端口扩展 Fake/Prisma 双实现，**无新增错误码与迁移**）+ B3 页面产品化（ConfirmWithReason 统一原因收集入口 / TenantPicker 可搜索租户选择器 / 订阅页列表优先重构含详情抽屉 / 套餐页创建+发布闭环含差异预览）。发版记录见 [v0.7.5 发布记录](./docs/90-release-v0.7.5.md)，上一版见 [v0.7.0 发布记录](./docs/90-release-v0.7.0.md)。CI 与真机验收见 §docs/90。
 >
 > v0.5.0（2026-10-15）：M10（PRD-010）的 P0 + P1 阶段整体成版：**多实例一致性收口**（E-01 任务中心驱动化 memory/db/bullmq 三驱动、E-02 配置中心多实例语义 + nacos 驱动转正、E-03 框架级 API 令牌桶限流默认开启、E-04 `/permissions/tree` 权限树契约落地）+ **规模化遗留**（E-06 bullmq/transport Redis Cluster 实测收口、**E-07 OAuth2 授权码端到端 + apikey 签名验签**，`AUTH_STRATEGY` 四策略名实相符）+ 遗留缺陷收口（N-03 整页 403 视图、bullmq rateLimit 热更重建、R4-05 工作台统计口径标注）；配置键 65→80，新文档 [docs/41 认证策略端到端指南](./docs/41-auth-strategies.md)。
 >
@@ -16,6 +16,8 @@
 - **来源**：需求变更先记入对应 PRD 的「变更记录」，发布时汇总到本文件。本文件只记**对外可见**的变更，内部重构不在此记录。
 - **频率**：每个发布版本一条记录；`Unreleased` 区间持续累积，发布时转为版本条目并清空。
 
+## [Unreleased]
+
 ## [0.7.0] - 2026-10-19
 
 ### M13：SaaS 运营基础全量（六个 Added 批次 + 一个 Fixed 批次，见下）
@@ -25,7 +27,40 @@
 - **真机验收通过**（106.55.32.251）：迁移/seed/backfill/切换/HTTPS 全链 ✓；冻结-恢复 E2E 落库与日志 ✓；4031 拦截在单租户模式（TENANT_ENABLED=false）按设计不生效，启用为环境决策项（详见 docs/90 §4）。
 - **修复：SaaS 四页真机 404**——四页误挂 /system 目录导致前端嵌套路由拼成 /system/saas/*；seed/mock 改为顶层「SaaS 运营」目录（/saas），真机重跑 seed 已验证（用户刷新/重登即恢复）。附带根治：1Panel 站点 index.html 补 no-cache 头（详见 docs/90 §4）。
 
-## [Unreleased]
+## [0.7.5] - 2026-10-20
+
+### M14：Admin Web 产品化与 SaaS 运营体验升级（B1 正确性 + B2 API 闭环 + B3 页面产品化）
+
+- 版本升版 17 个 package.json（0.7.0 → 0.7.5）；发版记录见 docs/90-release-v0.7.5.md。
+- **零迁移 / 零 seed 变更 / 零新错误码**：全部沿 M13 数据模型与 M12 错误契约（1001/1002/1003 既有码），存量环境更新代码即用，无需 reseed。
+- 本条目同时归档 M13 发版后滞留 Unreleased 的批次（CI 覆盖率修复 / 文档四件套与工具链冻结 / 运营四页与指标段 / PRD-014 立项草案）。
+
+### Added（M14/PRD-014 B3：SaaS 运营页产品化升级，2026-10-20）
+
+- **统一交互组件（FR-14-08）**：`ConfirmWithReason`——全站唯一原因收集入口（包装 ElMessageBox.prompt，trim 归一、required 前端拦截、取消返回 null 与确认返回值区分，杜绝 U-14-1 类缺陷再现；危险动作必填、普通动作选填）；`TenantPicker`——可搜索租户选择器（复用 /tenants keyword 查询，选项「名称（编码）」，值租户 ID）。生命周期/订阅/用量三页租户输入全部换 TenantPicker，替代手输 ID。
+- **订阅页重构为列表优先视图（FR-14-10）**：全局订阅列表（租户/套餐/状态筛选 + 分页 + planCode/planVersion 补全展示）→ 详情抽屉（当前订阅 + 该租户订阅历史）；开通走 TenantPicker + 套餐下拉；取消走 ConfirmWithReason 统一入口。
+- **套餐页创建/发布闭环（FR-14-05/06/09）**：「新建套餐」FormDialog（code 唯一 1003 提示）；版本抽屉升级——「发布新版本」复制上一版本为起点 → 行级编辑配额（指标键/限额/执行方式）→ **差异预览**（新增/修改/移除三类标记）→ 确认发布；已发布版本只读标注（「发布走脚本」留白标注移除）。
+- **测试**：组件单测 8 例（ConfirmWithReason 4 + TenantPicker 4）+ 视图回归 12 例（订阅页 5 + 套餐页 3 + 生命周期页 4，随 TenantPicker/confirmWithReason 改造同步更新），SaaS 视图 12/12；admin-web 全量 / vue-tsc / smoke-mock / headers / api-parity 见同日验证记录。
+
+### Added（M14/PRD-014 B2：SaaS 运营 API 闭环，2026-10-20）
+
+- **套餐创建 / 版本发布端点转正（FR-14-05/06）**：`POST /saas/plans`（code 唯一 → 409/1003）、`POST /saas/plans/:id/versions`（版本单调递增、发布后不可变语义沿用 M13 领域实现；`limitValue` 接受 number/string 归一非负 BigInt，配额字典未登记 → 404/1002；返回含配额默认项 limitValue 转 string）。审计事件 `saas.plan.create` / `saas.plan.publish`（M12 契约，after 快照）。无新增错误码（沿既有 1001/1002/1003）。
+- **订阅列表与历史端点（FR-14-07）**：`GET /saas/tenant-subscriptions`（分页 ≤200 + 过滤 tenantId/planCode/status/expireFrom/expireTo，参数显式白名单，非法 → 1001；排序固定 effectiveAt desc + id asc 主键 tie-breaker）与 `GET /saas/tenants/:id/subscriptions/history`；行内补 `planCode/planName/planVersion`（脏数据回 null 不阻断）。
+- **存储端口扩展**：`SaasStore` 新增 `listSubscriptions(filter, page)` / `listSubscriptionsByTenant(tenantId)`；Fake 与 Prisma 双实现同语义（到期范围过滤 expireAt 为 null 不命中）。
+- **同步面**：api-spec §3.21 补四行；mock handlers 同构四端点（创建/发布/列表/历史）；smoke-saas-ops 增 S14 段七项断言（22 → 29/29 本地实测通过，含重复套餐 1003、字典未登记 1002、planCode 补全、状态端点 terminated→[dispose]）。
+- **测试**：@fw/saas 包 29/29（+3 列表端口语义用例，覆盖率 91.6/81.8/88.2/94.1 达标）；example-api saas 30/30（控制器单测 12 例 + Prisma 集成列表用例，CI 三库矩阵覆盖）；admin-web vue-tsc / example-api tsc 全绿；api-parity / triway 七轴 / headers / no-raw-throw 门禁全绿。
+
+### Fixed（M14/PRD-014 B1：SaaS 运营四页正确性修复，2026-10-20）
+
+- **操作原因端到端（U-14-1，FR-14-01）**：生命周期迁移与订阅取消的确认框输入原因此前被丢弃（`ElMessageBox.prompt()` 返回值未接收、API 调用未传参），现已接收 trim 后透传，落库 `lifecycle_logs.reason` / 订阅取消 reason（API 层与后端 M13 已支持，纯前端修复）。新增视图回归护栏 `lifecycle-page.test.ts` 四例钉住。
+- **写操作权限渲染（U-14-2，FR-14-02）**：SaaS 四页写按钮补 `v-permission`（`ops:saas:write`），只读角色不再渲染动作行/按钮；修正订阅页头注释与实现不符。
+- **生命周期真实状态驱动（U-14-3，FR-14-03）**：`statusOf` 助手转正为 `GET /saas/tenants/:id/lifecycle/status`（返回 `{status, allowedActions}`，allowedActions 由 `@fw/saas` TRANSITIONS 迁移表派生）；页面改为真实状态驱动，非法动作禁用并带提示，无状态租户显示空态；新增控制器单测 5 例。mock 同步十端点、api-spec §3.21 补行。
+- **查询状态隔离（U-14-6 部分，FR-14-04）**：用量页切换租户即重置上一租户的配额/用量数据（此前残留展示）。
+- **回归**：admin-web 190/190（186 基线 + 4 新增）+ vue-tsc 全绿；example-api saas 22/22（+5 控制器单测）+ tsc 全绿；smoke-mock 见同日验证记录。
+
+### Added（PRD-014 立项草案，2026-10-19）
+
+- **PRD-014（M14）Admin Web 产品化与 SaaS 运营体验升级立项草案**（`docs/prd/prd-014-admin-web-productization.md`）：基于同日对 main 分支源码的逐条核实（文件行号级证据入 PRD §1.2），将 admin-web 从功能验证型后台升级为运营控制台。四批次顺序：B1 正确性修复（操作原因端到端/权限渲染/生命周期真实状态驱动/查询状态隔离，P0）→ B2 运营 API 闭环（套餐创建与版本发布、订阅列表与历史端点转正既有领域能力）→ B3 页面产品化与统一交互（ConfirmWithReason/TenantPicker/四态骨架）→ B4 用量看板与运营首页（P2）。FR-14-01~14 / NFR-14-1~6 / AC-14-01~12，OQ-14-1~6 待评审（订阅升级/降级默认不进 M14）。PRD 索引同步更新（含 PRD-013 状态改「已发布 v0.7.0」）。
 
 ### Fixed（M13 推送后 CI 修复，2026-10-19）
 

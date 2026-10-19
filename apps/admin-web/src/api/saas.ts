@@ -1,9 +1,12 @@
 /*
- * @file SaaS 运营 API（M13 / api-spec §3.21）
- * @description 平台运营面九端点封装：套餐 / 订阅 / 生效配额 / 用量 / 生命周期。
+ * @file SaaS 运营 API（M13/M14 / api-spec §3.21）
+ * @description 平台运营面十端点封装：套餐 / 订阅 / 生效配额 / 用量 / 生命周期。
  *   与后端 @fw/saas 领域服务逐一对齐；4029/4030/4031 三码语义见 @/utils/biz-error。
  * @author donttemo
  * @created 2026-10-19
+ * @modified 2026-10-20 M14/PRD-014 FR-14-03：新增 fetchTenantLifecycleStatus（状态 + allowedActions）。
+ * @modified 2026-10-20 M14/PRD-014 B2/B3（FR-14-05~07）：新增 createPlan / publishPlanVersion /
+ *   fetchSubscriptions / fetchTenantSubscriptionHistory（api-spec §3.21 十四端点对齐）。
  * @module admin-web/api
  */
 
@@ -23,6 +26,37 @@ export function fetchPlanVersions(planId: string): Promise<Array<PlanVersionView
 /** 创建订阅（一租户一生效；已有生效订阅 → 409/1003） */
 export function createSubscription(body: { tenantId: string; planCode: string; planVersion?: number; expireAt?: string }): Promise<SubscriptionView> {
   return request.post('/saas/tenant-subscriptions', body);
+}
+
+/** 订阅行（列表/历史返回：补 planCode/planName/planVersion 展示字段） */
+export type SubscriptionRow = SubscriptionView & { planCode: string | null; planName: string | null; planVersion: number | null };
+
+/** 订阅分页结果（后端无 hasMore 字段，与通用 PageResult 略异） */
+export interface SubscriptionPage {
+  items: SubscriptionRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+/** 订阅分页列表（M14 FR-14-07；过滤参数全部可选，status ∈ active/expired/cancelled） */
+export function fetchSubscriptions(query: { page?: number; pageSize?: number; tenantId?: string; planCode?: string; status?: string; expireFrom?: string; expireTo?: string }): Promise<SubscriptionPage> {
+  return request.get('/saas/tenant-subscriptions', { params: query });
+}
+
+/** 租户订阅历史（完整列表，含 cancelled/expired） */
+export function fetchTenantSubscriptionHistory(tenantId: string): Promise<SubscriptionRow[]> {
+  return request.get(`/saas/tenants/${tenantId}/subscriptions/history`);
+}
+
+/** 创建套餐（M14 FR-14-05；code 唯一 → 409/1003） */
+export function createPlan(body: { code: string; name: string; description?: string | null }): Promise<PlanView> {
+  return request.post('/saas/plans', body);
+}
+
+/** 发布套餐新版本（M14 FR-14-06；版本 = 当前最大 +1，发布后不可变；limitValue 接受 number/string） */
+export function publishPlanVersion(planId: string, body: { remark?: string | null; quotas: Array<{ quotaKey: string; limitValue: number | string; execution?: 'soft' | 'hard' | 'observe' | null }> }): Promise<PlanVersionView & { quotas: Array<{ quotaKey: string; limitValue: string; execution: string | null }> }> {
+  return request.post(`/saas/plans/${planId}/versions`, body);
 }
 
 /** 取消订阅（幂等：已关闭直接成功） */
@@ -63,6 +97,11 @@ export function recordUsageEvent(
 /** 生命周期迁移（非法 → 409/4030；重复执行幂等 alreadyApplied） */
 export function transitionLifecycle(tenantId: string, action: string, reason?: string): Promise<{ from: string; to: string; alreadyApplied: boolean }> {
   return request.post(`/saas/tenants/${tenantId}/lifecycle`, { action, reason });
+}
+
+/** 租户当前生命周期状态 + 合法动作集（M14 FR-14-03；allowedActions 由后端迁移表派生，前端不硬编码） */
+export function fetchTenantLifecycleStatus(tenantId: string): Promise<{ status: string | null; allowedActions: string[] }> {
+  return request.get(`/saas/tenants/${tenantId}/lifecycle/status`);
 }
 
 /** 迁移历史（只增不改不删） */

@@ -56,6 +56,24 @@ export interface SubscriptionStore {
   listActiveSubscriptionsExpiredAt(cutoff: Date): Promise<Array<{ id: string; tenantId: string; expireAt: Date | null }>>;
   /** 宽限期满扫描：status=expired 且租户当前态为 grace 且 expireAt < cutoff 的订阅 */
   listGraceTenantsPastGrace(cutoff: Date): Promise<Array<{ id: string; tenantId: string }>>;
+  /**
+   * 订阅分页列表（M14/PRD-014 FR-14-07，运营面）：过滤参数全部可选；
+   * 排序固定 effectiveAt desc + id asc（主键 tie-breaker，分页稳定）；过滤字段白名单见控制器。
+   */
+  listSubscriptions(
+    filter: {
+      tenantId?: string;
+      planId?: string;
+      status?: SubscriptionView['status'];
+      /** expireAt >= expireFrom（expireAt 为 null 的行不命中范围过滤） */
+      expireFrom?: Date | null;
+      /** expireAt <= expireTo */
+      expireTo?: Date | null;
+    },
+    page: { page: number; pageSize: number },
+  ): Promise<{ items: SubscriptionView[]; total: number }>;
+  /** 租户订阅历史（完整列表，含 cancelled/expired；排序同上） */
+  listSubscriptionsByTenant(tenantId: string): Promise<SubscriptionView[]>;
 }
 
 /** 配额存储面（生效值解析与窗口扣减；字典查询同时挂在 PlanStore 与本面，SaasStore 聚合去重） */

@@ -429,12 +429,17 @@
 |---|---|---|---|
 | GET | `/saas/plans` | `ops:saas:read` | 套餐列表 |
 | GET | `/saas/plans/:id/versions` | `ops:saas:read` | 套餐版本列表（含各版本配额默认项；发布后不可变） |
+| POST | `/saas/plans` | `ops:saas:write` | 创建套餐 `{code, name, description?}`；code 唯一，冲突 → `409/1003`（M14 FR-14-05） |
+| POST | `/saas/plans/:id/versions` | `ops:saas:write` | 发布新版本 `{remark?, quotas:[{quotaKey, limitValue, execution?}]}`；版本 = 当前最大 +1，发布后不可变；配额字典未登记 → `404/1002`；返回含配额默认项（limitValue 转 string）（M14 FR-14-06） |
 | POST | `/saas/tenant-subscriptions` | `ops:saas:write` | 创建订阅 `{tenantId, planCode, planVersion?, expireAt?}`；已有生效订阅 → `409/1003`；创建即按版本快照生成 tenant_quotas |
 | POST | `/saas/tenant-subscriptions/:id/cancel` | `ops:saas:write` | 取消订阅（幂等：已关闭直接成功） |
 | GET | `/saas/tenants/:id/subscription` | `ops:saas:read` | 当前生效订阅（无则 data=null） |
+| GET | `/saas/tenant-subscriptions` | `ops:saas:read` | 订阅分页列表（M14 FR-14-07）：`page/pageSize(≤200)/tenantId/planCode/status(active\|expired\|cancelled)/expireFrom/expireTo`；排序固定 effectiveAt desc + id asc；行内补 `planCode/planName/planVersion` |
+| GET | `/saas/tenants/:id/subscriptions/history` | `ops:saas:read` | 租户订阅历史（完整列表，含 cancelled/expired；行内补全同上）（M14 FR-14-07） |
 | GET | `/saas/tenants/:id/quotas` | `ops:saas:read` | 生效配额列表（生效值 = 租户覆盖 ?? 套餐默认，ADR-0029） |
 | GET | `/saas/tenants/:id/usage?quotaKey=&at=` | `ops:saas:read` | 窗口用量（rollup 重算后返回，附 limitValue/execution/windowEnd） |
 | POST | `/saas/tenants/:id/lifecycle` | `ops:saas:write` | 生命周期迁移 `{action, reason?}`，action ∈ activate/expire/freeze/resume/terminate/dispose；非法 → `409/4030`；重复执行幂等（`alreadyApplied: true`） |
+| GET | `/saas/tenants/:id/lifecycle/status` | `ops:saas:read` | 当前生命周期状态 + 合法动作集 `{status, allowedActions}`（allowedActions 由 ADR-0031 迁移表派生；M14 FR-14-03） |
 | GET | `/saas/tenants/:id/lifecycle/logs` | `ops:saas:read` | 迁移历史（只增不改不删） |
 
 ## 4. 限流与幂等

@@ -1,9 +1,12 @@
 <!--
- * @file 用量看板页（M13，PRD-013 §2.3）
+ * @file 用量看板页（M13，PRD-013 §2.3；M14/PRD-014 FR-14-02/04 修复）
  * @description 生效配额列表（覆盖 ?? 套餐默认）+ 指定指标窗口用量（rollup 重算，进度条）、
  *   运营补录用量上报（hard 超限 4029 / 重复幂等键 deduped）。权限 ops:saas:read / write。
  * @author donttemo
  * @created 2026-10-19
+ * @modified 2026-10-20 M14/PRD-014 B1：切换租户即重置上一租户的配额/用量数据（U-14-6 残留缺陷）；
+ *   上报按钮补 v-permission（U-14-2）。
+ * @modified 2026-10-20 M14/PRD-014 B3：租户输入换 TenantPicker（FR-14-08/10 租户上下文）。
  * @module admin-web/views
 -->
 
@@ -11,6 +14,7 @@
 import { reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import * as saasApi from '@/api/saas';
+import TenantPicker from '@/components/TenantPicker/index.vue';
 import { BizError, describeBizError } from '@/utils/biz-error';
 
 interface QuotaRow {
@@ -31,6 +35,8 @@ interface UsageRow {
 
 const loading = ref(false);
 const tenantId = ref('');
+/** 已加载租户（FR-14-04：切换租户即重置，防上一租户数据残留） */
+const loadedTenant = ref('');
 const quotas = ref<QuotaRow[]>([]);
 const usage = ref<UsageRow | null>(null);
 const usageKey = ref('');
@@ -49,6 +55,12 @@ async function loadQuotas(): Promise<void> {
   }
   loading.value = true;
   try {
+    if (loadedTenant.value !== tenantId.value) {
+      quotas.value = [];
+      usage.value = null;
+      usageKey.value = '';
+      loadedTenant.value = tenantId.value;
+    }
     quotas.value = await saasApi.fetchTenantQuotas(tenantId.value);
     if (quotas.value.length > 0 && !usageKey.value) {
       usageKey.value = quotas.value[0].quotaKey;
@@ -92,8 +104,8 @@ async function onReport(): Promise<void> {
     <el-card shadow="never" class="query-card">
       <template #header><span>生效配额（覆盖 ?? 套餐默认）</span></template>
       <el-form inline @submit.prevent="loadQuotas">
-        <el-form-item label="租户 ID">
-          <el-input v-model="tenantId" placeholder="tenants.id" clearable style="width: 260px" @keyup.enter="loadQuotas" />
+        <el-form-item label="租户">
+          <TenantPicker v-model="tenantId" />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" :loading="loading" @click="loadQuotas">查询</el-button>
@@ -143,7 +155,7 @@ async function onReport(): Promise<void> {
           <el-input v-model="reportForm.idempotencyKey" placeholder="留空自动生成" style="width: 240px" />
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" :disabled="!tenantId" @click="onReport">上报</el-button>
+          <el-button v-permission="'ops:saas:write'" type="primary" :disabled="!tenantId" @click="onReport">上报</el-button>
         </el-form-item>
       </el-form>
     </el-card>

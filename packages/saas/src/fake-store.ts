@@ -148,6 +148,42 @@ export class FakeSaasStore implements SaasStore {
       .filter((s) => s.status === 'expired' && s.expireAt != null && s.expireAt < cutoff && this.tenantStatus.get(s.tenantId) === 'grace')
       .map((s) => ({ id: s.id, tenantId: s.tenantId }));
   }
+  async listSubscriptions(
+    filter: {
+      tenantId?: string;
+      planId?: string;
+      status?: SubscriptionView['status'];
+      expireFrom?: Date | null;
+      expireTo?: Date | null;
+    },
+    page: { page: number; pageSize: number },
+  ): Promise<{ items: SubscriptionView[]; total: number }> {
+    const rows = this.filterSubscriptions(filter);
+    const sorted = this.sortSubscriptions(rows);
+    const start = (page.page - 1) * page.pageSize;
+    return { items: sorted.slice(start, start + page.pageSize), total: sorted.length };
+  }
+  async listSubscriptionsByTenant(tenantId: string): Promise<SubscriptionView[]> {
+    return this.sortSubscriptions(this.filterSubscriptions({ tenantId }));
+  }
+  /** 列表过滤（与 Prisma 实现同语义：过滤字段白名单内的等值 + 到期范围） */
+  private filterSubscriptions(filter: { tenantId?: string; planId?: string; status?: SubscriptionView['status']; expireFrom?: Date | null; expireTo?: Date | null }) {
+    return this.subscriptions.filter((s) => {
+      if (filter.tenantId !== undefined && s.tenantId !== filter.tenantId) return false;
+      if (filter.planId !== undefined && s.planId !== filter.planId) return false;
+      if (filter.status !== undefined && s.status !== filter.status) return false;
+      if (filter.expireFrom != null && (s.expireAt == null || s.expireAt < filter.expireFrom)) return false;
+      if (filter.expireTo != null && (s.expireAt == null || s.expireAt > filter.expireTo)) return false;
+      return true;
+    });
+  }
+  /** 排序固定：effectiveAt desc + id asc（主键 tie-breaker，与 Prisma 实现一致） */
+  private sortSubscriptions(rows: Array<SubscriptionView & { activeMarker: string | null }>) {
+    return [...rows].sort((a, b) => {
+      const t = b.effectiveAt.getTime() - a.effectiveAt.getTime();
+      return t !== 0 ? t : a.id.localeCompare(b.id);
+    });
+  }
 
   // ---- QuotaStore ----
   async findTenantQuotaOverride(tenantId: string, quotaKey: string): Promise<TenantQuotaOverride | null> {

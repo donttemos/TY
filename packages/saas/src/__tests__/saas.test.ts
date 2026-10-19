@@ -234,3 +234,54 @@ describe('查询面（列表 / 详情 / 窗口解析 / 重复取消幂等）', (
     expect(await store.findWindow('t1', 'api_calls', 'day', dayStartUTC(at))).toBeNull();
   });
 });
+
+describe('FakeSaasStore 订阅列表查询（M14 FR-14-07 端口语义）', () => {
+  async function seedSubs() {
+    const { store, plans, subs } = await setup();
+    const plan = await plans.createPlan({ code: 'default', name: '基础版' });
+    await plans.publishVersion(plan.id, { quotas: [{ quotaKey: 'api_calls', limitValue: 10n }] });
+    const s1 = await subs.create({ tenantId: 't1', planCode: 'default', expireAt: new Date(Date.UTC(2026, 11, 1)) });
+    const s2 = await subs.create({ tenantId: 't2', planCode: 'default' });
+    await subs.cancel(s2.id, { reason: '运营取消' });
+    return { store, plans, subs, plan, s1, s2 };
+  }
+
+  it('分页列表：total 全集口径 + 分页切片', async () => {
+    const { store } = await seedSubs();
+    const page1 = await store.listSubscriptions({}, { page: 1, pageSize: 1 });
+    expect(page1.total).toBe(2);
+    expect(page1.items).toHaveLength(1);
+    const page2 = await store.listSubscriptions({}, { page: 2, pageSize: 1 });
+    expect(page2.items).toHaveLength(1);
+    expect(page2.items[0].id).not.toBe(page1.items[0].id);
+  });
+
+  it('过滤：status / tenantId / planId 等值 + 到期范围（expireAt 为 null 不命中范围）', async () => {
+    const { store, plan, s1, s2 } = await seedSubs();
+    expect((await store.listSubscriptions({ status: 'active' }, { page: 1, pageSize: 10 })).items.map((s) => s.id)).toEqual([s1.id]);
+    expect((await store.listSubscriptions({ status: 'cancelled' }, { page: 1, pageSize: 10 })).items.map((s) => s.id)).toEqual([s2.id]);
+    expect((await store.listSubscriptions({ tenantId: 't1' }, { page: 1, pageSize: 10 })).total).toBe(1);
+    expect((await store.listSubscriptions({ planId: plan.id }, { page: 1, pageSize: 10 })).total).toBe(2);
+    const inRange = await store.listSubscriptions({ expireFrom: new Date(Date.UTC(2026, 10, 1)), expireTo: new Date(Date.UTC(2026, 11, 30)) }, { page: 1, pageSize: 10 });
+    expect(inRange.items.map((s) => s.id)).toEqual([s1.id]); // s2 无到期时间，不命中
+  });
+
+  it('租户历史：完整列表 + effectiveAt desc + id asc tie-breaker（排序稳定）', async () => {
+    const { store, plans, subs, plan, s1 } = await seedSubs();
+    await subs.cancel(s1.id, { reason: '重开' });
+    await plans.publishVersion(plan.id, { quotas: [{ quotaKey: 'api_calls', limitValue: 20n }] });
+    const s1b = await subs.create({ tenantId: 't1', planCode: 'default', effectiveAt: new Date(Date.UTC(2027, 0, 1)) });
+    const history = await store.listSubscriptionsByTenant('t1');
+    expect(history).toHaveLength(2);
+    expect(history[0].id).toBe(s1b.id); // effectiveAt 更晚 → 排前
+    expect(history.map((s) => s.status)).toEqual(['active', 'cancelled']);
+
+    // tie-breaker：同 effectiveAt 时按 id asc 稳定排序（与 Prisma 实现一致）
+    const same = await subs.create({ tenantId: 't3', planCode: 'default', effectiveAt: new Date(Date.UTC(2027, 0, 1)) });
+    const samePair = await store.listSubscriptionsByTenant('t3');
+    expect(samePair.map((s) => s.id)).toEqual([same.id]);
+    const both = await store.listSubscriptions({}, { page: 1, pageSize: 10 });
+    const ids = both.items.map((s) => s.id);
+    expect(ids.indexOf(s1b.id)).toBeLessThan(ids.indexOf(same.id) === -1 ? ids.length : ids.indexOf(same.id));
+  });
+});

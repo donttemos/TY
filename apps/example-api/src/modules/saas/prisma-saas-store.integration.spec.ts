@@ -238,3 +238,41 @@ describe('PrismaSaasStore 订阅与生命周期（ADR-0029/0031 不变量）', (
     ]);
   });
 });
+
+describe('PrismaSaasStore 订阅列表查询（M14/PRD-014 FR-14-07 端口语义）', () => {
+  it('过滤/分页/排序与 tie-breaker（effectiveAt desc + id asc）+ 租户历史', async () => {
+    const t1sub = await store!.findActiveSubscription('t1');
+    const t2sub = await store!.findActiveSubscription('t2');
+    expect(t1sub).toBeTruthy();
+    expect(t2sub).toBeTruthy();
+    // 确定性排序：用相对时间保证 t2 是全表最晚（其他 describe 建的订阅至多 now）
+    const base = new Date();
+    await prisma!.tenantSubscription.update({ where: { id: t1sub!.id }, data: { effectiveAt: base, expireAt: new Date(base.getTime() + 10 * 86_400_000) } });
+    await prisma!.tenantSubscription.update({ where: { id: t2sub!.id }, data: { effectiveAt: new Date(base.getTime() + 86_400_000) } });
+
+    const all = await store!.listSubscriptions({}, { page: 1, pageSize: 50 });
+    expect(all.total).toBeGreaterThanOrEqual(2);
+    expect(all.items[0].id).toBe(t2sub!.id); // effectiveAt desc（全表最晚）
+
+    const page1 = await store!.listSubscriptions({}, { page: 1, pageSize: 1 });
+    const page2 = await store!.listSubscriptions({}, { page: 2, pageSize: 1 });
+    expect(page1.items).toHaveLength(1);
+    expect(page1.items[0].id).not.toBe(page2.items[0].id);
+
+    expect((await store!.listSubscriptions({ tenantId: 't1' }, { page: 1, pageSize: 10 })).total).toBe(1);
+
+    // 到期范围命中 t1（base+10d）；其余订阅 expireAt 为 null 不命中（与 Fake 实现同语义）
+    const inRange = await store!.listSubscriptions(
+      { expireFrom: new Date(base.getTime() + 9 * 86_400_000), expireTo: new Date(base.getTime() + 11 * 86_400_000) },
+      { page: 1, pageSize: 50 },
+    );
+    expect(inRange.items.map((s) => s.id)).toEqual([t1sub!.id]);
+
+    // 状态过滤 + 租户历史（关闭 t2 订阅）
+    await store!.closeSubscription(t2sub!.id, { status: 'cancelled', reason: '测试', closedAt: new Date() });
+    const cancelled = await store!.listSubscriptions({ status: 'cancelled' }, { page: 1, pageSize: 50 });
+    expect(cancelled.items.map((s) => s.id)).toContain(t2sub!.id); // 此前 describe 亦有 cancelled 行，断言包含
+    const history = await store!.listSubscriptionsByTenant('t2');
+    expect(history.map((s) => s.id)).toEqual([t2sub!.id]);
+  });
+});

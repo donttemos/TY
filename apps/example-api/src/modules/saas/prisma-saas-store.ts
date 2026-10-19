@@ -69,7 +69,8 @@ interface SaasTx {
   tenantSubscription: {
     findFirst(args: { where: Record<string, unknown> }): Promise<(SubscriptionView & { activeMarker: string | null }) | null>;
     findUnique(args: { where: { id: string } }): Promise<(SubscriptionView & { activeMarker: string | null }) | null>;
-    findMany(args: { where: Record<string, unknown>; orderBy?: Array<Record<string, string>> }): Promise<SubscriptionView[]>;
+    findMany(args: { where: Record<string, unknown>; orderBy?: Array<Record<string, string>>; skip?: number; take?: number }): Promise<SubscriptionView[]>;
+    count(args: { where: Record<string, unknown> }): Promise<number>;
     create(args: { data: { tenantId: string; planId: string; planVersionId: string; effectiveAt: Date; expireAt?: Date | null; activeMarker: string | null } }): Promise<SubscriptionView>;
     update(args: { where: { id: string }; data: Record<string, unknown> }): Promise<unknown>;
   };
@@ -220,6 +221,45 @@ export class PrismaSaasStore implements SaasStore {
       if (status === 'grace') out.push({ id: s.id, tenantId: s.tenantId });
     }
     return out;
+  }
+
+  async listSubscriptions(
+    filter: {
+      tenantId?: string;
+      planId?: string;
+      status?: SubscriptionView['status'];
+      expireFrom?: Date | null;
+      expireTo?: Date | null;
+    },
+    page: { page: number; pageSize: number },
+  ): Promise<{ items: SubscriptionView[]; total: number }> {
+    const where: Record<string, unknown> = {};
+    if (filter.tenantId !== undefined) where.tenantId = filter.tenantId;
+    if (filter.planId !== undefined) where.planId = filter.planId;
+    if (filter.status !== undefined) where.status = filter.status;
+    if (filter.expireFrom != null || filter.expireTo != null) {
+      where.expireAt = {
+        ...(filter.expireFrom != null ? { gte: filter.expireFrom } : {}),
+        ...(filter.expireTo != null ? { lte: filter.expireTo } : {}),
+      };
+    }
+    const [items, total] = await Promise.all([
+      this.tx.tenantSubscription.findMany({
+        where,
+        orderBy: [{ effectiveAt: 'desc' }, { id: 'asc' }],
+        skip: (page.page - 1) * page.pageSize,
+        take: page.pageSize,
+      }),
+      this.tx.tenantSubscription.count({ where }),
+    ]);
+    return { items, total };
+  }
+
+  async listSubscriptionsByTenant(tenantId: string): Promise<SubscriptionView[]> {
+    return this.tx.tenantSubscription.findMany({
+      where: { tenantId },
+      orderBy: [{ effectiveAt: 'desc' }, { id: 'asc' }],
+    });
   }
 
   // ---- QuotaStore ----
