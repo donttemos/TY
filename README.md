@@ -2,11 +2,11 @@
 
 > 一套「框架之上的框架」：用它在 1 天内搭出任意业务系统的可运行骨架，小到内部工具站、大到多租户 SaaS，规模升级时业务代码零重写。
 >
-> **当前状态：v0.5.5 已发布（2026-10-16）** —— 本次 **v0.5.5 交付 M10（PRD-010）P2/P3 在途整体成版**：E-08 admin 全栈项目模板（`fw new --template=admin`）/ E-09 文件存储端口 `@fw/storage` / E-10 审计归档 / E-12 SSE 实时推送 / E-13 站内信与通知中心 / E-14 i18n 骨架 / E-15 暗色模式 / E-16 边界上限配置化 / E-17 前端错误监控 RUM，外加 **M11（PRD-011）立项草案** 与 **@fw/auth·cache·queue 驱动审查批量修复 26 项**；配置键 80→97，全仓 15 包 + 2 应用 1205 例测试全绿后整合发版。发布验收记录见 [v0.5.5 发布验收报告](./docs/90-release-v0.5.5.md)，上一版见 [v0.5.0 发布验收报告](./docs/90-release-v0.5.0.md)。M11.1–M11.5（ADR-0020~0024，认证核心强化）已合入 main，记 CHANGELOG `[Unreleased]`，随下一版本发布。
+> **当前状态：v0.7.0 已发布并完成真机部署验收（2026-10-19）** —— 本次 **v0.7.0 交付 M13（PRD-013）SaaS 运营基础全量**：`@fw/saas` 领域包（套餐版本化 / 订阅 / 生效配额 = 覆盖 ?? 默认 / 用量幂等与硬限额原子扣减 / 租户五态生命周期，端口驱动，**ADR-0029~0031**）+ 三库同构十表迁移 + `/api/v1/saas/*` 九个运营端点（`ops:saas:*` 读写分离）+ 冻结拦截 4031（业务入口 Guard）+ 到期处置任务（`@Cron` 分布式锁）+ `fw_saas_*` 指标段 + admin-web 运营四页，外加 **主线 B**（docs/42/48/49/97 四件套 + Dev Container + `.nvmrc` + CI node pin 22.22.2 工具链冻结）。真机 106.55.32.251 部署验收通过（PG 迁移 / seed / backfill / HTTPS / acme 冻结-恢复 E2E），发版记录见 [v0.7.0 发布记录](./docs/90-release-v0.7.0.md)，上一版见 [v0.6.0 发布验收报告](./docs/90-release-v0.6.0.md)。CI 四腿全绿（base + postgres/mysql/sqlite 三库矩阵）。
 >
-> v0.5.0（2026-10-15）交付 M10 P0 + P1：多实例一致性收口（E-01 任务中心驱动化 / E-02 配置中心多实例语义 + nacos 转正 / E-03 框架级 API 限流默认开启 / E-04 权限树契约落地）与规模化遗留（E-06 Redis Cluster 实测收口、E-07 OAuth2 授权码端到端 + apikey 签名验签——`AUTH_STRATEGY` 四策略名实相符），配置键 65→80，新文档 [docs/41 认证策略端到端指南](./docs/41-auth-strategies.md)。
+> v0.6.0（2026-10-17）交付 M11 五阶段（认证核心强化，ADR-0020~0024：轮换 CAS / 生命周期完整性 / Client Fingerprint / 双 Key Ring / Key 可观测）与 M12 W1~W3（可观测与统一契约，ADR-0025~0027：错误三类治理 / requestId-traceId 双 ID 分层 / 运维端点三层边界），外加 **cache 缺陷清单 13 项修复**（标签原子协议 / 锁共享深度 / WRONGTYPE 对齐，Cluster 兼容策略见 ADR-0028）。
 >
-> **仓库与流水线**：[`donttemos/TY`](https://github.com/donttemos/TY)（private）。CI（GitHub Actions）在 v0.2.0 推送后**首次真实运行**；经修复 6 处「只在干净环境复现」的流水线/环境适配缺陷后，**四大作业全绿**（基础门禁 24 步 + sqlite/postgres/mysql 三库集成矩阵），见 [发布报告 §5.1 / §8](docs/archive/release/90-release-v0.2.0.md)。
+> **仓库与流水线**：[`donttemos/TY`](https://github.com/donttemos/TY)（private）。CI（GitHub Actions）**四作业全绿**（构建 / 单测 / 静态门禁 + sqlite/postgres/mysql 三库集成矩阵 + M13 端到端冒烟 `smoke-saas-ops` 22/22），版本冻结与可复现构建见 [docs/48](./docs/48-reproducible-builds.md)。
 
 ## 设计原则
 
