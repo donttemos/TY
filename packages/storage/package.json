@@ -1,6 +1,6 @@
 {
   "name": "@fw/storage",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "文件存储端口：统一 StoragePort（local / s3 双驱动）、上传类型/大小白名单校验（默认收紧）、*_DRIVER 枚举装配（PRD-010 E-09）",
   "type": "module",
   "main": "./dist/index.js",

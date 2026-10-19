@@ -1,6 +1,6 @@
 {
   "name": "@fw/saas",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "SaaS 运营基础领域包（M13/PRD-013）：套餐版本化、订阅与生效配额解析、用量幂等与硬限额原子扣减、租户五态生命周期状态机；持久化经 SaasStore 端口抽象（ADR-0029~0031）",
   "type": "module",
   "main": "./dist/index.js",

@@ -1,6 +1,6 @@
 {
   "name": "admin-web",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "管理后台前端模板（PRD-005 / M5）：Vue3 + Vite + Element Plus + Pinia + Vue Router，登录、动态路由、按钮级权限、用户/角色/菜单/字典/审计页与标准 CRUD 组件",
   "type": "module",
