@@ -5,6 +5,8 @@
  *   缓存实例来自容器注入的属性 `cache`（@Cacheable 自动解析），业务签名零侵入。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-18 donttemo 复核修复配套（P1）：stats() 增加 `prefix` 字段——双节点冒烟在清场前
+ *   核对两个实例实际使用的 CACHE_PREFIX 一致，避免前缀配错导致断言打空或清场打错范围。
  * @module example-api/cache-demo
  */
 
@@ -115,12 +117,14 @@ export class CacheDemoService {
     this.loads.clear();
   }
 
-  /** 指标快照（含命中率派生值） */
-  stats(): { driver: string; hits: number; misses: number; hitRate: number; singleFlightMerged: number; tagInvalidations: number; degradations: number } {
+  /** 指标快照（含命中率派生值；`prefix` 供双节点冒烟核对两实例共享同一 CACHE_PREFIX） */
+  stats(): { driver: string; prefix: string; hits: number; misses: number; hitRate: number; singleFlightMerged: number; tagInvalidations: number; degradations: number } {
     const snapshot = this.cacheService.metricsSnapshot();
     const total = snapshot.hits + snapshot.misses;
     return {
       driver: snapshot.driver,
+      // 实例实际解析后的前缀（2026-10-18）：脚本据此在清场前校验两节点前缀一致，不再盲信 DUAL_PREFIX
+      prefix: this.cacheService.prefix,
       hits: snapshot.hits,
       misses: snapshot.misses,
       hitRate: total === 0 ? 0 : Number((snapshot.hits / total).toFixed(6)),

@@ -122,8 +122,9 @@ jobs:
           done
 
       # 双进程（双节点）冒烟：自起 A/B 两实例（3120/3121），共享同一 Redis service + 同一 SQLite 库
-      # + 同一 CACHE_PREFIX，验证 T2 跨实例缓存读写与标签失效 / T3 锁互斥 / T4 TTL 过期与旧令牌保护 /
-      # T5.1 并发刷新唯一 replacement（17 断言）。**必须排在下方「Redis 单实例集成验证」之前**——
+      # + 同一 CACHE_PREFIX，验证 T0 两节点前缀核对 / T2 跨实例缓存读写与标签失效 / T3 锁互斥 /
+      # T4 TTL 过期与旧令牌保护 / T5.1 并发刷新唯一 replacement / T5.1c 异 UA grace 重试拒绝
+      # （20 断言；清场仅限测试命名空间，失败即非 0）。**必须排在下方「Redis 单实例集成验证」之前**——
       # 该步骤末尾的 SHUTDOWN 故障路径用例会把 redis service 容器关停。库自行 migrate+seed（幂等）。
       - name: 双进程缓存与令牌一致性冒烟（真实 Redis）
         working-directory: apps/example-api

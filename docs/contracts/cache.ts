@@ -100,9 +100,11 @@ export interface CacheServiceContract {
   wrap<T>(key: CacheKey, ttlSeconds: number, loader: () => Promise<T | undefined | null>, options?: CacheOptions): Promise<T | undefined>;
   /**
    * 按标签批量失效；返回失效键数量。
-   * 原子语义（C-01/C-03 冻结）：写+登记（`set` 带 tags）与失效各自原子、彼此全序串行——
-   * 失效后任何存活键必仍可被再次失效（无孤儿）；失效故障时整体未发生（fail-open 返回 0 且
-   * 不销毁索引，fail-closed 抛 9002）。已知限制：redis-cluster 跨 slot 多键脚本不可用
+   * 原子语义（C-01/C-03 冻结，2026-10-18 口径澄清）：写+登记（`set` 带 tags）与失效各自原子、
+   * 彼此全序串行——这里的「原子」指**脚本不可交错执行**（isolation），**不是事务回滚**：
+   * 写+登记的确定性错误（标签键类型不符 / 标签键撞值键）由写前预检保证零写入；失效脚本首命令
+   * 即读取、后续只有 DEL，故失效故障时整体未发生（fail-open 返回 0 且不销毁索引，fail-closed
+   * 抛 9002）。已知限制：redis-cluster 跨 slot 多键脚本不可用
    * （Cluster 兼容策略与 prefix 作用域 hash tag 定案见 ADR-0028；单实例真实 Redis 验证见
    * `packages/cache/src/__tests__/redis-integration.test.ts`）。
    */

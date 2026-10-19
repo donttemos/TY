@@ -694,11 +694,17 @@ Refresh grace:        10s（默认）
 §9/§10 用的本地 harness（`scripts/.dual-node-harness.mjs`，点号文件名 + `.git/info/exclude`）已**退役并删除**，能力以正式脚本收编：
 
 - **`apps/example-api/scripts/smoke-dual-node.mjs`** —— CI base 作业新增步骤「双进程缓存与令牌一致性冒烟（真实 Redis）」，与 `redis:7-alpine` service 同作业。
-  - 默认**自起**两个实例（3100/3101，`DUAL_PORT_A/B` 可改），共享同一 Redis / 同一库 / 同一 `CACHE_PREFIX`，跑 T2/T3/T4/T5.1（17 断言）；`DUAL_INCLUDE_REPLAY=1` 追加 T5.2（+11s）。
+  - 默认**自起**两个实例（3120/3121，`DUAL_PORT_A/B` 可改），共享同一 Redis / 同一库 / 同一 `CACHE_PREFIX`，跑 T0/T2/T3/T4/T5.1/T5.1c（20 断言：17 条原断言 + T0 前缀核对 + T0 清场结果 + T5.1c）；`DUAL_INCLUDE_REPLAY=1` 追加 T5.2（+11s）。
   - **`DUAL_A`/`DUAL_B` 复用模式**：指向已在运行的两个实例即不再自起——真机跨机器复跑用同一脚本（`DUAL_A=http://127.0.0.1:3000 DUAL_B=http://127.0.0.1:13001 DUAL_REDIS=redis://:密码@127.0.0.1:16379/15`）。
   - 门控：未设 `DUAL_REDIS_URL` 整脚本 SKIP（本地默认形态）。
+- **前缀与清场的安全边界（2026-10-18 复核加固）**：清场按前缀删除，因此
+  - 复用模式**强制显式** `DUAL_PREFIX`（禁止回落随机串）；前缀只允许 `[A-Za-z0-9._:-]`，且需带测试语义段（`smoke`/`test`/`it`/`tmp`/`temp`，按 `[.:_-]` 分词），否则必须 `DUAL_PREFIX_ACK=1` 显式确认；
+  - 启动后向两个实例读 `/api/v1/demo-cache/stats` 的**实际前缀**并与 `DUAL_PREFIX` 核对，不一致立即中止（不再盲信环境变量）；演示端点需 `DEMO_ENDPOINTS_ENABLED=true`；
+  - 清场只删本脚本命名空间（`CacheDemoService:` / `__tag__:demo:` / `lock:demo:` / `t4-lock`），并校验目标键范围与数量上限（`DUAL_CLEANUP_MAX_KEYS`，默认 5000）；
+  - 全程**不用 `KEYS`**：断言与清场都走 SCAN 游标（`DUAL_SCAN_COUNT`，默认 500），删除按 `DUAL_CLEANUP_BATCH_SIZE`（默认 500）**分批 DEL**；键范围/数量校验提前到收集阶段，超限即中止且**不删除任何键**；
+  - 清场失败记为 **FAIL → 脚本非 0 退出**；清场/关闭连接/回收子进程三级嵌套 finally，Redis 断连不会跳过子进程回收。
 - 依赖解析改为零硬编码：`@fw/cache` 走 `import.meta.resolve` + 动态 import（其 `exports` 只有 `import` 条件，CJS `require.resolve` 不可用），`ioredis` 以其入口为基准 `createRequire`。
-- 本机验证：17/17 通过（20 并发刷新 394ms、唯一 replacement）。
+- 本机验证：17/17 通过（20 并发刷新 394ms、唯一 replacement）；加固后断言为 20 条（+T0 前缀核对、+T0 清场结果、+T5.1c 异 UA 拒绝）。
 
 ---
 
@@ -732,6 +738,8 @@ CACHE_PREFIX:         fw:dual-node-it；CACHE_FAIL_OPEN=false
 ### 12.3 脚本侧修正（本轮）
 
 - 复用模式（`DUAL_A/DUAL_B`）原先用随机 `CACHE_PREFIX` 做键断言与清场，与既有实例真实前缀不匹配 → 新增 `DUAL_PREFIX` 显式指定（提交 `c192885`）。
+- 2026-10-18 复核加固（P1）：前缀安全校验 + 双实例实际前缀核对 + 清场收窄至测试命名空间 + 清场失败显式非 0；新增 T5.1c 异 UA grace 重试拒绝（兼作两节点 `AUTH_FINGERPRINT` 漂移探针）。`fw:dual-node-it` 含 `it` 语义段，无需额外 ACK；换成不含测试语义段的前缀时需 `DUAL_PREFIX_ACK=1`。
+- 2026-10-19 复核二轮（P1 续）：脚本内残留的 `KEYS` 全部换成 SCAN 游标，清场改分批 DEL；T2 的 id 默认带本次运行唯一后缀（`DUAL_FIND_USER_ID` 可覆盖），复用模式下同命名空间的历史遗留键不再让「键↔索引一致」断言误判。本机临时 Redis 5.0 实测：20/20、1200 个同命名空间键分 3 批删净（`removed=1202`）、同前缀业务键保留、`INFO commandstats` 中 `keys` 调用为 0、`DUAL_CLEANUP_MAX_KEYS=1` 时清场 FAIL + 脚本 exit 1 且中止时零删除。
 - 复跑命令模板（真机）：
   ```bash
   DUAL_A=http://127.0.0.1:3000 DUAL_B=http://127.0.0.1:13001 \

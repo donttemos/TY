@@ -18,6 +18,20 @@
 
 ## [Unreleased]
 
+### Fixed（P1 加固：标签脚本写序与失效返回值口径，2026-10-19）
+
+- **`SET_TAGS_LUA` 写序重排（P1 加固）**：预检只能收敛**确定性**错误（WRONGTYPE / 标签键撞值键），预检通过后的**资源类**故障（OOM / 只读副本）仍会中止脚本并保留已执行命令。写序由「写值 → 登记索引」改为「**预检 → 登记索引 → 最后写值**」：残余故障的最坏结果由不可回收的**孤儿缓存**（有值无索引，标签失效永远触达不到）翻转为无害的**幽灵索引**（索引指向不存在的键：失效时 DEL 不存在的键无副作用，标签集合 TTL 到期自回收）。`store.port` 契约同步登记写序约束。
+- **`INVALIDATE_TAG_LUA` 返回值对齐（P1 加固）**：脚本原返回**成员个数**（`#members`），memory 驱动返回**实际删除数**——幽灵成员场景下两驱动不一致。现改为累加各 `DEL` 的返回值，与端口契约「实际删除数」及 memory 驱动一致。
+- **故障注入回归**：Fake 客户端新增写值阶段注入点（`failValueWriteOnce`，模拟资源类故障下已执行命令不回滚），锁定「只留幽灵索引、绝不留孤儿缓存 + 恢复后可正常写入」；跨驱动契约新增「幽灵索引 ⇒ invalidateByTag 返回 0 且索引被清理」；真实 Redis 侧新增 maxmemory + noeviction OOM 注入用例（门控 `CACHE_REDIS_INTEGRATION_ALLOW_MEMORY_FAULT`，默认跳过以免干扰并行写入；本机无 Redis，**未执行**）。
+
+### Fixed（代码复核 P1/P2 修复，2026-10-18）
+
+- **Redis 标签 Lua 的运行时错误保护（P1）**：`SET_TAGS_LUA` 改为「写前只读预检 → 通过后才写」。Lua 只保证**不可交错执行**、运行期报错**不回滚**——原顺序（先 SET 再逐个 SADD）在某个标签索引键被占成字符串（WRONGTYPE）时会留下「有值无索引」的孤儿缓存。现预检覆盖**全部**标签键类型与「标签键 == 值键」，任一不满足即零写入失败；memory 驱动同口径（此前会把字符串标签条目静默换成集合）。回归：`redis-driver`（Fake）+ `store-contract`（跨驱动）+ `redis-integration`（真实 Redis，注入类型污染后值键不存在）。文档口径同步澄清：`store.port` / `docs/contracts/cache.ts` 的「原子」= isolation，**不是事务回滚**。
+- **双节点冒烟脚本的前缀安全与清场边界（P1）**：`smoke-dual-node.mjs` 新增 ①复用模式强制显式 `DUAL_PREFIX`，前缀仅允许 `[A-Za-z0-9._:-]`（禁 glob 元字符/空白），无测试语义段（smoke/test/it/tmp/temp）时须 `DUAL_PREFIX_ACK=1`；②启动后向两个实例读 `/api/v1/demo-cache/stats` 的**实际前缀**核对一致，不一致立即中止；③清场从 `${PREFIX}:*` 收窄为脚本自有的四个命名空间并校验键范围（含 `DUAL_CLEANUP_MAX_KEYS` 熔断）；④清场失败记为 **FAIL 并使脚本非 0 退出**（不再静默），清场/关闭连接/回收子进程改嵌套 try/finally，Redis 断连不再跳过 Node 进程回收；⑤新增 T5.1c「异 UA grace 重试被拒」，同时作为两节点 `AUTH_FINGERPRINT` 配置漂移探针。`cache-demo` 的 `/stats` 增 `prefix` 字段（自检端点，仍受 `DEMO_ENDPOINTS_ENABLED` 门控）。
+- **双节点冒烟脚本的清场实现（P1 续，2026-10-19 复核二轮）**：脚本内**彻底移除 `KEYS`**——断言与清场均走 SCAN 游标（`DUAL_SCAN_COUNT`，默认 500），清场按 `DUAL_CLEANUP_BATCH_SIZE`（默认 500）**分批 DEL**，避免 O(N) 阻塞命令与超长 DEL；键范围/数量校验提前到 SCAN 收集阶段（超限即中止且**不删除任何键**），安全开关改为正整数解析（非法值 fail-fast）。T2 的 id 改为本次运行唯一后缀（可 `DUAL_FIND_USER_ID` 覆盖），孤儿/幽灵断言只针对本次运行写入的键，复用模式下的历史遗留键不再造成误判。**实测**：临时 Redis 5.0 上 20/20（含 `INFO commandstats` 证明 `keys` 调用为 0、1200 个同命名空间键分 3 批删净、同前缀业务键保留、`DUAL_CLEANUP_MAX_KEYS=1` 时清场 FAIL 且脚本 exit 1、中止时零删除）。
+- **Refresh Token grace 指纹的缺失值旁路（P1）**：重试方指纹改为**无条件计算**（缺失 UA = `SHA-256("")` 定值，ADR-0022 决策 3a），赢家 `rotated_fingerprint` 非 NULL 即比对；`AUTH_FINGERPRINT=off` 只影响新轮换是否写指纹，不再让已有指纹行的 grace 重试走到「本次无指纹 ⇒ 放行」。配置漂移时异端仍判 replay（族撤销 + 审计），同端照常返回 B，并补 warn 日志。回归 L6-07/08/09。
+- **锁 API 参数校验（P2）**：`LockManager.acquire()` 入口统一校验 `ttlMs`（必须正数）与 `waitMs`（≥0 有限值），放在重入分支之前——此前重入路径不写存储、绕过驱动侧 TTL 校验，非法 TTL 会「重入成功」；校验失败不改重入深度。`CacheService.lock()` 的 `waitMs` 校验置于 guarded 之前，非法参数 fail-fast，不被 fail-open 吞成 null。
+
 ### Known issues（登记，2026-10-18）
 
 - **`/ready` 的 db 就绪探针是启动期一次性标志，非实时探测**（独立修复项，与 Redis 双节点验收无关，登记见 `docs/96-db-readiness-probe-issue.md`）：`createDbReadinessProbe.check()` 直接返回 `markConnected()` 的启动期布尔——启动时 DB 不可达则恢复后仍永久 `db:fail`（须重启）；运行期断连却仍报 `db:ok`。同场景 cache/queue/transport 探针为实时 ping，语义不一致。建议修法：带 1~2s 超时的实时 `SELECT 1` 探测 + 连续失败 N 次翻转（防抖）。

@@ -64,6 +64,13 @@ A + 指纹缺失/旧数据（NULL）     → 维持现行为放行（向后兼�
         └──► 指纹来源：normalizeUserAgent（决策 3a），IP 不参与（漂移误杀）
 ```
 
+## 后续勘误（2026-10-18 · 代码复核加固）
+
+- **grace 指纹比对不得存在「本次请求指纹缺失 ⇒ 跳过比对」的旁路**。决策 3a 已把「UA 缺失」规范化为 `""`（固定指纹），因此重试方指纹**恒可计算**；实现层此前用 `fingerprintEnabled` 决定是否计算重试指纹，效果是：`AUTH_FINGERPRINT=off` 的实例对「on 期间轮换、`rotated_fingerprint` 非 NULL」的 A 做异端 grace 重试时会跳过比对并放行 B —— 与决策 2「赢家指纹非 NULL 必须比对」冲突。
+  - **修正**：重试方指纹无条件计算；`rotated_fingerprint IS NOT NULL` 即比对。`AUTH_FINGERPRINT=off` 的作用**仅剩一处**：新轮换不写指纹（决策 3 的合法 NULL 来源）。
+  - **双节点配置漂移**：赢家按自身开关写指纹，off 节点遇到 on 节点写入的行仍按指纹判定（异端拒绝、同端放行），并记一条 warn 供运维发现漂移。回归锁定 `refresh-token.m11-fingerprint.test.ts` L6-07（漂移不放宽，含族撤销 + 审计）/ L6-08（漂移不误杀）/ L6-09（缺失 UA 判 replay）。
+- **口径重申**：NULL 放行只适用于「A 行 `rotated_fingerprint` 为 NULL」（M11.1 存量行 / off 轮换行）；「本次请求算不出指纹」不是合法放行理由。
+
 ## 备选方案
 
 | 方案 | 优点 | 缺点 | 取舍 |

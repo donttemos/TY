@@ -60,7 +60,7 @@
 | | `AUTH_MAX_FAILED` | 否 | 5 | 连续失败锁定阈值 |
 | | `AUTH_LOCK_MINUTES` | 否 | 15 | 锁定时长 |
 | | `AUTH_REFRESH_GRACE_SECONDS` | 否 | 10 | refresh 并发宽限窗口（秒）；超出即判泄漏并撤销整族 |
-| | `AUTH_FINGERPRINT` | 否 | on | grace 重试客户端指纹绑定（ADR-0022）：轮换写入赢家 UA 指纹（SHA-256，IP 不参与），重试方不匹配判泄漏并族撤销；`off` 关闭（仅存量兼容场景） |
+| | `AUTH_FINGERPRINT` | 否 | on | grace 重试客户端指纹绑定（ADR-0022）：轮换写入赢家 UA 指纹（SHA-256，IP 不参与），重试方不匹配判泄漏并族撤销；`off` 只关闭「新轮换写指纹」（已有指纹行仍按指纹比对，**多节点部署须保持一致**，见 ADR-0022 后续勘误） |
 | | `AUTH_PASSWORD_POLICY` | 否 | medium | 密码强度策略：`low` / `medium` / `high` |
 | | `AUTH_ALLOW_REGISTER` | 否 | false | 是否开放自助注册（默认关闭，「默认安全」） |
 | | `AUTH_API_KEYS` | 否 | 空 | 开放接口 API Key，格式 `<key>:<主体名>:<权限码,权限码>`；多条用 `|` 分隔。**权限码本身含冒号，按前两段切分** |

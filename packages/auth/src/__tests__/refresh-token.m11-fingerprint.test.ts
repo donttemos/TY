@@ -5,6 +5,8 @@
  *   IP 不参与指纹（漂移误杀）；normalizeUserAgent 固定测试向量（决策 3a）。
  * @author donttemo
  * @created 2026-10-16
+ * @modified 2026-10-18 donttemo 复核修复配套（P1）：新增 L6-07/08/09——配置漂移（on 写指纹 → off 实例
+ *   重试）既不放过异端也不误杀同端、缺失 UA 不再旁路（SHA-256("") 是另一个确定指纹，须判 replay）。
  * @module @fw/auth
  */
 
@@ -141,5 +143,56 @@ describe('M11.3 L6：grace 重试指纹绑定（ADR-0022）', () => {
     for (const token of [first.refreshToken, b.refreshToken]) {
       await expect(h.refresh.rotate(token, '1.1.1.1', 'device-1')).rejects.toBeDefined();
     }
+  });
+
+  // ---------- 2026-10-18 复核加固：删除「本次指纹缺失 ⇒ 跳过比对」的缺失值旁路 ----------
+
+  it('L6-07：配置漂移不放宽——off 实例对「已有指纹行」的异 UA grace 重试仍判 replay + 族撤销', async () => {
+    const h = createHarness({ refreshGraceSeconds: 10 });
+    const user = seedUser(h, 'drift-mismatch');
+    const first = await h.refresh.issue(user.id, '1.1.1.1', 'device-1');
+    // on 模式赢家：A 行指纹非 NULL（新 rotation 不得产生 NULL，决策 3）
+    const b = await h.refresh.rotate(first.refreshToken, '1.1.1.1', 'device-1');
+    expect((await h.refresh.find(first.refreshToken))?.rotatedFingerprint).toBe(computeFingerprint('device-1'));
+
+    // 配置漂移：另一台实例 AUTH_FINGERPRINT=off（灰度/回滚窗口）。
+    // 修复前该实例 retryFingerprint 为 null ⇒ 跳过比对 ⇒ 异端拿回 B；修复后按赢家指纹比对：
+    const offService = new RefreshTokenService(h.store, h.tokens, 10, false);
+    await expect(offService.rotate(first.refreshToken, '1.1.1.1', 'attacker-ua')).rejects.toMatchObject({
+      code: ErrorCode.UNAUTHORIZED,
+    });
+
+    // 安全事件全链（Rule 8）：族撤销 + B 失效 + audit security 落库
+    expect((await h.refresh.find(b.refreshToken))?.revokedAt).not.toBeNull();
+    const audits = await h.store.pageAuditLogs({ page: 1, pageSize: 10, action: 'security' });
+    expect(audits.total).toBe(1);
+    expect(audits.items[0]?.targetId).toBe(first.familyId);
+  });
+
+  it('L6-08：配置漂移不误杀——off 实例对「已有指纹行」的同 UA grace 重试仍返回 B', async () => {
+    const h = createHarness({ refreshGraceSeconds: 10 });
+    const user = seedUser(h, 'drift-match');
+    const first = await h.refresh.issue(user.id, '1.1.1.1', 'device-1');
+    const b = await h.refresh.rotate(first.refreshToken, '1.1.1.1', 'device-1');
+
+    const offService = new RefreshTokenService(h.store, h.tokens, 10, false);
+    const retry = await offService.rotate(first.refreshToken, '2.2.2.2', 'device-1');
+    // 指纹相同（UA 一致、IP 不参与）⇒ 合法并发重试照常恢复同一个 B，不因开关 off 而拒绝
+    expect(retry.refreshToken).toBe(b.refreshToken);
+    expect(retry.outcome.withinGrace).toBe(true);
+  });
+
+  it('L6-09：缺失 UA 不再旁路——赢家指纹非 NULL 时无 UA 重试判 replay（UA 缺失 = 另一个确定指纹）', async () => {
+    const h = createHarness({ refreshGraceSeconds: 10 });
+    const user = seedUser(h, 'missing-ua');
+    const first = await h.refresh.issue(user.id, '1.1.1.1', 'device-1');
+    const b = await h.refresh.rotate(first.refreshToken, '1.1.1.1', 'device-1');
+
+    // computeFingerprint(null) = SHA-256("") ≠ 赢家指纹：无法证明是同一客户端 ⇒ 不放行
+    await expect(h.refresh.rotate(first.refreshToken, '1.1.1.1', null)).rejects.toMatchObject({
+      code: ErrorCode.UNAUTHORIZED,
+    });
+    // 族撤销后 B 也不可用（fail closed，而非静默换发）
+    await expect(h.refresh.rotate(b.refreshToken, '1.1.1.1', 'device-1')).rejects.toBeDefined();
   });
 });

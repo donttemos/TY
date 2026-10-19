@@ -17,6 +17,10 @@
  * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-07，ADR-0025）：replay 安全事件走统一审计
  *   事件契约（category/event/result/familyId/jti 落位）+ 审计行 traceId 取自请求上下文（修复
  *   硬编码 null 断链）+ 全部调用点强制传入 ip/userAgent（修复主泄漏路径丢失）+ reason 结构化
+ * @modified 2026-10-18 donttemo 复核修复（P1）：grace 指纹比对去掉「本次指纹为 NULL 即跳过」的
+ *   缺失值旁路——重试方指纹恒可计算（缺失 UA = SHA-256("") 定值，决策 3a），赢家指纹非 NULL 时
+ *   一律比对；AUTH_FINGERPRINT=off 只影响新轮换是否写指纹，不再改变已有指纹行的判定语义
+ *   （双节点配置漂移不放宽 grace 绑定），漂移时补一条 warn 以便运维发现。
  * @module @fw/auth
  */
 
@@ -87,7 +91,10 @@ export class RefreshTokenService {
     private readonly store: AuthStore,
     private readonly tokens: TokenService,
     private readonly graceSeconds: number = DEFAULT_REFRESH_GRACE_SECONDS,
-    /** 指纹绑定开关（ADR-0022，AUTH_FINGERPRINT）：off 时新轮换不写指纹且重试不比对 */
+    /**
+     * 指纹绑定开关（ADR-0022，AUTH_FINGERPRINT）：off 时**新轮换不写指纹**（NULL 的唯一合法来源）；
+     * 已有指纹行的 grace 比对不受此开关影响（2026-10-18 加固：配置漂移不得放宽绑定）。
+     */
     private readonly fingerprintEnabled: boolean = true,
   ) {}
 
@@ -245,15 +252,18 @@ export class RefreshTokenService {
   ): Promise<RotationIssued> {
     const familyId = result.oldToken.familyId;
 
-    // 指纹比对（ADR-0022 决策 5/7）：A 行指纹非 NULL 且与重试方不一致 ⇒ replay（安全事件）。
-    // NULL 仅来自 M11.1 存量行或 off 模式 → 放行（存量迁移兼容，非常态旁路）；
-    // undefined（旧 Store 实现未返回该字段）视同 NULL，放行——不得误判 mismatch 误杀合法重试。
-    const retryFingerprint = this.fingerprintEnabled ? computeFingerprint(userAgent) : null;
-    if (
-      (result.fingerprint ?? null) !== null &&
-      retryFingerprint !== null &&
-      retryFingerprint !== result.fingerprint
-    ) {
+    // 指纹比对（ADR-0022 决策 5/7 + 2026-10-18 复核加固）：赢家指纹非 NULL 时**必须**与重试方一致。
+    // 重试方指纹恒可计算——computeFingerprint 对 null/空 UA 返回 SHA-256("") 定值（决策 3a），
+    // 所以不存在「本次请求算不出指纹 ⇒ 跳过比对」的旁路：UA 缺失只是得到另一个确定指纹。
+    // AUTH_FINGERPRINT=off 仅决定「新轮换是否写指纹」（合法 NULL 的唯一来源，决策 3），
+    // 不改变已有指纹行的比对语义——双节点配置漂移不得放宽 grace 重试绑定。
+    const retryFingerprint = computeFingerprint(userAgent);
+    const winnerFingerprint = result.fingerprint ?? null;
+    if (winnerFingerprint !== null && !this.fingerprintEnabled) {
+      // 可观测的配置漂移信号：本地开关 off，但这行轮换赢家是开指纹时写入的（或对端实例开启）
+      logger.warn('指纹开关为 off 但赢家已记录指纹：仍按指纹比对 grace 重试（配置漂移不放宽绑定）', { familyId });
+    }
+    if (winnerFingerprint !== null && retryFingerprint !== winnerFingerprint) {
       await this.handleReplay(familyId, record.userId, now, 'fingerprint_mismatch', 'grace 重试客户端指纹不匹配', {
         ip,
         userAgent,

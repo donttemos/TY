@@ -59,7 +59,7 @@
 | `DemoController` | `/api/v1/demo*` | 404 | 框架自检演示（未知异常收敛等），演示对象本身即异常注入 |
 | `DemoQueueController` | `/api/v1/demo-queue` | 404 | 队列重试/死信演示（故意失败任务） |
 | `DemoTransportController` | `/api/v1/demo-transport` | 404 | 跨进程 RPC 错误传播演示 |
-| `CacheDemoController` | `/api/v1/demo-cache` | 404 | 缓存命中率演示 |
+| `CacheDemoController` | `/api/v1/demo-cache` | 404 | 缓存命中率演示；`GET /stats` 额外返回实例实际 `CACHE_PREFIX`（2026-10-18 起，供双节点冒烟在清场前核对两节点前缀一致——仅自检面可见，关闭时 404） |
 
 保留公开/受保护的相邻面（非「自检」范畴）：`demo-item`（生成器业务示例页数据源，走 RBAC）、
 `demo-tenant-items`（租户演示，走 RBAC + tenant 解析）、`open.controller`（OAuth2 回调演示，启用才可达）。
