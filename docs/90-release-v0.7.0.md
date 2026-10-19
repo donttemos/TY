@@ -61,6 +61,8 @@
 - **HTTPS 外网**：`https://cs.donttemo.top/` 200，前端产物含 saas 引用。
 - **登记（非缺陷）**：真机 `.env` `TENANT_ENABLED=false`（单租户模式）——4031 冻结拦截按 ADR-0031 §3 设计在此模式下不生效（无租户上下文放行）；生命周期迁移本身正常（条件更新/日志全链 ✓）。启用多租户拦截 = `TENANT_ENABLED=true` + 重启（数据层 M8 迁移就绪），属产品形态决策，未擅自变更。
 - HTTPS `/api/v1/health` 404 为既有 nginx 路径布局（/health 不在 /api/v1 前缀下），与本版无关。
+- **发版后浏览器 404 事故与根治（2026-10-19 晚）**：用户浏览器缓存了发版前的旧 `index.html`（旧 JS 壳无 /saas/* 路由，前端守卫重定向 /404）——服务器侧菜单树/产物/SPA 回退均正常（`/saas/plans` 服务器返回 200）。根因：真机 1Panel 站点实际配置粘贴时**漏掉了参考片段 `deploy/nginx/fw-1panel-locations.conf` §A 的 index.html no-cache 头**。已根治：`/opt/1panel/www/conf.d/fw-locations.inc` 的 `location /` 补 `add_header Cache-Control "no-cache" always;`（备份 `.bak-v070`，nginx -t 通过后 reload，实测响应头已出现）。用户侧操作：Ctrl+F5 强刷 + 退出重登（拿 ops:saas:read 权限快照）。
+- **发版检查项新增**：以后每次前端发版后必须 `curl -skI https://<域名>/ | grep -i cache-control` 验证 no-cache 头在位；用户报「新页面 404」先分清**服务器 SPA 回退 200**还是**浏览器旧壳**（无痕窗口验证）。
 
 ## 4. 遗留
 
