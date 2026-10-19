@@ -12,10 +12,14 @@
  *   并明确 release 幂等（重复释放返回 false，不再二次触碰存储）；② C-04 看门狗周期改为与 TTL 成比例
  *   （`max(50ms, TTL/3)`，短 TTL 不再晚于过期才续期）并在 TTL<1s 时告警；新增 `onLost` 回调——
  *   续期失败/异常停表后调用方可在锁已被他人取得时感知失锁（原实现仅日志，调用方无感知）。
+ * @modified 2026-10-18 donttemo 复核修复（P2）：`acquire()` 入口统一校验 `ttlMs` 与 `waitMs`——
+ *   本地重入分支不写存储、此前绕过了驱动侧 TTL 校验（非法 TTL 在重入路径静默成功），
+ *   同一 API 参数不再因「是否重入」而行为不同；校验先于深度变更，失败不留半程状态。
  * @module @fw/cache
  */
 
 import { randomUUID } from 'node:crypto';
+import { BizError, ErrorCode } from '@fw/core';
 import { Logger } from '@fw/logger';
 import type { CacheStorePort } from './store.port.js';
 
@@ -100,9 +104,16 @@ export class LockManager {
    * @param ttlMs TTL（毫秒），缺省用默认值
    * @param options 重入 / 续期 / 持有者 / 等待
    * @returns 锁句柄；未获取到返回 null
+   * @throws BizError ttlMs 非正数 / waitMs 非法（CONFIG_INVALID_VALUE，重入与普通获取一致）
    */
   async acquire(key: string, ttlMs: number = this.defaultTtlMs, options: LockOptions = {}): Promise<LockHandle | null> {
-    const deadline = Date.now() + (options.waitMs ?? 0);
+    // 参数校验统一放在入口（2026-10-18 复核）：本地重入分支不写存储、因而不会触发驱动侧的 TTL
+    // 校验——若只在「真正 SET NX」的路径校验，同一个非法 ttlMs/waitMs 会因「是否重入」表现不同
+    // （重入静默成功并生成句柄，普通获取抛错）。校验先于一切状态变更，失败不改变重入深度。
+    assertLockTtl(ttlMs);
+    const waitMs = options.waitMs ?? 0;
+    assertLockWaitMs(waitMs);
+    const deadline = Date.now() + waitMs;
     for (;;) {
       // 可重入分支：本进程已持有同一把锁且令牌一致 → 深度 +1
       if (options.reentrant) {
@@ -202,4 +213,25 @@ function sleep(ms: number): Promise<void> {
     const timer = setTimeout(resolve, ms);
     timer.unref?.();
   });
+}
+
+/**
+ * 锁 TTL 校验（毫秒）：与存储端口同口径（禁止无过期写入），非法值 fail-fast。
+ * 放在 acquire 入口而非只依赖驱动，保证「重入 / 普通获取」两条路径对同一参数行为一致。
+ */
+function assertLockTtl(ttlMs: number): void {
+  if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+    throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `锁 TTL 必须为正数（毫秒）：收到 ${ttlMs}；禁止无过期时间的锁`);
+  }
+}
+
+/**
+ * 锁等待参数校验（毫秒）：`waitMs` 必须为 ≥0 的有限数值。
+ * 导出给 `CacheService.lock` 复用——调用级参数非法必须 fail-fast，不能被 fail-open 降级成 null。
+ * @param waitMs 等待毫秒数
+ */
+export function assertLockWaitMs(waitMs: number): void {
+  if (!Number.isFinite(waitMs) || waitMs < 0) {
+    throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `锁 waitMs 必须为 ≥0 的有限数值（毫秒）：收到 ${waitMs}`);
+  }
 }

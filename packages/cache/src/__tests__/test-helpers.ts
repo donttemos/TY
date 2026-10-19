@@ -14,6 +14,10 @@
  *   SET_TAGS（写值+标签登记原子脚本）与 SMEMBERS 失效原子脚本两个分支；③ A-01 配套：Fake 客户端
  *   建模 Redis WRONGTYPE 语义——get/smembers/sadd 及 Lua 条件操作遇类型不符抛错（与 memory 驱动
  *   的 assertKind 对齐），mget 对集合键返回 null（对齐 Redis MGET nil）。
+ * @modified 2026-10-18 donttemo 复核修复配套：FakeRedisClient.eval 的 SET_TAGS 分支改为
+ *   「写前预检（标签键类型 / 标签键撞值键）→ 通过后才写」，与真实 Lua 的两步结构同构。
+ * @modified 2026-10-19 donttemo P1 加固配套：SET_TAGS 分支写序与真实 Lua 同步为「预检 → 登记索引 →
+ *   最后写值」，并新增 `failValueWriteOnce` 注入点（写值阶段抛 OOM，模拟资源类故障下已执行命令不回滚）。
  * @module @fw/cache
  */
 
@@ -184,6 +188,12 @@ export class FakeRedisClient implements RedisClientLike {
   private readonly sets = new Map<string, FakeSet>();
   /** eval 调用次数（断言原子脚本被使用） */
   evalCalls = 0;
+  /**
+   * 故障注入（2026-10-19 P1 加固回归）：为 true 时，下一次标签脚本执行到**写值**步骤抛 OOM
+   * （对齐真实 Redis maxmemory 拒绝写：脚本已执行的 SADD/PEXPIRE 不回滚）。
+   * 用于证明「先登记索引、最后写值」的写序在资源类故障下只留无害幽灵索引，不留孤儿缓存。
+   */
+  failValueWriteOnce = false;
 
   /** 惰性过期检查 */
   private live(key: string): FakeEntry | undefined {
@@ -294,12 +304,27 @@ export class FakeRedisClient implements RedisClientLike {
       const keys = args.slice(0, numKeys) as string[];
       const argv = args.slice(numKeys) as [string, number, ...number[]];
       const [value, valueTtl, ...tagTtls] = argv;
-      this.strings.set(keys[0], { value, expireAt: Date.now() + Number(valueTtl) });
+      // 步骤 ①只读预检（对齐 SET_TAGS_LUA，2026-10-18 加固）：类型不符 / 标签键撞值键 ⇒ 零写入失败。
+      // Lua 只保证不可交错执行、报错不回滚，故预检必须在任何写操作之前完成。
+      for (let i = 1; i < keys.length; i++) {
+        if (keys[i] === keys[0]) {
+          throw new Error(`ERR 标签键与值键相同（${keys[i]}），已中止写入`);
+        }
+        this.assertNotString(keys[i]);
+      }
+      // 步骤 ②先登记索引（对齐 SET_TAGS_LUA 2026-10-19 写序加固）：此处故障只留幽灵索引
       for (let i = 1; i < keys.length; i++) {
         await this.sadd(keys[i], keys[0]);
         const set = this.liveSet(keys[i]);
         if (set) set.expireAt = Date.now() + Number(tagTtls[i - 1]);
       }
+      // 步骤 ③最后写值：注入点位于此处，模拟「索引已登记、写值被 OOM 拒绝」的真实序列
+      if (this.failValueWriteOnce) {
+        this.failValueWriteOnce = false;
+        throw new Error("OOM command not allowed when used memory > 'maxmemory'.");
+      }
+      this.sets.delete(keys[0]);
+      this.strings.set(keys[0], { value, expireAt: Date.now() + Number(valueTtl) });
       return null;
     }
     if (script.includes('SMEMBERS')) {

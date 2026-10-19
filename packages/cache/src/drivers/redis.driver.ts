@@ -21,6 +21,18 @@
  *   类型不符显式抛错（对齐 Redis WRONGTYPE）；构造期检测 `isCluster` 客户端并告警——多键 Lua 在
  *   Cluster 跨 slot 时被拒（CROSSSLOT），策略与限制登记见 ADR-0028；单实例真实 Redis 由 CI
  *   redis:7 service 容器验证（`__tests__/redis-integration.test.ts`）。
+ * @modified 2026-10-18 donttemo 复核修复（P1）：`SET_TAGS_LUA` 改为「写前只读预检 + 通过后才写」——
+ *   Lua 只保证不可交错执行、**运行期报错不回滚**，此前「先 SET 再逐个 SADD」在某个标签键被占成
+ *   字符串（WRONGTYPE）时会留下未登记的缓存值（孤儿缓存）。预检覆盖标签键类型与「标签键 == 值键」，
+ *   并补真实 Redis 回归（类型注入后值键不存在）。
+ * @modified 2026-10-19 donttemo P1 加固（写序重排 + 故障注入回归）：预检只能收敛**确定性**错误；
+ *   预检通过后的**资源类**故障（OOM / 只读副本拒绝写）仍会中止脚本并保留已执行命令。故把写序
+ *   从「写值 → 登记索引」改为「登记索引 → 最后写值」：残余故障的最坏结果由不可回收的「孤儿缓存」
+ *   （有值无索引，标签失效永远触达不到）转为无害的「幽灵索引」（索引指向不存在的键：失效时
+ *   DEL 不存在的键无副作用，且标签集合自身 TTL 到点即回收）。回归：Fake 客户端新增写值阶段故障
+ *   注入（`failValueWriteOnce`），真实 Redis 侧以 maxmemory/noeviction 注入 OOM 验证无孤儿（门控
+ *   用例 `CACHE_REDIS_INTEGRATION_ALLOW_MEMORY_FAULT`）；同时修正 `INVALIDATE_TAG_LUA` 返回值口径
+ *   为**实际删除数**（累加各 DEL），消除「幽灵索引」场景下与 memory 驱动 / 端口契约的语义差异。
  * @module @fw/cache
  */
 
@@ -47,33 +59,57 @@ return added
 `;
 
 /**
- * 带标签登记的写入脚本（C-01/A-04 修复）：SET 值与向各标签集合 SADD 本键单次原子完成，
- * 不存在「值已写入、标签未登记」的半程状态。
+ * 带标签登记的写入脚本（C-01/A-04 修复 + 2026-10-18 预检 + 2026-10-19 写序加固）：
+ * 写值与向各标签集合登记本键在**单次脚本执行**内完成——语义是「不可交错执行（isolation）」，
+ * **不是事务回滚**：Redis 脚本运行期报错时，之前已执行的写命令不会撤销。因此脚本分三步：
+ *   ① 只读预检（任何写操作之前）：标签键类型必须是 set 或不存在；标签键不得与值键同名。
+ *      确定性错误（最典型是标签键被别的写入方占成字符串 → WRONGTYPE）必须在零写入时暴露，
+ *      否则「SET 已成功、SADD 报错」会留下未登记的缓存值（孤儿缓存，重新打开 C-01 要消灭的缺口）。
+ *   ② 预检通过后**先登记索引**（SADD + PEXPIRE 每个标签键）。此处若发生资源类故障（OOM /
+ *      只读副本拒绝写），最坏结果是「索引已登记、值未写入」的**幽灵索引**：标签失效对它执行
+ *      DEL 不存在的键（无副作用，返回 0），标签集合又自带 TTL 会自行回收——失败方向无害。
+ *   ③ **最后**写值。把唯一的「值存在性」写入放在末位，使脚本在任何中途失败时都不可能产生
+ *      「有值无索引」的孤儿缓存（孤儿缓存无法被标签失效触达，只能等业务 TTL，危害最大）。
+ * 残余风险：②③ 之间被外部（非脚本）因素打断时，仅剩幽灵索引这一无害方向。
  * KEYS[1]=值键，KEYS[2..n]=标签映射键；ARGV[1]=值 ARGV[2]=值TTL(ms) ARGV[i+1]=KEYS[i] 的标签集合TTL(ms)。
  * 已知限制：多键脚本在 redis-cluster 跨 slot 时会被拒绝（CROSSSLOT），见 store.port 登记项。
  */
 const SET_TAGS_LUA = `
-redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+local valueKey = KEYS[1]
 for i = 2, #KEYS do
-  redis.call('SADD', KEYS[i], KEYS[1])
+  if KEYS[i] == valueKey then
+    return redis.error_reply('ERR 标签键与值键相同（' .. KEYS[i] .. '），已中止写入')
+  end
+  local kind = redis.call('TYPE', KEYS[i])['ok']
+  if kind ~= 'none' and kind ~= 'set' then
+    return redis.error_reply('WRONGTYPE 标签索引键不是集合（' .. KEYS[i] .. ' 实际为 ' .. kind .. '），已中止写入，值键未写入')
+  end
+end
+for i = 2, #KEYS do
+  redis.call('SADD', KEYS[i], valueKey)
   redis.call('PEXPIRE', KEYS[i], ARGV[i + 1])
 end
+redis.call('SET', valueKey, ARGV[1], 'PX', ARGV[2])
 return nil
 `;
 
 /**
- * 原子标签失效脚本（C-01/C-03 修复）：SMEMBERS → 逐个 DEL 成员 → DEL 标签集合单次原子完成。
- * 与 SET_TAGS_LUA 全序串行后，失效期间完成登记的键要么已被删除、要么重新持有有效索引；
- * 脚本失败（连接中断）时 Redis 单脚本原子性保证整体未发生。
- * KEYS[1]=标签映射键；返回删除的成员键数量。cluster 跨 slot 限制同 SET_TAGS_LUA。
+ * 原子标签失效脚本（C-01/C-03 修复 + 2026-10-19 返回值对齐）：SMEMBERS → 逐个 DEL 成员 → DEL 标签集合
+ * 单次执行完成。与 SET_TAGS_LUA 全序串行后，失效期间完成登记的键要么已被删除、要么重新持有有效索引；
+ * 脚本的**首个命令即读取**（SMEMBERS，类型不符在此失败），之后的写命令只有 DEL——不存在
+ * 「写了一半遇到运行时错误」的中间态，因此失效故障时整体未发生（isolated，非回滚语义）。
+ * 返回**实际删除的成员键数量**（累加每个 DEL 的返回值）——此前返回成员个数，在「幽灵索引」
+ * （成员指向不存在的键）场景下会与 memory 驱动 / 端口契约（实际删除数）不一致。
+ * KEYS[1]=标签映射键。cluster 跨 slot 限制同 SET_TAGS_LUA。
  */
 const INVALIDATE_TAG_LUA = `
 local members = redis.call('SMEMBERS', KEYS[1])
+local removed = 0
 for _, member in ipairs(members) do
-  redis.call('DEL', member)
+  removed = removed + redis.call('DEL', member)
 end
 redis.call('DEL', KEYS[1])
-return #members
+return removed
 `;
 
 /**
@@ -183,7 +219,10 @@ export class RedisCacheStore implements CacheStorePort {
     return this.client.smembers(key);
   }
 
-  /** 带标签登记的原子写入：SET + SADD×N + PEXPIRE×N 单条 Lua（C-01/A-04 修复） */
+  /**
+   * 带标签登记的单脚本写入：写前预检（2026-10-18）→ 登记索引 → 最后写值（2026-10-19 写序加固）。
+   * 确定性错误（WRONGTYPE / 标签键撞值键）在零写入时失败；资源类故障的最坏残余为无害幽灵索引。
+   */
   async setWithTags(
     key: string,
     value: string,

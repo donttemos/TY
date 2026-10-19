@@ -15,6 +15,11 @@
  *   目标实例，对共享的本地 Redis 是破坏性操作，默认跳过；CI 的 service 容器一次性，设置执行。
  *   已知限制：redis-cluster 跨 slot 多键 Lua（CROSSSLOT）无法在单实例上验证——cluster 兼容
  *   策略与限制登记见 ADR-0028。
+ * @modified 2026-10-18 donttemo 复核修复（P1）配套：新增真实服务端「标签键类型污染 ⇒ 零写入」与
+ *   「标签键撞值键 ⇒ 拒绝」两条用例（Fake 只建模调用映射，服务端报错后的残留状态必须真库验证）。
+ * @modified 2026-10-19 donttemo P1 加固配套：新增资源类故障注入用例（maxmemory + noeviction 使服务端
+ *   拒绝脚本命令），验证「脚本失败后无孤儿缓存」；该用例会临时压缩实例内存上限、对并行写入有干扰，
+ *   故与 SHUTDOWN 用例同规格门控（`CACHE_REDIS_INTEGRATION_ALLOW_MEMORY_FAULT=true`，默认跳过）。
  * @author donttemo
  * @created 2026-10-17
  * @module @fw/cache
@@ -194,6 +199,70 @@ integration('真实 Redis 单实例集成（CACHE_REDIS_INTEGRATION_URL）', () 
   });
 
   // ---------- ④ 故障路径：类型错误 / 连接中断 / 外部 kill 重连 ----------
+
+  it('P1 复核（2026-10-18）：标签键类型污染 ⇒ setWithTags 零写入，不留下未登记的缓存值', async () => {
+    const store = new RedisCacheStore(client);
+    const valueKey = `${prefix}:typeguard:value`;
+    const goodTag = `${prefix}:__tag__:typeguard-good`;
+    const badTag = `${prefix}:__tag__:typeguard-bad`;
+    // 故意把「本应是集合」的标签索引键占成字符串（模拟类型污染的写入方）
+    await client.set(badTag, 'polluted', 'PX', 10_000);
+    await expect(
+      store.setWithTags(valueKey, 'v', 10_000, [
+        { tagKey: goodTag, ttlMs: 30_000 },
+        { tagKey: badTag, ttlMs: 30_000 },
+      ]),
+    ).rejects.toThrow(/WRONGTYPE/);
+    // 修复前顺序执行：SET 已成功 → 值键存在但索引缺失（孤儿缓存）
+    expect(await store.get(valueKey)).toBeUndefined();
+    // 预检覆盖全部标签键：先声明的标签键也没有被登记
+    expect(await store.smembers(goodTag)).toEqual([]);
+    // 被污染键保持原样（预检保证没有新写入；Lua 报错本身不回滚已执行命令）
+    expect(await client.get(badTag)).toBe('polluted');
+  });
+
+  it('P1 复核（2026-10-18）：标签键与值键同名 ⇒ Lua 拒绝，值键不写入（配置错误）', async () => {
+    const store = new RedisCacheStore(client);
+    const sameKey = `${prefix}:typeguard:same`;
+    await expect(store.setWithTags(sameKey, 'v', 10_000, [{ tagKey: sameKey, ttlMs: 30_000 }])).rejects.toThrow(
+      /标签键与值键相同/,
+    );
+    expect(await store.exists(sameKey)).toBe(false);
+  });
+
+  // 资源类故障注入（opt-in，与 SHUTDOWN 用例同规格门控）：把 maxmemory 压到已用内存附近并设
+  // noeviction，使服务端拒绝脚本命令。Redis 的 OOM 判定发生在**命令入口**（EVAL 整体被拒），
+  // 因此断言的是「脚本失败后值键与标签索引均零写入」——不存在孤儿缓存，也不留幽灵索引。
+  // 副作用：该窗口内同实例的其他写入同样会被 OOM 拒绝，故默认跳过，只在独占实例上开启。
+  it.skipIf(process.env.CACHE_REDIS_INTEGRATION_ALLOW_MEMORY_FAULT !== 'true')(
+    '资源类故障注入（maxmemory OOM）：脚本被服务端拒绝 ⇒ 零写入，无孤儿缓存',
+    async () => {
+      const store = new RedisCacheStore(client);
+      const valueKey = `${prefix}:oom:value`;
+      const tagKey = `${prefix}:__tag__:oom`;
+      const filler = `${prefix}:oom:filler`;
+      const originalMax = (await client.config('GET', 'maxmemory')) as string[];
+      const originalPolicy = (await client.config('GET', 'maxmemory-policy')) as string[];
+      try {
+        await client.config('SET', 'maxmemory-policy', 'noeviction');
+        const info = await client.info('memory');
+        const used = Number(/^used_memory:(\d+)$/m.exec(info)?.[1] ?? 0);
+        expect(used).toBeGreaterThan(0);
+        // 余量 4MB，然后一次 8MB 填充写入把 used 推过上限（入口检查时仍未超，故写入本身成功）
+        await client.config('SET', 'maxmemory', String(used + 4 * 1024 * 1024));
+        await client.set(filler, 'x'.repeat(8 * 1024 * 1024), 'PX', 20_000);
+        await expect(store.setWithTags(valueKey, 'v', 10_000, [{ tagKey, ttlMs: 30_000 }])).rejects.toThrow(/OOM/);
+      } finally {
+        await client.config('SET', 'maxmemory', originalMax[1] ?? '0').catch(() => undefined);
+        await client.config('SET', 'maxmemory-policy', originalPolicy[1] ?? 'noeviction').catch(() => undefined);
+        await client.del(filler).catch(() => undefined);
+      }
+      // 关键不变式：值键与标签索引都未被写入（脚本整体未执行 ⇒ 无孤儿缓存、无幽灵索引）
+      expect(await client.exists(valueKey)).toBe(0);
+      expect(await client.exists(tagKey)).toBe(0);
+      expect(await store.get(valueKey)).toBeUndefined();
+    },
+  );
 
   it('WRONGTYPE：真服务端类型错误显式抛错，原数据不被静默覆盖', async () => {
     const store = new RedisCacheStore(client);

@@ -8,6 +8,9 @@
  *   parseClusterNodes 用例覆盖凭据段（密码不进 host）
  * @modified 2026-10-17 donttemo Cache 缺陷清单复核修复配套：新增 setWithTags / invalidateByTag
  *   原子脚本用例（C-01/C-03/A-04）与 close() 超时强制断开用例（C-05）。
+ * @modified 2026-10-18 donttemo 复核修复配套（P1）：新增「标签键类型污染 ⇒ 预检失败且零写入」
+ *   与「标签键撞值键 ⇒ 拒绝」两条用例。
+ * @modified 2026-10-19 donttemo P1 加固配套：新增「写值阶段 OOM ⇒ 只留幽灵索引、无孤儿缓存」用例。
  * @module @fw/cache
  */
 
@@ -92,6 +95,52 @@ describe('@fw/cache · redis 驱动', () => {
     await store.setWithTags('k2', 'v2', 5000, []);
     expect(client.evalCalls).toBe(before);
     expect(await store.get('k2')).toBe('v2');
+  });
+
+  it('P1 复核（2026-10-18）：标签键类型不符时预检失败，值键与其余标签键零写入（不留孤儿缓存）', async () => {
+    const { store, client } = makeStore();
+    // 模拟类型污染：本应是集合的标签索引键被别的写入方占成字符串
+    client.raw('tag:bad', 'polluted');
+    await expect(
+      store.setWithTags('k', 'v', 5000, [
+        { tagKey: 'tag:good', ttlMs: 60_000 },
+        { tagKey: 'tag:bad', ttlMs: 60_000 },
+      ]),
+    ).rejects.toThrow(/WRONGTYPE/);
+    // 预检在写操作之前：值未写入、先声明的标签键也未登记（修复前顺序执行会留下「有值无索引」）
+    expect(await store.get('k')).toBeUndefined();
+    expect(await store.smembers('tag:good')).toEqual([]);
+    expect(await client.exists('tag:good')).toBe(0);
+    // 被污染键保持原样
+    expect(await client.get('tag:bad')).toBe('polluted');
+  });
+
+  it('P1 复核（2026-10-18）：标签键与值键同名 ⇒ 脚本拒绝（配置错误，不产生半程状态）', async () => {
+    const { store } = makeStore();
+    await expect(store.setWithTags('same', 'v', 5000, [{ tagKey: 'same', ttlMs: 60_000 }])).rejects.toThrow(/标签键与值键相同/);
+    expect(await store.exists('same')).toBe(false);
+  });
+
+  it('P1 加固（2026-10-19）：写值阶段资源类故障（OOM）⇒ 只留幽灵索引，绝不留孤儿缓存', async () => {
+    const { store, client } = makeStore();
+    // 故障注入：预检通过、索引已登记，写值被 maxmemory 拒绝（脚本已执行命令不回滚）
+    client.failValueWriteOnce = true;
+    await expect(store.setWithTags('k', 'v', 5000, [{ tagKey: 'tag', ttlMs: 60_000 }])).rejects.toThrow(/OOM/);
+
+    // 关键不变式：不存在孤儿缓存（有值无索引）——值键必须未写入
+    expect(await store.get('k')).toBeUndefined();
+    expect(await client.exists('k')).toBe(0);
+    // 残余状态是「索引 → 不存在键」的幽灵索引：失效无副作用地清理掉它，且索引自身 TTL 会回收。
+    // 返回值口径为「实际删除数」——幽灵成员对应的键不存在，故计 0（与 memory 驱动 / 端口契约一致）
+    expect(await store.smembers('tag')).toEqual(['k']);
+    expect(await store.invalidateByTag('tag')).toBe(0);
+    expect(await client.exists('tag')).toBe(0);
+    expect(await store.get('k')).toBeUndefined();
+
+    // 恢复后同一键可正常写入（故障不可残留）
+    await store.setWithTags('k', 'v', 5000, [{ tagKey: 'tag', ttlMs: 60_000 }]);
+    expect(await store.get('k')).toBe('v');
+    expect(await store.smembers('tag')).toEqual(['k']);
   });
 
   it('C-01/C-03 回归：invalidateByTag 单条 Lua 原子删除成员与索引并返回数量', async () => {

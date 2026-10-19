@@ -21,6 +21,8 @@
  *   mget 对非字符串条目返回 undefined（对齐 Redis MGET「永不出错、非字符串为 nil」）；
  *   set/setNx/exists/expire/del/invalidateByTag 保持任意类型可用（对齐 Redis SET/DEL/EXISTS 等）；
  *   ② sadd(key, [], ttl) 不再创建空集合条目（对齐 Redis SADD 空成员无操作，防幽灵集合）。
+ * @modified 2026-10-18 donttemo 复核修复（P1）：`setWithTags` 写前全量预检（标签键类型 + 标签键撞值键），
+ *   与 redis 驱动 `SET_TAGS_LUA` 的预检同口径——确定性错误零写入，不再把字符串标签条目静默换成集合。
  * @module @fw/cache
  */
 
@@ -104,6 +106,17 @@ export class MemoryCacheStore implements CacheStorePort {
     // Map 插入序 LRU：删除后重新插入即移动到队尾
     this.entries.delete(key);
     this.entries.set(key, entry);
+    return entry;
+  }
+
+  /** 只读查看（不参与 LRU 重排；过期即删除）：预检路径不得因校验改变淘汰顺序 */
+  private peek(key: string): Entry | undefined {
+    const entry = this.entries.get(key);
+    if (!entry) return undefined;
+    if (entry.expireAt <= Date.now()) {
+      this.entries.delete(key);
+      return undefined;
+    }
     return entry;
   }
 
@@ -232,7 +245,11 @@ export class MemoryCacheStore implements CacheStorePort {
 
   /**
    * 带标签登记的原子写入（端口契约见 store.port）：方法体内无 await 间隔，
-   * JS 单线程语义下与 redis 驱动的 Lua 脚本等价原子（C-01/C-04 修复）
+   * JS 单线程语义下与 redis 驱动的 Lua 脚本等价原子（C-01/C-04 修复）。
+   *
+   * 2026-10-18 复核加固：写操作之前先做全量预检（标签键类型 + 标签键撞值键），
+   * 与 redis 驱动的 `SET_TAGS_LUA` 同口径——确定性错误必须零写入失败，否则
+   * 「值已写入、标签未登记」会留下孤儿缓存（此前 memory 会把字符串标签条目静默换成集合）。
    */
   async setWithTags(
     key: string,
@@ -242,6 +259,12 @@ export class MemoryCacheStore implements CacheStorePort {
   ): Promise<void> {
     this.assertTtl(ttlMs);
     for (const tag of tags) this.assertTtl(tag.ttlMs);
+    for (const tag of tags) {
+      if (tag.tagKey === key) {
+        throw new BizError(ErrorCode.CONFIG_INVALID_VALUE, `缓存配置非法：标签键与值键相同（${key}），已中止写入`);
+      }
+      this.assertKind(tag.tagKey, this.peek(tag.tagKey), 'set');
+    }
     const now = Date.now();
     // 写值
     this.entries.delete(key);

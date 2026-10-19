@@ -7,6 +7,8 @@
  * @modified 2026-10-17 donttemo Cache 缺陷清单复核修复配套：新增 C-01 回归（失效×并发写入交错
  *   后无孤儿不变式）、C-03 回归（fail-open/fail-closed 失效失败不销毁索引）、A-04 回归（带标签
  *   写入走 setWithTags 原子端口方法）。
+ * @modified 2026-10-18 donttemo 复核修复配套（P2）：新增 lock 的 waitMs fail-fast 用例
+ *   （非法参数不得被 fail-open 降级成 null）。
  * @module @fw/cache
  */
 
@@ -303,6 +305,13 @@ describe('@fw/cache · 配置边界（A-03）', () => {
     await expect(cache.expire('config:bad-expire', -1)).rejects.toThrow(/必须为正数/);
     await expect(cache.lock('config:bad-lock', 0)).rejects.toThrow(/必须为正数/);
     expect(await store.get('test:config:bad-ttl')).toBeUndefined();
+  });
+
+  it('P2 复核（2026-10-18）：lock 的非法 waitMs fail-fast（不被 fail-open 降级成 null）', async () => {
+    const { cache, store } = makeService();
+    await expect(cache.lock('config:bad-wait', undefined, { waitMs: -1 })).rejects.toThrow(/waitMs/);
+    await expect(cache.lock('config:bad-wait', undefined, { waitMs: Number.NaN })).rejects.toThrow(/waitMs/);
+    expect(await store.exists('test:lock:config:bad-wait')).toBe(false);
   });
 
   it.each([

@@ -6,6 +6,10 @@
  *   真实 Redis 的服务端原子性验证——真 Redis 单实例集成测试已由 `redis-integration.test.ts`
  *   落地并挂 CI（redis:7 service 容器，门控 CACHE_REDIS_INTEGRATION_URL）；cluster 兼容限制与
  *   策略见 ADR-0028；三档验证矩阵见 docs/90-release-v0.6.0.md §7。
+ * @modified 2026-10-18 donttemo 复核修复（P1）配套：新增 setWithTags 写前预检两条跨驱动契约
+ *   （标签键类型冲突 / 标签键撞值键 ⇒ 零写入），锁定两驱动同一失败语义。
+ * @modified 2026-10-19 donttemo P1 加固配套：新增「幽灵索引（索引成员指向已删键）⇒ invalidateByTag
+ *   返回实际删除数 0」契约——此前 redis Lua 返回成员个数、memory 返回实际删除数，幽灵场景不一致。
  * @author donttemo
  * @created 2026-10-17
  * @module @fw/cache
@@ -142,6 +146,42 @@ function storeContract(name: string, createStore: () => CacheStorePort): void {
       expect(await store.invalidateByTag('tag')).toBe(0);
       // tag2 未受影响
       expect(await store.smembers('tag2')).toEqual(['k1']);
+    });
+
+    it('invalidateByTag 返回实际删除数：幽灵索引（成员指向已删键）计 0，索引仍被清理', async () => {
+      const store = createStore();
+      await store.setWithTags('ghost', 'v', 10_000, [{ tagKey: 'gtag', ttlMs: 60_000 }]);
+      // 绕过缓存层直接删值键，制造「索引成员指向不存在键」的残留（P1 加固后唯一允许的残余方向）
+      expect(await store.del(['ghost'])).toBe(1);
+      expect(await store.smembers('gtag')).toEqual(['ghost']);
+      expect(await store.invalidateByTag('gtag')).toBe(0);
+      expect(await store.exists('gtag')).toBe(false);
+    });
+
+    // ---------- P1 复核（2026-10-18）：setWithTags 写前预检，确定性错误零写入 ----------
+
+    it('setWithTags 遇标签键类型冲突：预检失败且值键 / 其余标签键零写入（不留孤儿缓存）', async () => {
+      const store = createStore();
+      // 类型污染：标签索引键被占成字符串（应失败而非静默替换）
+      await store.set('occupied-tag', 'original', 10_000);
+      await expect(
+        store.setWithTags('k', 'v', 10_000, [
+          { tagKey: 'good-tag', ttlMs: 60_000 },
+          { tagKey: 'occupied-tag', ttlMs: 60_000 },
+        ]),
+      ).rejects.toThrow(/WRONGTYPE|类型冲突/);
+      expect(await store.get('k')).toBeUndefined();
+      expect(await store.smembers('good-tag')).toEqual([]);
+      expect(await store.exists('good-tag')).toBe(false);
+      expect(await store.get('occupied-tag')).toBe('original');
+    });
+
+    it('setWithTags 遇标签键与值键同名：拒绝写入（配置错误，不产生半程状态）', async () => {
+      const store = createStore();
+      await expect(store.setWithTags('self-tag', 'v', 10_000, [{ tagKey: 'self-tag', ttlMs: 60_000 }])).rejects.toThrow(
+        /标签键与值键相同/,
+      );
+      expect(await store.exists('self-tag')).toBe(false);
     });
   });
 }

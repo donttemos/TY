@@ -6,6 +6,8 @@
  * @created 2026-10-13
  * @modified 2026-10-17 donttemo Cache 缺陷清单复核修复配套：新增 C-02 回归（普通获取句柄先释放只减
  *   共享深度 / release 幂等）与 C-04 回归（短 TTL 看门狗先于过期续期 / onLost 失锁感知）。
+ * @modified 2026-10-18 donttemo 复核修复配套（P2）：新增 acquire 入口参数校验回归——非法 ttlMs
+ *   在重入/普通获取下行为一致、非法 waitMs 直接失败且不触碰存储。
  * @module @fw/cache
  */
 
@@ -130,6 +132,30 @@ describe('@fw/cache · 分布式锁', () => {
     // 看门狗已停表：不再继续续期
     await sleep(300);
     expect(lost).toHaveLength(1);
+  });
+
+  it('P2 复核（2026-10-18）：非法 ttlMs 在普通获取与重入获取下一致抛错，且不污染重入深度', async () => {
+    const store = new MemoryCacheStore();
+    const manager = new LockManager(store, 5000);
+    const hold = await manager.acquire('lock:ttl-check', 5000, { reentrant: true });
+    expect(hold).not.toBeNull();
+    // 修复前：重入分支直接建句柄、不经过驱动侧 TTL 校验 → 非法 TTL 静默成功
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      await expect(manager.acquire('lock:ttl-check', bad, { reentrant: true })).rejects.toThrow(/锁 TTL 必须为正数/);
+      await expect(new LockManager(store, 5000).acquire('lock:ttl-check', bad)).rejects.toThrow(/锁 TTL 必须为正数/);
+    }
+    // 校验先于状态变更：深度仍为 1，令牌与存储值未变
+    expect(await store.get('lock:ttl-check')).toBe(hold!.token);
+    expect(await hold!.release()).toBe(true);
+    expect(await store.exists('lock:ttl-check')).toBe(false);
+  });
+
+  it('P2 复核（2026-10-18）：非法 waitMs 抛错（不进入轮询、不触碰存储）', async () => {
+    const store = new MemoryCacheStore();
+    const manager = new LockManager(store, 5000);
+    await expect(manager.acquire('lock:wait-bad', 5000, { waitMs: -1 })).rejects.toThrow(/waitMs/);
+    await expect(manager.acquire('lock:wait-bad', 5000, { waitMs: Number.NaN })).rejects.toThrow(/waitMs/);
+    expect(await store.exists('lock:wait-bad')).toBe(false);
   });
 
   it('C-04 补充：续期返回 false 后看门狗停表，不再持续续期', async () => {

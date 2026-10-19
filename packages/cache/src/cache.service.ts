@@ -16,6 +16,8 @@
  *   「合法性由配置中心保证」降级为第二道防线而非唯一防线；② 调用级 ttlSeconds/nullTtlSeconds/
  *   expire/lock 的 TTL 校验（此前 ttlMs() 用 Math.max(1,·) 把非法值钳到 1ms 静默写入）；
  *   ③ mset 契约显式化：非事务、逐键写入、中途失败可能留下部分键。
+ * @modified 2026-10-18 donttemo 复核修复配套（P2）：`lock()` 入口补 `waitMs` 校验并置于 guarded 之外——
+ *   非法参数 fail-fast 抛 CONFIG_INVALID_VALUE，不被 fail-open 吞成 null、也不被误报成 9002。
  * @module @fw/cache
  */
 
@@ -23,7 +25,7 @@ import { Logger } from '@fw/logger';
 import { BizError, ErrorCode } from '@fw/core';
 import { CacheUnavailableError } from './errors.js';
 import { assertLogicalKey, decodeEntry, encodeNegative, encodeValue, tagKeyOf, withPrefix } from './key.js';
-import { LockManager, type LockHandle, type LockOptions } from './lock.js';
+import { LockManager, assertLockWaitMs, type LockHandle, type LockOptions } from './lock.js';
 import { CacheMetrics } from './metrics.js';
 import { withCacheSpan } from './trace.js';
 import type { CacheStorePort } from './store.port.js';
@@ -302,9 +304,13 @@ export class CacheService {
    * @param ttlSeconds TTL（秒），缺省取 `CACHE_LOCK_TTL`
    * @param options 重入 / 续期 / 等待选项
    * @returns 锁句柄；未获取到（含降级）返回 null
+   * @throws BizError ttlSeconds 非正数 / waitMs 非法（CONFIG_INVALID_VALUE，fail-fast，不参与降级）
    */
   async lock(key: string, ttlSeconds?: number, options?: LockOptions): Promise<LockHandle | null> {
     if (ttlSeconds !== undefined) assertPositiveSeconds(ttlSeconds, 'ttlSeconds');
+    // 调用级参数非法必须 fail-fast（2026-10-18 复核）：放进 guarded 会被 fail-open 吞成 null、
+    // 或被 fail-closed 误报成 9002 依赖不可用——两者都会掩盖调用方的配置错误
+    if (options?.waitMs !== undefined) assertLockWaitMs(options.waitMs);
     const fullKey = this.resolveKey(`lock:${key}`);
     const ttlMs = this.ttlMs(ttlSeconds ?? this.opt.lockTtlSeconds, 0);
     return this.guarded('lock', { key: fullKey }, undefined, () => this.lockManager.acquire(fullKey, ttlMs, options), () => null);
