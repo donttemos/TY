@@ -397,10 +397,12 @@ const MENUS: MockMenu[] = [
   { id: 'm-system-dict', parentId: 'm-system', name: '字典管理', path: '/system/dict', component: 'system/dict', icon: 'collection', permissionCode: 'dict:read', visible: true, sort: 4 },
   { id: 'm-system-audit', parentId: 'm-system', name: '审计日志', path: '/system/audit-logs', component: 'system/audit-logs', icon: 'file-text', permissionCode: 'audit:read', visible: true, sort: 5 },
   { id: 'm-system-queue', parentId: 'm-system', name: '队列管理', path: '/system/queue', component: 'system/queue', icon: 'clock', permissionCode: 'system:queue:list', visible: true, sort: 6 },
-  { id: 'm-saas-plans', parentId: 'm-system', name: '套餐管理', path: '/saas/plans', component: 'saas/plans', icon: 'box', permissionCode: 'ops:saas:read', visible: true, sort: 9 },
-  { id: 'm-saas-subscriptions', parentId: 'm-system', name: '订阅管理', path: '/saas/subscriptions', component: 'saas/subscriptions', icon: 'ticket', permissionCode: 'ops:saas:read', visible: true, sort: 10 },
-  { id: 'm-saas-lifecycle', parentId: 'm-system', name: '租户生命周期', path: '/saas/lifecycle', component: 'saas/lifecycle', icon: 'switch-button', permissionCode: 'ops:saas:read', visible: true, sort: 11 },
-  { id: 'm-saas-usage', parentId: 'm-system', name: '用量看板', path: '/saas/usage', component: 'saas/usage', icon: 'data-line', permissionCode: 'ops:saas:read', visible: true, sort: 12 },
+  // M13 SaaS 运营目录（顶层 /saas，与子页同前缀——嵌套路由前缀约定，见 seed.ts 同注）
+  { id: 'm-saas', parentId: '0', name: 'SaaS 运营', path: '/saas', component: 'layout/blank', icon: 'box', permissionCode: null, visible: true, sort: 4 },
+  { id: 'm-saas-plans', parentId: 'm-saas', name: '套餐管理', path: '/saas/plans', component: 'saas/plans', icon: 'box', permissionCode: 'ops:saas:read', visible: true, sort: 1 },
+  { id: 'm-saas-subscriptions', parentId: 'm-saas', name: '订阅管理', path: '/saas/subscriptions', component: 'saas/subscriptions', icon: 'ticket', permissionCode: 'ops:saas:read', visible: true, sort: 2 },
+  { id: 'm-saas-lifecycle', parentId: 'm-saas', name: '租户生命周期', path: '/saas/lifecycle', component: 'saas/lifecycle', icon: 'switch-button', permissionCode: 'ops:saas:read', visible: true, sort: 3 },
+  { id: 'm-saas-usage', parentId: 'm-saas', name: '用量看板', path: '/saas/usage', component: 'saas/usage', icon: 'data-line', permissionCode: 'ops:saas:read', visible: true, sort: 4 },
   { id: 'm-system-tenants', parentId: 'm-system', name: '租户管理', path: '/system/tenants', component: 'system/tenants', icon: 'office-building', permissionCode: 'tenant:read', visible: true, sort: 7 },
   // M9 参数配置页（views/system/configs）：与后端 seed 同形（PRD-009 FR-07）
   { id: 'm-system-configs', parentId: 'm-system', name: '参数配置', path: '/system/configs', component: 'system/configs', icon: 'tool', permissionCode: 'system:config:read', visible: true, sort: 8 },

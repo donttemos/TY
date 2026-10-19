@@ -210,12 +210,23 @@ const MENU_TREE: MenuSeed[] = [
       { name: '租户管理', path: '/system/tenants', component: 'system/tenants', icon: 'office-building', permissionCode: PERM.TENANT_READ, sort: 7 },
       // M9 参数配置页（views/system/configs）：键值列表 / 在线修改 / 变更历史（PRD-009 FR-07）
       { name: '参数配置', path: '/system/configs', component: 'system/configs', icon: 'tool', permissionCode: PERM.CONFIG_READ, sort: 8 },
-      // M13 SaaS 运营四页（views/saas/*，PRD-013 §2.3）：套餐 / 订阅 / 生命周期 / 用量看板。
-      // 动态路由由菜单树生成，缺此四条则页面不可达（直输 URL 落 403）；存量环境需 reseed + 重登。
-      { name: '套餐管理', path: '/saas/plans', component: 'saas/plans', icon: 'box', permissionCode: PERM.OPS_SAAS_READ, sort: 9 },
-      { name: '订阅管理', path: '/saas/subscriptions', component: 'saas/subscriptions', icon: 'ticket', permissionCode: PERM.OPS_SAAS_READ, sort: 10 },
-      { name: '租户生命周期', path: '/saas/lifecycle', component: 'saas/lifecycle', icon: 'switch-button', permissionCode: PERM.OPS_SAAS_READ, sort: 11 },
-      { name: '用量看板', path: '/saas/usage', component: 'saas/usage', icon: 'data-line', permissionCode: PERM.OPS_SAAS_READ, sort: 12 },
+    ],
+  },
+  // M13 SaaS 运营目录（PRD-013 §2.3）：★ 必须是**顶层目录**且 path 与子页同前缀（/saas）——
+  // 前端 buildChildren 按「父 path 前缀 + 相对子路径」生成嵌套路由，若挂到 /system 目录下，
+  // /saas/plans 会被拼成 /system/saas/plans 导致 404（v0.7.0 真机事故教训）。
+  {
+    name: 'SaaS 运营',
+    path: '/saas',
+    component: 'layout/blank',
+    icon: 'box',
+    permissionCode: null,
+    sort: 3,
+    children: [
+      { name: '套餐管理', path: '/saas/plans', component: 'saas/plans', icon: 'box', permissionCode: PERM.OPS_SAAS_READ, sort: 1 },
+      { name: '订阅管理', path: '/saas/subscriptions', component: 'saas/subscriptions', icon: 'ticket', permissionCode: PERM.OPS_SAAS_READ, sort: 2 },
+      { name: '租户生命周期', path: '/saas/lifecycle', component: 'saas/lifecycle', icon: 'switch-button', permissionCode: PERM.OPS_SAAS_READ, sort: 3 },
+      { name: '用量看板', path: '/saas/usage', component: 'saas/usage', icon: 'data-line', permissionCode: PERM.OPS_SAAS_READ, sort: 4 },
     ],
   },
   // 注意：历史种子在此挂了「订单中心 /order → 订单退款(order/refund)」，但 views/order/refund 视图
