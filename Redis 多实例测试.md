@@ -694,9 +694,13 @@ Refresh grace:        10s（默认）
 §9/§10 用的本地 harness（`scripts/.dual-node-harness.mjs`，点号文件名 + `.git/info/exclude`）已**退役并删除**，能力以正式脚本收编：
 
 - **`apps/example-api/scripts/smoke-dual-node.mjs`** —— CI base 作业新增步骤「双进程缓存与令牌一致性冒烟（真实 Redis）」，与 `redis:7-alpine` service 同作业。
-  - 默认**自起**两个实例（3120/3121，`DUAL_PORT_A/B` 可改），共享同一 Redis / 同一库 / 同一 `CACHE_PREFIX`，跑 T0/T2/T3/T4/T5.1/T5.1c（20 断言：17 条原断言 + T0 前缀核对 + T0 清场结果 + T5.1c）；`DUAL_INCLUDE_REPLAY=1` 追加 T5.2（+11s）。
+  - 默认**自起**两个实例（3120/3121，`DUAL_PORT_A/B` 可改），共享同一 Redis / 同一库 / 同一 `CACHE_PREFIX`，跑 T0/T2/T3/T4/T5.1（**19 断言**：17 条原断言 + T0 前缀核对 + T0 清场结果）；开启破坏性认证用例后 +T5.1c（20），再开 `DUAL_INCLUDE_REPLAY=1` +T5.2（23，含 11s 等待）。
   - **`DUAL_A`/`DUAL_B` 复用模式**：指向已在运行的两个实例即不再自起——真机跨机器复跑用同一脚本（`DUAL_A=http://127.0.0.1:3000 DUAL_B=http://127.0.0.1:13001 DUAL_REDIS=redis://:密码@127.0.0.1:16379/15`）。
   - 门控：未设 `DUAL_REDIS_URL` 整脚本 SKIP（本地默认形态）。
+- **数据库副作用保护（2026-10-19 复核）**：T5.1c（异 UA replay）与 T5.2（过期 replay）会走 `handleReplay` → `revokeUserRefreshTokens`，**在数据库层撤销该账号的全部 refresh 会话**——不受 Redis 清场命名空间约束，复用共享库时会踢掉操作者/真实用户。
+  - 两条用例默认**跳过**；开启需 `DUAL_ALLOW_SESSION_REVOKE=1`，且脚本拒绝在 `admin` 上执行（默认改用种子专用账号 `alice`，或用 `DUAL_AUTH_ACCOUNT`/`DUAL_AUTH_PASSWORD` 指定），确需 admin 时再显式 `DUAL_ALLOW_ADMIN_REVOKE=1`；
+  - 非内置种子账号必须提供 `DUAL_AUTH_PASSWORD`；配置非法在起服务前即 exit 1；
+  - 只应在「一次性 seed 的测试库」上开启（CI base 作业即如此），**共享库/真实用户库保持默认关闭**。
 - **前缀与清场的安全边界（2026-10-18 复核加固）**：清场按前缀删除，因此
   - 复用模式**强制显式** `DUAL_PREFIX`（禁止回落随机串）；前缀只允许 `[A-Za-z0-9._:-]`，且需带测试语义段（`smoke`/`test`/`it`/`tmp`/`temp`，按 `[.:_-]` 分词），否则必须 `DUAL_PREFIX_ACK=1` 显式确认；
   - 启动后向两个实例读 `/api/v1/demo-cache/stats` 的**实际前缀**并与 `DUAL_PREFIX` 核对，不一致立即中止（不再盲信环境变量）；演示端点需 `DEMO_ENDPOINTS_ENABLED=true`；

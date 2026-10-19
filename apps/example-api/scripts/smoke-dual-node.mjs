@@ -1,35 +1,32 @@
 /**
  * @file 双进程（双节点）缓存与令牌冒烟验证脚本（M12 收尾 · 回归测试设计 §9.4 / 双节点实测方案 §9~§10 的仓库化）
- * @description 单机起两个 example-api 实例（3100/3101），共享同一 Redis 与同一数据库、同一 CACHE_PREFIX，
+ * @author donttemo
+ * @created 2026-10-18
+ * @description 单机起两个 example-api 实例（3120/3121），共享同一 Redis 与同一数据库、同一 CACHE_PREFIX，
  *   复现「跨节点」拓扑并在 HTTP 层锁定以下契约（真机 Windows↔云服务器已按同一用例跑过 30/30）：
  *   T0 清场前置：实例前缀核对（两节点实际 CACHE_PREFIX 必须等于 DUAL_PREFIX）后，只清本测试命名空间；
  *   T2 缓存跨实例读写与标签失效（B 命中 A 写入的缓存；B 标签失效后 A 回源；键↔索引无孤儿）；
- *   T3 跨实例分布式锁互斥（A 持锁期间 B 不可得，A 释放后 B 可得）；
- *   T4 锁 TTL 过期与旧令牌保护（过期后 B 取得且令牌不同；A 旧句柄 renew/release 不伤害 B 的锁）；
+ *   T3 跨实例分布式锁互斥；T4 锁 TTL 过期与旧令牌保护；
  *   T5.1 同一旧 refresh token 经 A/B 并发刷新 ⇒ 唯一的 replacement（grace + 同 UA 指纹）；
- *   T5.1c 异 UA 的 grace 重试必须被拒绝（指纹绑定跨节点一致，同时也是 AUTH_FINGERPRINT 配置漂移探针）；
+ *   T5.1c 异 UA 的 grace 重试必须被拒绝（指纹绑定，兼作 AUTH_FINGERPRINT 配置漂移探针）；
  *   T5.2 过期 replay → family revoke（需 DUAL_INCLUDE_REPLAY=1，内含 11s grace 等待）。
  *   门控：未设置 DUAL_REDIS_URL 时整脚本 SKIP（本地无 Redis 的默认形态）；CI base 作业以 redis service 提供。
  *   与 smoke-cache 的区别：本脚本**预置两个长期存活的实例**并发打交叉请求；smoke-cache 是单实例分阶段起停。
  *
- *   安全边界（2026-10-18 复核加固，P1）：
- *   ① 前缀是「清场删除」的唯一判据，必须显式且安全——复用模式（DUAL_A/DUAL_B）强制要求 DUAL_PREFIX，
- *      禁止回落到随机串；前缀只允许 [A-Za-z0-9._:-]（禁止 glob 元字符与空白，防止 MATCH 通配扩大范围）；
- *      前缀需带测试语义段（smoke/test/it/tmp/temp），否则必须 DUAL_PREFIX_ACK=1 显式确认「可丢弃」；
- *   ② 清场前先向两个实例读取实际 CACHE_PREFIX（/api/v1/demo-cache/stats）核对一致，不一致立即中止；
- *   ③ 清场只删本脚本自己的命名空间（CacheDemoService: / __tag__:demo: / lock:demo: / t4-lock），
- *      不再 `${PREFIX}:*` 全量删——复用既有实例时同前缀下可能有业务缓存；
- *   ④ 全程**不用 KEYS**：断言与清场均走 SCAN 游标（COUNT 可调），删除按 DUAL_CLEANUP_BATCH_SIZE 分批，
- *      避免 O(N) 阻塞命令与超长 DEL；
- *   ⑤ 清场失败不再静默：记为 FAIL 并让脚本以非 0 退出；Redis 断连也不会跳过 Node 子进程回收
- *      （嵌套 try/finally）。
- * @author donttemo
- * @created 2026-10-18
- * @modified 2026-10-18 donttemo 复核修复（P1）：前缀安全校验 + 双实例前缀核对 + 限定范围清场 +
- *   清理失败显式报错 + 嵌套 try/finally 回收子进程；新增 T5.1c 异 UA grace 重试拒绝。
- * @modified 2026-10-18 donttemo 复核二轮（P1 续）：把残留的 `KEYS` 全部换成 SCAN 游标（断言与清场），
- *   清场改为分批 DEL（DUAL_CLEANUP_BATCH_SIZE）+ SCAN COUNT（DUAL_SCAN_COUNT）；安全开关改为正整数
- *   解析，非法值直接 fail-fast。
+ *   安全边界（2026-10-18/19 复核加固）：
+ *   ① 前缀是清场删除的唯一判据：复用模式强制显式 DUAL_PREFIX；只允许 [A-Za-z0-9._:-]（禁 glob 元字符/空白）；
+ *      需带测试语义段（smoke/test/it/tmp/temp），否则须 DUAL_PREFIX_ACK=1；
+ *   ② 清场前读两实例实际 CACHE_PREFIX（/api/v1/demo-cache/stats）核对，不一致立即中止；
+ *   ③ 只删本脚本命名空间（CacheDemoService: / __tag__:demo: / lock:demo: / t4-lock），绝不全前缀删；
+ *   ④ 全程不用 KEYS：断言与清场走 SCAN 游标，删除按 DUAL_CLEANUP_BATCH_SIZE 分批；键范围/数量在收集阶段
+ *      校验，超限即中止且零删除；
+ *   ⑤ 清场失败记为 FAIL 并让脚本非 0 退出；嵌套 try/finally 保证断连也回收子进程；
+ *   ⑥ 数据库副作用保护：T5.1c/T5.2 会在数据库层撤销该账号**全部** refresh 会话（handleReplay →
+ *      revokeUserRefreshTokens），默认跳过；开启需 DUAL_ALLOW_SESSION_REVOKE=1 + 专用账号（默认 alice，
+ *      在 admin 上执行需再显式 DUAL_ALLOW_ADMIN_REVOKE=1）。
+ * @modified 2026-10-18 donttemo 复核修复（P1）：前缀安全校验 + 双实例前缀核对 + 限定范围清场 + 清理失败
+ *   显式报错 + 嵌套 try/finally；新增 T5.1c。复核二轮：KEYS 全换 SCAN 游标 + 分批 DEL + 安全开关正整数解析。
+ * @modified 2026-10-19 donttemo 复核三轮（P1 数据库副作用）：T5.1c / T5.2 默认跳过 + 专用账号与环境保护。
  * @module example-api
  */
 
@@ -48,6 +45,16 @@ const BASE_B = process.env.DUAL_B ?? `http://127.0.0.1:${PORT_B}`;
 const REDIS_URL = process.env.DUAL_REDIS_URL;
 const CONCURRENCY = Number(process.env.DUAL_CONCURRENCY ?? 20);
 const INCLUDE_REPLAY = process.env.DUAL_INCLUDE_REPLAY === '1';
+/**
+ * 认证破坏性用例开关（2026-10-19 复核）：T5.1c（异 UA replay）与 T5.2（过期 replay）会进入
+ * refresh-token.service 的 handleReplay → revokeUserRefreshTokens，在**数据库层**撤销该账号的
+ * 全部 refresh 会话（与 Redis 清场无关）。默认关闭，避免复用共享实例时踢掉操作者/真实用户。
+ */
+const ALLOW_SESSION_REVOKE = process.env.DUAL_ALLOW_SESSION_REVOKE === '1';
+/** 二次例外：明确允许在 admin 账号上执行破坏性用例（默认要求改用专用测试账号） */
+const ALLOW_ADMIN_REVOKE = process.env.DUAL_ALLOW_ADMIN_REVOKE === '1';
+/** 种子账号的默认口令（演示数据，非生产凭据；仅用于本地/CI 已 seed 的库） */
+const SEEDED_PASSWORDS = { admin: 'Admin@123456', alice: 'Alice@123456' };
 /** 同 UA：轮换 grace 重试绑定赢家指纹，异 UA 会被判 replay（ADR-0022） */
 const UA = 'TY-Dual-Node-Smoke';
 
@@ -131,6 +138,28 @@ function resolvePrefix() {
     );
   }
   return prefix;
+}
+
+/**
+ * 解析 T5 使用的认证账号（环境保护，2026-10-19）：
+ * - 未开启破坏性用例：默认 admin（仅做登录 + 轮换，不影响其它会话）；
+ * - 开启破坏性用例：默认专用种子账号 alice；若解析结果仍是 admin，必须显式 DUAL_ALLOW_ADMIN_REVOKE=1；
+ * - 非内置种子账号必须显式提供 DUAL_AUTH_PASSWORD。
+ * @returns 账号与口令
+ */
+function resolveAuthAccount() {
+  const account = process.env.DUAL_AUTH_ACCOUNT?.trim() || (ALLOW_SESSION_REVOKE ? 'alice' : 'admin');
+  const password = process.env.DUAL_AUTH_PASSWORD ?? SEEDED_PASSWORDS[account] ?? '';
+  if (ALLOW_SESSION_REVOKE && account === 'admin' && !ALLOW_ADMIN_REVOKE) {
+    throw new Error(
+      'DUAL_ALLOW_SESSION_REVOKE=1 会在数据库层撤销该账号的全部 refresh 会话：请改用专用测试账号' +
+        '（DUAL_AUTH_ACCOUNT，默认种子账号 alice）；确需在 admin 上执行时再显式设置 DUAL_ALLOW_ADMIN_REVOKE=1',
+    );
+  }
+  if (password === '') {
+    throw new Error(`缺少账号口令：账号 ${account} 不是内置种子账号，请设置 DUAL_AUTH_PASSWORD`);
+  }
+  return { account, password };
 }
 
 /** 单实例 HTTP 请求 */
@@ -301,14 +330,20 @@ async function cleanupRedis(redis) {
   return deleteKeysInBatches(redis, keys);
 }
 
-/** 管理员令牌（maintenance 类端点与业务端点共用） */
-async function loginAdmin(base) {
+/**
+ * 登录并返回响应 data（accessToken + refreshToken）
+ * @param base 实例基地址
+ * @param account 账号
+ * @param password 口令
+ * @returns data 对象（失败时为空对象）
+ */
+async function login(base, account, password) {
   const res = await call(base, '/api/v1/auth/login', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ account: 'admin', password: 'Admin@123456' }),
+    body: JSON.stringify({ account, password }),
   });
-  return res.body?.data?.accessToken ?? null;
+  return res.body?.data ?? {};
 }
 
 async function main() {
@@ -319,6 +354,8 @@ async function main() {
 
   PREFIX = resolvePrefix();
   initCleanupLimits();
+  // 认证账号与破坏性用例的环境保护：配置非法时在起服务/连 Redis 之前就失败（2026-10-19 复核）
+  const auth = resolveAuthAccount();
 
   // @fw/cache 与 ioredis 经 example-api 的依赖图解析：
   // ① cache 包的 exports 只声明了 import 条件（无 require），故走 import.meta.resolve + 动态 import；
@@ -337,6 +374,11 @@ async function main() {
     a = REUSE_MODE ? null : await startServer(PORT_A);
     b = REUSE_MODE ? null : await startServer(PORT_B);
     console.log(`\n=== 拓扑：A=${BASE_A} B=${BASE_B}（${REUSE_MODE ? '复用既有实例' : '脚本自起'}）共享 Redis + DB + CACHE_PREFIX=${PREFIX} ===`);
+    console.log(
+      ALLOW_SESSION_REVOKE
+        ? `认证破坏性用例：开启（账号 ${auth.account}；T5.1c/T5.2 会在数据库层撤销该账号的全部 refresh 会话）`
+        : '认证破坏性用例：关闭（跳过 T5.1c/T5.2；需要时设 DUAL_ALLOW_SESSION_REVOKE=1 并使用专用测试账号）',
+    );
 
     // ---------- T0 前缀核对（清场安全的前置条件） ----------
     for (const [base, label] of [
@@ -419,15 +461,10 @@ async function main() {
 
     // ---------- T5.1 双实例并发刷新同一旧令牌 ----------
     console.log('\n—— T5.1 跨实例并发刷新（grace + 同 UA） ——');
-    const token = await loginAdmin(BASE_A);
-    check('T5.0 admin 登录成功（数据库已种子）', !!token);
-    if (token) {
-      const login = await call(BASE_A, '/api/v1/auth/login', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ account: 'admin', password: 'Admin@123456' }),
-      });
-      const oldRefresh = login.body?.data?.refreshToken;
+    const loginData = await login(BASE_A, auth.account, auth.password);
+    check(`T5.0 ${auth.account} 登录成功（数据库已种子）`, !!loginData.accessToken && !!loginData.refreshToken);
+    const oldRefresh = loginData.refreshToken;
+    if (oldRefresh) {
       const started = Date.now();
       const res = await Promise.all(
         Array.from({ length: CONCURRENCY }, async (_, i) => {
@@ -447,26 +484,30 @@ async function main() {
       check('T5.1a 并发刷新全部成功（grace 窗口内）', ok.length === CONCURRENCY, `ok=${ok.length}/${CONCURRENCY} elapsed=${Date.now() - started}ms${sample.length ? ` ${JSON.stringify(sample)}` : ''}`);
       check('T5.1b 唯一 replacement（不产生多个 B）', unique.size === 1, `unique=${unique.size}`);
 
-      // T5.1c：异 UA 的 grace 重试必须判 replay（ADR-0022 指纹绑定）。
-      // 该断言同时是「两节点 AUTH_FINGERPRINT 配置一致性」探针：任一对端把指纹关掉且赢家未写指纹，
-      // 这里会拿到 0（放行）而不是 3001 —— 配置漂移不再静默改变 grace 语义。
-      const attacker = await call(BASE_B, '/api/v1/auth/refresh', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'User-Agent': `${UA}-other-client` },
-        body: JSON.stringify({ refreshToken: oldRefresh }),
-      });
-      check('T5.1c 异 UA 的 grace 重试被拒绝（指纹绑定跨节点生效）', attacker.body?.code !== 0, `code=${attacker.body?.code}`);
+      if (ALLOW_SESSION_REVOKE) {
+        // T5.1c：异 UA 的 grace 重试必须判 replay（ADR-0022 指纹绑定）。
+        // 该断言同时是「两节点 AUTH_FINGERPRINT 配置一致性」探针：任一对端把指纹关掉且赢家未写指纹，
+        // 这里会拿到 0（放行）而不是 3001 —— 配置漂移不再静默改变 grace 语义。
+        // 注意：replay 会在数据库层撤销该账号的全部 refresh 会话（临时账号 alice，专用账号由环境校验）。
+        const attacker = await call(BASE_B, '/api/v1/auth/refresh', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'User-Agent': `${UA}-other-client` },
+          body: JSON.stringify({ refreshToken: oldRefresh }),
+        });
+        check('T5.1c 异 UA 的 grace 重试被拒绝（指纹绑定跨节点生效）', attacker.body?.code !== 0, `code=${attacker.body?.code}`);
+      } else {
+        console.log(
+          `SKIP  T5.1c 异 UA grace 重试（默认关闭：会在数据库层撤销 ${auth.account} 的全部 refresh 会话；` +
+            '需 DUAL_ALLOW_SESSION_REVOKE=1 并使用专用测试账号）',
+        );
+      }
     }
 
     // ---------- T5.2 过期 replay → family revoke（可选：含 11s 等待） ----------
-    if (INCLUDE_REPLAY) {
+    if (INCLUDE_REPLAY && ALLOW_SESSION_REVOKE) {
       console.log('\n—— T5.2 过期 replay → family revoke ——');
-      const login = await call(BASE_A, '/api/v1/auth/login', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ account: 'admin', password: 'Admin@123456' }),
-      });
-      const tokenA = login.body?.data?.refreshToken;
+      const replayData = await login(BASE_A, auth.account, auth.password);
+      const tokenA = replayData.refreshToken;
       const rotate = await call(BASE_B, '/api/v1/auth/refresh', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'User-Agent': UA },
@@ -488,6 +529,11 @@ async function main() {
         body: JSON.stringify({ refreshToken: tokenB }),
       });
       check('T5.2c 同族 replacement 被撤销（family revoke）', revoked.body?.code !== 0, `code=${revoked.body?.code}`);
+    } else if (INCLUDE_REPLAY) {
+      console.log(
+        `SKIP  T5.2 过期 replay（DUAL_INCLUDE_REPLAY=1 但未开启 DUAL_ALLOW_SESSION_REVOKE：` +
+          `该用例会在数据库层撤销 ${auth.account} 的全部 refresh 会话）`,
+      );
     }
   } finally {
     // 清场 → 关闭连接 → 回收子进程：三段各自兜底，任何一段失败都不得跳过后续回收

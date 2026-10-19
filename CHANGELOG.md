@@ -32,6 +32,15 @@
 - **Refresh Token grace 指纹的缺失值旁路（P1）**：重试方指纹改为**无条件计算**（缺失 UA = `SHA-256("")` 定值，ADR-0022 决策 3a），赢家 `rotated_fingerprint` 非 NULL 即比对；`AUTH_FINGERPRINT=off` 只影响新轮换是否写指纹，不再让已有指纹行的 grace 重试走到「本次无指纹 ⇒ 放行」。配置漂移时异端仍判 replay（族撤销 + 审计），同端照常返回 B，并补 warn 日志。回归 L6-07/08/09。
 - **锁 API 参数校验（P2）**：`LockManager.acquire()` 入口统一校验 `ttlMs`（必须正数）与 `waitMs`（≥0 有限值），放在重入分支之前——此前重入路径不写存储、绕过驱动侧 TTL 校验，非法 TTL 会「重入成功」；校验失败不改重入深度。`CacheService.lock()` 的 `waitMs` 校验置于 guarded 之前，非法参数 fail-fast，不被 fail-open 吞成 null。
 
+### Fixed（双节点冒烟：数据库副作用保护，2026-10-19 复核三轮）
+
+- **T5.1c / T5.2 会撤销账号全部 refresh 会话，默认改为跳过**：异 UA replay 与过期 replay 走 `handleReplay` → `revokeUserRefreshTokens`，副作用落在**数据库**（不受 Redis 清场命名空间约束）——复用共享实例时会把操作者/真实用户的登录踢下线。现在两条用例默认 `SKIP`（脚本明确打印原因），开启需 `DUAL_ALLOW_SESSION_REVOKE=1`，且：
+  - 默认改用种子专用账号 `alice`；若解析结果仍是 `admin`，必须再显式 `DUAL_ALLOW_ADMIN_REVOKE=1`，否则起服务前 exit 1；
+  - `DUAL_AUTH_ACCOUNT` / `DUAL_AUTH_PASSWORD` 可指定任意账号（非内置种子账号必须给口令，缺失即 exit 1）；
+  - T5.0/T5.1a/T5.1b 与 T5.2 统一使用同一账号，避免「用 admin 的 token 触发撤销」的错位；
+  - CI base 作业是一次性 seeded SQLite，显式开启并绑定 `alice` 以保留覆盖（20 断言）；共享库/真实用户库保持默认关闭（19 断言）。
+- **实测**（临时 Redis 5.0）：默认 19/19（T5.1c SKIP）、`DUAL_ALLOW_SESSION_REVOKE=1` 时以 alice 跑 20/20（T5.1c PASS，code=3001）、`DUAL_INCLUDE_REPLAY=1` 但未开 ALLOW 时 T5.2 也 SKIP 且不等待 11s、ALLOW+admin 无例外 → exit 1、未知账号无口令 → exit 1。
+
 ### Known issues（登记，2026-10-18）
 
 - **`/ready` 的 db 就绪探针是启动期一次性标志，非实时探测**（独立修复项，与 Redis 双节点验收无关，登记见 `docs/96-db-readiness-probe-issue.md`）：`createDbReadinessProbe.check()` 直接返回 `markConnected()` 的启动期布尔——启动时 DB 不可达则恢复后仍永久 `db:fail`（须重启）；运行期断连却仍报 `db:ok`。同场景 cache/queue/transport 探针为实时 ping，语义不一致。建议修法：带 1~2s 超时的实时 `SELECT 1` 探测 + 连续失败 N 次翻转（防抖）。

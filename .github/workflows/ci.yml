@@ -126,6 +126,8 @@ jobs:
       # T4 TTL 过期与旧令牌保护 / T5.1 并发刷新唯一 replacement / T5.1c 异 UA grace 重试拒绝
       # （20 断言；清场仅限测试命名空间，失败即非 0）。**必须排在下方「Redis 单实例集成验证」之前**——
       # 该步骤末尾的 SHUTDOWN 故障路径用例会把 redis service 容器关停。库自行 migrate+seed（幂等）。
+      # T5.1c 会在数据库层撤销账号的全部 refresh 会话 → 仅因本作业是「一次性 SQLite + 已 seed 的专用
+      # 账号 alice」才显式开启 DUAL_ALLOW_SESSION_REVOKE；共享库/真实用户环境不得开启。
       - name: 双进程缓存与令牌一致性冒烟（真实 Redis）
         working-directory: apps/example-api
         env:
@@ -133,6 +135,10 @@ jobs:
           # CI 的 SQLite 单文件串行写 + 慢盘：20 并发轮换会把写事务拖到 ~10s（实测 5/20 成功），
           # 故本作业降到 8 并发（仍跨两实例）；本地默认 20 由 DUAL_CONCURRENCY 控制
           DUAL_CONCURRENCY: '8'
+          # 破坏性认证用例（异 UA replay → 撤销该账号全部 refresh 会话）：本作业库为一次性 seeded SQLite
+          DUAL_ALLOW_SESSION_REVOKE: '1'
+          DUAL_AUTH_ACCOUNT: alice
+          DUAL_AUTH_PASSWORD: Alice@123456
         run: |
           pnpm exec prisma migrate deploy --schema prisma/schema.prisma
           pnpm exec tsx prisma/seed.ts
