@@ -18,6 +18,11 @@
 
 ## [Unreleased]
 
+### Fixed（M13 推送后 CI 修复，2026-10-19）
+
+- **`@fw/saas` CI 覆盖率门禁**：第五批新增的 `saas-metrics.ts` 无测试（69-122 未覆盖）+ 纯类型文件（store.port/types）0% 计入分母 → CI test:coverage 三项不达标（81/82/79 vs 85）。修复：补 `metrics.test.ts` 3 例（七计数器 render 数值断言 + reset 全零结构 + 段开关 + 高基数护栏 `tenantId=/metricKey=` 不得出现的断言）；vitest coverage exclude 增 `src/types.ts` / `src/store.port.ts`（沿 @fw/tenant 先例）。26/26 过，覆盖率 91.42/80.73/86.45/93.5。**教训登记：新包引入后本机必须跑 `test:coverage`（非裸 `vitest run`）再推送**。
+- **CI 结果（16377db → 44e5341 修复后全绿）**：构建/单测/静态检查 success + **三库集成矩阵 postgres/mysql/sqlite 三腿全 success**——M13 剩余项「三库矩阵验证」由 CI 完成覆盖（真机窗口仅剩部署验收）；工具链冻结的 CI `node-version: 22.22.2` pin 生效验证通过。
+
 ### Added（M13 第六批：主线 B 文档四件套 + 工具链冻结落地，2026-10-19）
 
 - **docs/42 开发环境指南**（OQ-13-4 定案：与 47 并列，42 号落地）：运行时基线、安装七步、常用命令、端口表、已知环境坑（沙箱 tsc/deploy 静默等四项）。
