@@ -58,6 +58,10 @@
 | `/system/audit` | 审计日志 | `audit:read` | 动态 | M5 |
 | `/system/queue` | 队列管理 | `system:queue:list` | 动态 | M7 |
 | `/system/tenants` | 租户管理 | `tenant:read` | 动态 | M8 |
+| `/saas/plans` | 套餐管理（版本/配额抽屉） | `ops:saas:read` | 动态 | M13 |
+| `/saas/subscriptions` | 订阅管理（开通/取消） | `ops:saas:read` | 动态 | M13 |
+| `/saas/lifecycle` | 租户生命周期（迁移/历史） | `ops:saas:read` | 动态 | M13 |
+| `/saas/usage` | 用量看板（配额/进度/补录） | `ops:saas:read` | 动态 | M13 |
 | `/<model>` | 生成器产出列表页（如 `/orders`） | `<model>:read` | 生成时注册 | M6 |
 
 > 动态路由规则：除 `/login`、`/403`、`/404`、`/`、`/profile` 外，其余全部由 `/auth/menus` 下发（PRD-005 风险项对策）。

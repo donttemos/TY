@@ -190,3 +190,21 @@
 - **里程碑达成率 9/9**（M1–M9 全部交付；8/9 已发版，M9 待 v0.4.0 收敛）。按 PRD 计 9/9 已实现，整体进度约 **95%**。
 - **主要风险**：① v0.4.0 未发版窗口内 Unreleased 段持续膨胀，回溯成本随时间上升（P0 行动直接消除）；② L-01/L-04 属环境依赖，长期不闭环会让「规模化就绪」结论始终带条件；③ 真机 seed 重跑是每次发版硬动作，漏跑会导致登录快照校验 403（已有三件套流程防护）。
 - **需尽快决策**：R3-05 统计口径、R3-06 标签键迁移策略、K8s/Redis Cluster 环境来源（自购 / 试用 / 复用 106.55.32.251 加装 k3s）。
+
+---
+
+## 增量审计：v0.7.0（M13，2026-10-19）
+
+> 范围：M13 新增/变更的 **13 份文档**；方法沿六维度（完整性/编号/数据模型/契约/配置键/计划闭环）。
+
+| 维度 | 检查项 | 结果 |
+|---|---|---|
+| 交付物完整性 | 主线 B 四件套（42/48/49/97）+ 90 发版记录齐备 | ✅ |
+| 术语与编号 | ADR 编号核对：0028 已被 cache 标签占用 → M13 三份顺延 0029~0031，PRD-013/docs-47/CHANGELOG 引用同步改号；无 0028 冲突残留 | ✅ |
+| 数据模型 | 十表入 docs/30 §3.20~3.29（active_marker 三库一致方案、BigInt 口径、窗口行唯一键） | ✅ |
+| 接口契约 | 九端点入 docs/40 §3.21；码表 4029/4030/4031 五处同源（triway 轴 G 构建期断言）；locale ErrorMessages 键集编译期同构 | ✅ |
+| 配置键 | SAAS_GRACE_PERIOD_DAYS 四处同源（envSchema + ENV_KEY_PATHS + .env.example + docs/60）；triway F 轴曾报缺登记已修 | ✅ |
+| 计划与验收 | docs/80 增 M13 Done 段（T-M13-01~10）+ v0.7.0 发布快照与遗留三项（TENANT_ENABLED 决策 / bills P1 / L-01、L-04 沿袭） | ✅ |
+
+**新文档清单**：`42-development-environment`（OQ-13-4：与 47 并列）、`47-saas-foundation-dev-guide`、`48-reproducible-builds`、`49-devcontainer`、`90-release-v0.7.0`、`97-reproducibility-verification`、`adr/0029~0031`、`prd/prd-013`。
+**静态佐证**：triway 七轴 / api-parity / headers 664 / no-raw-sql / no-raw-throw / helm 六门禁全绿（v0.7.0 推送前实跑）。

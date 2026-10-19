@@ -297,6 +297,21 @@ gantt
 
 > **M3 遗留项（已登记，不阻塞 M3 验收）**：① `apikey`/`session`/`oauth2` 端到端路由（M5 接入后台模板时补）；② ~~权限缓存换 Redis 多实例共享~~（**M4 已完成**：`CacheBackedAuthCache` 适配器把 `AUTH_CACHE` 端口接到 `CacheService`，鉴权业务代码 diff = 0）；③ `dataScope` 的 `org`/`org_below` 两档（M8）；④ refresh 过期记录定时清理（**M7 已具备 cron 能力，具体清理任务移入 M8 backlog**）。
 
+**Done**（M13 SaaS 运营基础 + 主线 B，2026-10-19，PRD-013 / docs/47 / ADR-0029~0031）
+
+- [x] T-M13-01 契约冻结：ADR-0029（套餐/订阅/生效配额三层 + active_marker 方案）、ADR-0030（硬限额 DB 条件更新唯一事实源 + Redis 仅预检）、ADR-0031（五态生命周期 + 条件更新幂等 + 4031 业务入口拦截）
+- [x] T-M13-02 错误码 4029/4030/4031 五处同源登记（core 源/工件/前端/模板/mock + docs/40 + locale 文案表）
+- [x] T-M13-03 三库同构十表迁移（plans/plan_versions/plan_quotas/quota_definitions/tenant_subscriptions/tenant_quotas/tenant_quota_windows/usage_events/usage_rollups/tenant_lifecycle_logs）+ 数据字典 §3.20~3.29
+- [x] T-M13-04 `@fw/saas` 领域包（端口驱动：Plan/Subscription/Quota/Usage/Lifecycle 五服务 + Fake 驱动，26 测 / 覆盖率 91/81/86/93）
+- [x] T-M13-05 PrismaSaasStore + SaasModule 装配 + 集成测试（**并发零超发** AC-13-04，9/9）
+- [x] T-M13-06 运营端点 `/api/v1/saas/*` 九个（ops:saas:read/write 读写分离）+ 冻结 Guard（APP_GUARD，4031）+ 到期任务（@Cron 分布锁，SAAS_GRACE_PERIOD_DAYS）
+- [x] T-M13-07 `fw_saas_*` 指标段（七计数器，低基数护栏）+ smoke-saas-ops 端到端 22/22（入 CI）
+- [x] T-M13-08 admin-web 运营四页（/saas/plans 等，菜单树动态路由）+ mock 九端点
+- [x] T-M13-09 主线 B：docs/42/48/49/97 四件套 + .devcontainer + .nvmrc + CI node pin 22.22.2（工具链冻结矩阵见 48 §2）
+- [x] T-M13-10 存量回填脚本（幂等）+ 租户五态透传（@fw/tenant assertUsable 仅拒存量停用 0）
+
+> **v0.7.0 已发布（2026-10-19）**：CI 四腿全绿（base + pg/mysql/sqlite 三库矩阵）；真机 106.55.32.251 部署验收通过（PG 迁移/seed 45 权限点/14 菜单/backfill/原子切换/HTTPS/`fw_saas_*` 指标/acme 冻结-恢复 E2E），发版记录见 **[v0.7.0 发布记录](./90-release-v0.7.0.md)**。当前遗留：① 真机 `TENANT_ENABLED=false`（单租户模式），4031 拦截启用属产品形态决策（改 env + 重启即生效）；② bills 计费（PRD-013 P1）；③ L-01 真实 K8s / L-04 Redis Cluster 沿袭。
+
 ## 4. 节奏与会议
 
 | 节奏 | 时间 | 内容 |
