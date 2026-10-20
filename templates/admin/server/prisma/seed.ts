@@ -115,6 +115,7 @@ const MENU_TREE: MenuSeed[] = [
       { name: '用户管理', path: '/system/users', component: 'system/users', icon: 'user', permissionCode: PERM.USER_READ, sort: 1 },
       { name: '角色权限', path: '/system/roles', component: 'system/roles', icon: 'shield', permissionCode: PERM.ROLE_READ, sort: 2 },
       { name: '字典管理', path: '/system/dict', component: 'system/dict', icon: 'collection', permissionCode: PERM.DICT_READ, sort: 3 },
+      { name: '审计日志', path: '/system/audit-logs', component: 'system/audit-logs', icon: 'file-text', permissionCode: PERM.AUDIT_READ, sort: 4 },
     ],
   },
   // DemoItem管理 由 prisma/seed/demo-item.seed.ts（fw gen crud 产物）幂等写入，此处不重复声明

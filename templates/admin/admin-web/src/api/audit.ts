@@ -12,7 +12,7 @@
  */
 
 import { request } from '@/utils/request';
-import type { AuditLogRecord, AuditQuery, PageResult } from './types';
+import type { AuditEventRegistry, AuditLogRecord, AuditQuery, PageResult } from './types';
 
 /** 审计日志分页查询 */
 export function fetchAuditLogs(query: AuditQuery = {}): Promise<PageResult<AuditLogRecord>> {
