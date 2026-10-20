@@ -229,6 +229,11 @@ export class FakeSaasStore implements SaasStore {
     row.warnedAt = at;
     return true;
   }
+  async listWindows(windowType: string, windowStart: Date): Promise<Array<{ tenantId: string; quotaKey: string; used: bigint; limitValue: bigint; execution: string }>> {
+    return [...this.windows.values()]
+      .filter((w) => w.windowType === windowType && w.windowStart === windowStart.getTime())
+      .map((w) => ({ tenantId: w.tenantId, quotaKey: w.quotaKey, used: w.used, limitValue: w.limitValue, execution: w.execution }));
+  }
 
   // ---- UsageStore ----
   async listEvents(tenantId: string, quotaKey: string, from: Date, to: Date) {
@@ -257,6 +262,14 @@ export class FakeSaasStore implements SaasStore {
   }
   async listLifecycleLogs(tenantId: string): Promise<LifecycleLog[]> {
     return this.logs.filter((l) => l.tenantId === tenantId);
+  }
+  async countTenantsByStatus(status: LifecycleStatus): Promise<number> {
+    let n = 0;
+    for (const s of this.tenantStatus.values()) if (s === status) n++;
+    return n;
+  }
+  async listRecentLifecycleLogs(limit: number): Promise<LifecycleLog[]> {
+    return [...this.logs].sort((a, b) => b.at.getTime() - a.at.getTime()).slice(0, limit);
   }
 
   private dayStart(at: Date, windowType: string): Date {

@@ -285,3 +285,40 @@ describe('FakeSaasStore 订阅列表查询（M14 FR-14-07 端口语义）', () =
     expect(ids.indexOf(s1b.id)).toBeLessThan(ids.indexOf(same.id) === -1 ? ids.length : ids.indexOf(same.id));
   });
 });
+
+describe('FakeSaasStore 运营看板端口（M14/PRD-014 FR-14-12/14）', () => {
+  it('listWindows / countTenantsByStatus / listRecentLifecycleLogs', async () => {
+    const { store, plans, subs, quotas, usage } = await setup();
+    // 先建订阅（usage.record 前置 resolveEffective 需要生效订阅），t1 消耗 5 产生 day 窗口
+    const plan = await plans.createPlan({ code: 'default', name: '基础版' });
+    await plans.publishVersion(plan.id, { quotas: [{ quotaKey: 'api_calls', limitValue: 10n }] });
+    await subs.create({ tenantId: 't1', planCode: 'default' });
+    await usage.record({ tenantId: 't1', quotaKey: 'api_calls', quantity: 5n, occurredAt: new Date(), source: 'test', idempotencyKey: 'ov-1' });
+    const at = new Date();
+    const ws = await quotas.resolveWindowStart('t1', 'api_calls', at);
+    const wins = await store.listWindows('day', ws.windowStart);
+    expect(wins).toHaveLength(1);
+    expect(wins[0]).toMatchObject({ tenantId: 't1', quotaKey: 'api_calls', used: 5n, limitValue: 10n });
+
+    // 生命周期：fake store 需预置状态（map 直写），再条件更新到 active
+    store.tenantStatus.set('t1', 'pending');
+    store.tenantStatus.set('t2', 'pending');
+    await store.conditionalUpdateStatus('t1', 'pending', 'active');
+    await store.conditionalUpdateStatus('t2', 'pending', 'active');
+    expect(await store.countTenantsByStatus('active')).toBe(2);
+    expect(await store.countTenantsByStatus('frozen')).toBe(0);
+
+    // 最近迁移日志：跨租户 + at desc + take N
+    await store.appendLifecycleLog({ tenantId: 't2', fromStatus: null, toStatus: 'active', action: 'activate', actorType: 'user', at: new Date(Date.now() - 1000) });
+    await store.appendLifecycleLog({ tenantId: 't1', fromStatus: null, toStatus: 'active', action: 'activate', actorType: 'user', at: new Date() });
+    const recent = await store.listRecentLifecycleLogs(5);
+    expect(recent).toHaveLength(2);
+    expect(recent[0].tenantId).toBe('t1'); // 最新在前
+    expect((await store.listRecentLifecycleLogs(1)).map((l) => l.tenantId)).toEqual(['t1']);
+  });
+
+  it('listWindows 空窗口类型 → 空数组（month/total 无行时不报错）', async () => {
+    const { store } = await setup();
+    expect(await store.listWindows('month', new Date(Date.UTC(2026, 0, 1)))).toEqual([]);
+  });
+});

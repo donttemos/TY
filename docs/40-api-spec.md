@@ -438,6 +438,9 @@
 | GET | `/saas/tenants/:id/subscriptions/history` | `ops:saas:read` | 租户订阅历史（完整列表，含 cancelled/expired；行内补全同上）（M14 FR-14-07） |
 | GET | `/saas/tenants/:id/quotas` | `ops:saas:read` | 生效配额列表（生效值 = 租户覆盖 ?? 套餐默认，ADR-0029） |
 | GET | `/saas/tenants/:id/usage?quotaKey=&at=` | `ops:saas:read` | 窗口用量（rollup 重算后返回，附 limitValue/execution/windowEnd） |
+| GET | `/saas/tenants/:id/usage/trend?quotaKey=&hours=` | `ops:saas:read` | 用量趋势（M14 FR-14-12）：`hours` ∈ 24/48/72/168/720，UTC 小时（≤48h）/天（>48h）桶聚合并填零序列；OQ-14-3 定案查询时聚合、零迁移 |
+| GET | `/saas/tenants/:id/usage/events?quotaKey=&hours=&page=&pageSize=` | `ops:saas:read` | 用量事件明细分页：`hours` ∈ 24/72/168/720（≤30 天），occurredAt desc，内存分页（pageSize ≤ 200；事件量级可控，大量化后立 ADR 升级存储分页） |
+| GET | `/saas/usage/overview` | `ops:saas:read` | 平台运营总览（M14 FR-14-14）：配额风险（day+month 窗口 ≥80% TOP20）+ 7 天内到期订阅 + 租户五态计数 + 最近迁移 10 条 |
 | POST | `/saas/tenants/:id/lifecycle` | `ops:saas:write` | 生命周期迁移 `{action, reason?}`，action ∈ activate/expire/freeze/resume/terminate/dispose；非法 → `409/4030`；重复执行幂等（`alreadyApplied: true`） |
 | GET | `/saas/tenants/:id/lifecycle/status` | `ops:saas:read` | 当前生命周期状态 + 合法动作集 `{status, allowedActions}`（allowedActions 由 ADR-0031 迁移表派生；M14 FR-14-03） |
 | GET | `/saas/tenants/:id/lifecycle/logs` | `ops:saas:read` | 迁移历史（只增不改不删） |

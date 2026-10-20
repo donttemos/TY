@@ -19,6 +19,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('@/api/user', () => ({ fetchUsers: vi.fn() }));
 vi.mock('@/api/role', () => ({ fetchRoles: vi.fn(), fetchPermissionGroups: vi.fn() }));
 vi.mock('@/api/audit', () => ({ fetchAuditLogs: vi.fn() }));
+vi.mock('@/api/saas', () => ({ fetchOpsOverview: vi.fn() }));
 vi.mock('vue-router', async (importOriginal) => ({
   ...(await importOriginal<typeof import('vue-router')>()),
   useRouter: () => ({ push: vi.fn() }),
@@ -27,6 +28,7 @@ vi.mock('vue-router', async (importOriginal) => ({
 import * as userApi from '@/api/user';
 import * as roleApi from '@/api/role';
 import * as auditApi from '@/api/audit';
+import { fetchOpsOverview } from '@/api/saas';
 import { useUserStore } from '@/store/user';
 import type { MeResult } from '@/api/types';
 import Dashboard from '@/views/dashboard/index.vue';

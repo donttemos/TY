@@ -7,11 +7,13 @@
  * @modified 2026-10-20 M14/PRD-014 B1：切换租户即重置上一租户的配额/用量数据（U-14-6 残留缺陷）；
  *   上报按钮补 v-permission（U-14-2）。
  * @modified 2026-10-20 M14/PRD-014 B3：租户输入换 TenantPicker（FR-14-08/10 租户上下文）。
+ * @modified 2026-10-20 M14/PRD-014 B4（FR-14-13）：新增用量趋势图（hours 白名单 + 纯 CSS 柱状，零新依赖）
+ *   与事件明细分页表。
  * @module admin-web/views
 -->
 
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import * as saasApi from '@/api/saas';
 import TenantPicker from '@/components/TenantPicker/index.vue';
@@ -59,12 +61,15 @@ async function loadQuotas(): Promise<void> {
       quotas.value = [];
       usage.value = null;
       usageKey.value = '';
+      trend.value = [];
+      events.value = [];
+      eventTotal.value = 0;
       loadedTenant.value = tenantId.value;
     }
     quotas.value = await saasApi.fetchTenantQuotas(tenantId.value);
     if (quotas.value.length > 0 && !usageKey.value) {
       usageKey.value = quotas.value[0].quotaKey;
-      await loadUsage();
+      await Promise.all([loadUsage(), loadTrend(), loadEvents()]);
     }
   } catch (e) {
     ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
@@ -80,6 +85,65 @@ async function loadUsage(): Promise<void> {
   } catch (e) {
     ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
   }
+}
+
+// ---- 用量趋势（M14 FR-14-13：纯 CSS 柱状图，零新依赖） ----
+const TREND_HOURS_OPTIONS = [
+  { label: '24 小时', value: 24 },
+  { label: '3 天', value: 72 },
+  { label: '7 天', value: 168 },
+  { label: '30 天', value: 720 },
+];
+const trendHours = ref(168);
+const trendLoading = ref(false);
+const trend = ref<Array<{ bucketStart: string; quantity: string; eventCount: number }>>([]);
+const trendMax = computed(() => Math.max(1, ...trend.value.map((p) => Number(p.quantity))));
+
+function bucketLabel(iso: string, hours: number): string {
+  const d = new Date(iso);
+  return hours <= 48
+    ? `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${String(d.getUTCHours()).padStart(2, '0')}:00`
+    : `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+}
+
+async function loadTrend(): Promise<void> {
+  if (!tenantId.value || !usageKey.value) return;
+  trendLoading.value = true;
+  try {
+    const r = await saasApi.fetchUsageTrend(tenantId.value, usageKey.value, trendHours.value);
+    trend.value = r.points;
+  } catch (e) {
+    ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
+  } finally {
+    trendLoading.value = false;
+  }
+}
+
+// ---- 事件明细（M14 FR-14-13：内存分页由后端提供） ----
+const eventPage = ref(1);
+const eventPageSize = ref(20);
+const eventTotal = ref(0);
+const events = ref<Array<{ quotaKey: string; quantity: string; occurredAt: string }>>([]);
+const eventsLoading = ref(false);
+
+async function loadEvents(): Promise<void> {
+  if (!tenantId.value || !usageKey.value) return;
+  eventsLoading.value = true;
+  try {
+    const r = await saasApi.fetchUsageEventList(tenantId.value, { quotaKey: usageKey.value, hours: trendHours.value, page: eventPage.value, pageSize: eventPageSize.value });
+    events.value = r.items;
+    eventTotal.value = r.total;
+  } catch (e) {
+    ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
+  } finally {
+    eventsLoading.value = false;
+  }
+}
+
+/** 切换指标/租户/时间范围时一并刷新趋势与明细 */
+async function switchMetric(key: string): Promise<void> {
+  usageKey.value = key;
+  await Promise.all([loadUsage(), loadTrend(), loadEvents()]);
 }
 
 async function onReport(): Promise<void> {
@@ -122,7 +186,7 @@ async function onReport(): Promise<void> {
         <el-table-column prop="source" label="来源" width="140" align="center" />
         <el-table-column label="操作" width="110" align="center">
           <template #default="{ row }">
-            <el-button link type="primary" @click="usageKey = row.quotaKey; loadUsage()">看用量</el-button>
+            <el-button link type="primary" @click="switchMetric(row.quotaKey)">看用量与趋势</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -142,7 +206,44 @@ async function onReport(): Promise<void> {
       <el-empty v-else description="查询后展示" :image-size="60" />
     </el-card>
 
-    <el-card shadow="never">
+    <el-card shadow="never" class="query-card">
+      <template #header>
+        <div class="card-header">
+          <span>用量趋势（{{ usageKey || '未选择指标' }}）</span>
+          <el-radio-group v-model="trendHours" size="small" @change="loadTrend(); loadEvents()">
+            <el-radio-button v-for="o in TREND_HOURS_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</el-radio-button>
+          </el-radio-group>
+        </div>
+      </template>
+      <div v-loading="trendLoading" class="trend-box">
+        <div v-for="p in trend" :key="p.bucketStart" class="trend-bar" :title="`${bucketLabel(p.bucketStart, trendHours)}｜${p.quantity}（${p.eventCount} 次）`">
+          <div class="trend-bar-inner" :style="{ height: `${Math.max(2, (Number(p.quantity) / trendMax) * 100)}%` }" />
+        </div>
+        <el-empty v-if="trend.length === 0" description="查询后展示趋势（后端按 UTC 桶聚合，含零桶）" :image-size="48" />
+      </div>
+    </el-card>
+
+    <el-card shadow="never" class="query-card">
+      <template #header><span>事件明细（{{ usageKey || '未选择指标' }}，最近 {{ TREND_HOURS_OPTIONS.find((o) => o.value === trendHours)?.label ?? trendHours }}）</span></template>
+      <el-table v-loading="eventsLoading" :data="events" border>
+        <el-table-column prop="occurredAt" label="发生时间" min-width="200" />
+        <el-table-column prop="quotaKey" label="指标键" min-width="140" />
+        <el-table-column prop="quantity" label="数量" width="140" align="right" />
+      </el-table>
+      <el-empty v-if="!eventsLoading && events.length === 0" description="窗口内无用量事件" :image-size="48" />
+      <el-pagination
+        v-model:current-page="eventPage"
+        v-model:page-size="eventPageSize"
+        :total="eventTotal"
+        :page-sizes="[20, 50, 100]"
+        layout="total, sizes, prev, pager, next"
+        class="pager"
+        @current-change="loadEvents()"
+        @size-change="eventPage = 1; loadEvents()"
+      />
+    </el-card>
+
+    <el-card shadow="never" class="query-card">
       <template #header><span>用量上报（运营补录）</span></template>
       <el-form inline>
         <el-form-item label="指标键">
@@ -168,5 +269,31 @@ async function onReport(): Promise<void> {
 }
 .usage-desc {
   margin-top: 12px;
+}
+.trend-box {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 160px;
+  padding-top: 8px;
+}
+.trend-bar {
+  flex: 1;
+  min-width: 4px;
+  max-width: 24px;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+.trend-bar-inner {
+  width: 100%;
+  background-color: var(--el-color-primary);
+  border-radius: 2px 2px 0 0;
+  min-height: 2px;
+  transition: height 0.2s;
+}
+.pager {
+  margin-top: 12px;
+  justify-content: flex-end;
 }
 </style>

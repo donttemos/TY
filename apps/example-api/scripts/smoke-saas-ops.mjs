@@ -20,6 +20,8 @@
  *   S14 M14 B2 新端点：POST /saas/plans（重复 → 1003）→ POST versions（版本 +1、配额字典未登记 → 1002）
  *        → GET /saas/tenant-subscriptions 列表过滤与 planCode 补全 → GET subscriptions/history
  *        → GET lifecycle/status（terminated → allowedActions=[dispose]）
+ *   S15 M14 B4 新端点：GET usage/trend（桶聚合填零）→ GET usage/events（明细分页）
+ *        → GET /saas/usage/overview（五态计数 + 最近迁移 + 到期过滤）
  *   前置数据（dev.db，脚本直写）：quota_definitions.api_calls(day/hard) + default 套餐 v1 的
  *   plan_quota(limit=10)。业务面用 /api/v1/demo-items（既有演示 CRUD，租户过滤 fail-closed）。
  *   说明：运营面端点类级 @IgnoreTenant，登录态即可调（admin 持有全部权限码）。
@@ -254,6 +256,22 @@ async function main() {
     check('S14.7 状态端点：terminated → allowedActions=[dispose]（真实状态非日志推导）',
       isOk(statusNow.status) && statusNow.body.data?.status === 'terminated' && JSON.stringify(statusNow.body.data?.allowedActions) === '["dispose"]',
       `http=${statusNow.status} data=${JSON.stringify(statusNow.body.data)}`);
+
+    // S15 M14 B4：趋势 / 明细 / 平台总览
+    const trend = await call(`/api/v1/saas/tenants/${tenantId}/usage/trend?quotaKey=${METRIC_KEY}&hours=24`, {}, auth.admin);
+    check('S15.1 用量趋势：小时桶 + 填零序列',
+      isOk(trend.status) && trend.body.data?.bucketType === 'hour' && Array.isArray(trend.body.data?.points) && trend.body.data.points.length === 25,
+      `http=${trend.status} points=${trend.body.data?.points?.length}`);
+    const trendBad = await call(`/api/v1/saas/tenants/${tenantId}/usage/trend?quotaKey=${METRIC_KEY}&hours=12`, {}, auth.admin);
+    check('S15.1 hours 白名单外 → 400/1001（BizError 单层信封）', trendBad.status === 400 && trendBad.body.code === 1001, `http=${trendBad.status} code=${trendBad.body.code}`);
+    const eventList = await call(`/api/v1/saas/tenants/${tenantId}/usage/events?quotaKey=${METRIC_KEY}&hours=24&pageSize=5`, {}, auth.admin);
+    check('S15.2 事件明细：total=10（额度内事件）+ 内存分页',
+      isOk(eventList.status) && eventList.body.data?.total === 10 && eventList.body.data?.items.length === 5,
+      `http=${eventList.status} total=${eventList.body.data?.total}`);
+    const overview = await call('/api/v1/saas/usage/overview', {}, auth.admin);
+    check('S15.3 平台总览：五态计数 + 最近迁移非空 + 结构完整',
+      isOk(overview.status) && typeof overview.body.data?.tenantCounts?.active === 'number' && Array.isArray(overview.body.data?.quotaRisks) && Array.isArray(overview.body.data?.recentTransitions),
+      `http=${overview.status} counts=${JSON.stringify(overview.body.data?.tenantCounts)}`);
   } finally {
     await stopServer(server);
   }

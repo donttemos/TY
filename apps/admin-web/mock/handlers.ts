@@ -2732,6 +2732,37 @@ async function handleSaasRoutes(
 ): Promise<HandleResult> {
   const saas = database.saas;
 
+  // ---- 平台运营总览（M14 FR-14-14：mock 近似派生，真机由后端 overview 端点组装） ----
+  if (path === '/saas/usage/overview' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'ops:saas:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    // 配额风险：枚举 mock 窗口行（windowType 近似标 day），limit>0 且 ≥80% 入选
+    const quotaRisks = Object.entries(saas.usageWindows)
+      .filter(([key, w]) => !key.includes('|deduped') && Number(w.limitValue) > 0 && (Number(w.used) / Number(w.limitValue)) * 100 >= 80)
+      .map(([key, w]) => {
+        const [tenantId, quotaKey] = key.split('|');
+        return { tenantId, quotaKey, windowType: 'day', windowStart: new Date().toISOString().slice(0, 10), used: String(w.used), limitValue: String(w.limitValue), ratio: Math.round((Number(w.used) / Number(w.limitValue)) * 100) };
+      })
+      .sort((a, b) => b.ratio - a.ratio)
+      .slice(0, 20);
+    // 五态计数：无日志租户近似 active（mock 演示数据语义）
+    const statusOf = (tenantId: string) => saas.lifecycleLogs.filter((l) => l.tenantId === tenantId).slice(-1)[0]?.toStatus ?? 'active';
+    const tenantIds = new Set([...saas.subscriptions.map((s) => s.tenantId), ...saas.lifecycleLogs.map((l) => l.tenantId)]);
+    const tenantCounts: Record<string, number> = { pending: 0, active: 0, grace: 0, frozen: 0, terminated: 0 };
+    for (const t of tenantIds) tenantCounts[statusOf(t)] += 1;
+    // 7 天内到期订阅（expireAt 为日期串或 ISO）
+    const soon = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10);
+    const expiringSubscriptions = saas.subscriptions
+      .filter((s) => s.status === 'active' && s.expireAt && s.expireAt.slice(0, 10) <= soon)
+      .map((s) => ({ subscriptionId: s.id, tenantId: s.tenantId, expireAt: s.expireAt }));
+    const recentTransitions = saas.lifecycleLogs.slice(-10).reverse();
+    send(res, 0, 'ok', { quotaRisks, expiringSubscriptions, tenantCounts, recentTransitions }, traceId);
+    return { handled: true };
+  }
+
   // ---- 套餐（读 + 写） ----
   if (path === '/saas/plans' && method === 'GET') {
     const perm = requirePermission(database, ctx, 'ops:saas:read');
@@ -2973,6 +3004,32 @@ async function handleSaasRoutes(
       return { handled: true };
     }
 
+    // M14 FR-14-12：用量趋势（mock 不存原始事件——从当前 day 窗口派生单点；真实趋势见后端 listEvents 聚合）
+    if (subPath === 'usage/trend' && method === 'GET') {
+      const perm = requirePermission(database, ctx, 'ops:saas:read');
+      if (!perm.ok) {
+        send(res, perm.code, perm.message, null, traceId);
+        return { handled: true };
+      }
+      const quotaKey = query.get('quotaKey') ?? '';
+      const windowStart = new Date().toISOString().slice(0, 10);
+      const win = saas.usageWindows[`${tenantId}|${quotaKey}|${windowStart}`];
+      const points = win ? [{ bucketStart: `${windowStart}T00:00:00.000Z`, quantity: win.used, eventCount: Number(win.used) }] : [];
+      send(res, 0, 'ok', { quotaKey, bucketType: 'hour', points }, traceId);
+      return { handled: true };
+    }
+
+    // M14 FR-14-12：用量事件明细（mock 无原始事件存储，返回空列表；真机/CI 由后端 listEvents 提供）
+    if (subPath === 'usage/events' && method === 'GET') {
+      const perm = requirePermission(database, ctx, 'ops:saas:read');
+      if (!perm.ok) {
+        send(res, perm.code, perm.message, null, traceId);
+        return { handled: true };
+      }
+      send(res, 0, 'ok', { items: [], total: 0, page: 1, pageSize: Number(query.get('pageSize') ?? 50) }, traceId);
+      return { handled: true };
+    }
+
     if (subPath === 'usage' && method === 'GET') {
       const perm = requirePermission(database, ctx, 'ops:saas:read');
       if (!perm.ok) {
@@ -2985,6 +3042,32 @@ async function handleSaasRoutes(
       const windowStart = new Date().toISOString().slice(0, 10);
       const win = saas.usageWindows[`${tenantId}|${quotaKey}|${windowStart}`] ?? { used: '0', limitValue: override?.overrideValue ?? '0', execution: def?.execution ?? 'hard' };
       send(res, 0, 'ok', { totalQuantity: win.used, eventCount: Number(win.used), limitValue: win.limitValue, execution: win.execution, windowStart: `${windowStart}T00:00:00.000Z`, windowEnd: `${windowStart}T23:59:59.999Z` }, traceId);
+      return { handled: true };
+    }
+
+    // M14 FR-14-12：用量趋势（mock 不存原始事件——从当前 day 窗口派生单点；真实趋势见后端 listEvents 聚合）
+    if (subPath === 'usage/trend' && method === 'GET') {
+      const perm = requirePermission(database, ctx, 'ops:saas:read');
+      if (!perm.ok) {
+        send(res, perm.code, perm.message, null, traceId);
+        return { handled: true };
+      }
+      const quotaKey = query.get('quotaKey') ?? '';
+      const windowStart = new Date().toISOString().slice(0, 10);
+      const win = saas.usageWindows[`${tenantId}|${quotaKey}|${windowStart}`];
+      const points = win ? [{ bucketStart: `${windowStart}T00:00:00.000Z`, quantity: win.used, eventCount: Number(win.used) }] : [];
+      send(res, 0, 'ok', { quotaKey, bucketType: 'hour', points }, traceId);
+      return { handled: true };
+    }
+
+    // M14 FR-14-12：用量事件明细（mock 无原始事件存储，返回空列表；真机/CI 由后端 listEvents 提供）
+    if (subPath === 'usage/events' && method === 'GET') {
+      const perm = requirePermission(database, ctx, 'ops:saas:read');
+      if (!perm.ok) {
+        send(res, perm.code, perm.message, null, traceId);
+        return { handled: true };
+      }
+      send(res, 0, 'ok', { items: [], total: 0, page: 1, pageSize: Number(query.get('pageSize') ?? 50) }, traceId);
       return { handled: true };
     }
 

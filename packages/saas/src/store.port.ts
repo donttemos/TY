@@ -98,6 +98,11 @@ export interface QuotaStore {
   >;
   /** 软限额同窗幂等告警标记：仅当 warned_at IS NULL 时写入并返回 true */
   markWarned(tenantId: string, quotaKey: string, windowType: string, windowStart: Date, at: Date): Promise<boolean>;
+  /**
+   * 运营看板（M14/PRD-014 FR-14-12/14）：指定窗口类型与起点下的全部窗口行
+   * （基数 = 租户×指标，量级可控；OQ-14-3 定案：查询时聚合，不建聚合表）。
+   */
+  listWindows(windowType: string, windowStart: Date): Promise<Array<{ tenantId: string; quotaKey: string; used: bigint; limitValue: bigint; execution: string }>>;
 }
 
 /** 用量汇总存储面（rollup 与 events 的重算闭环，AC-13-06） */
@@ -109,11 +114,23 @@ export interface UsageStore {
 
 /** 生命周期存储面（条件更新即幂等：正确性不依赖分布式锁，ADR-0031 §2.3） */
 export interface LifecycleStore {
+  /**
+   * 租户当前态；**null 仅表示租户不存在**。驱动须按 ADR-0029 §2.4 的 Int 编码读：
+   * 存量停用 0 读作 frozen，未知编码 fail-closed 亦按 frozen 兜底（不得返回 null 冒充不存在）。
+   */
   findTenantStatus(tenantId: string): Promise<LifecycleStatus | null>;
-  /** UPDATE tenants SET status=:to WHERE id=:id AND status=:from —— 返回 affected === 1 */
+  /**
+   * UPDATE tenants SET status=:to WHERE id=:id AND status=:from —— 返回 affected === 1。
+   * `from='frozen'` 须同时匹配存量停用 0 与规范 3（驱动用「非冻结码的补集」表达最佳），
+   * 否则存量停用租户永远 resume/terminate 不了（4030 死锁）；写入值须恒为规范码（frozen→3）。
+   */
   conditionalUpdateStatus(tenantId: string, from: LifecycleStatus, to: LifecycleStatus): Promise<boolean>;
   appendLifecycleLog(log: LifecycleLog): Promise<void>;
   listLifecycleLogs(tenantId: string): Promise<LifecycleLog[]>;
+  /** 运营看板（M14 FR-14-14）：按状态计数的租户数（口径须与 findTenantStatus 一致：frozen 含存量 0） */
+  countTenantsByStatus(status: LifecycleStatus): Promise<number>;
+  /** 运营看板：跨租户最近迁移日志（createdAt desc，take N；at=createdAt 映射） */
+  listRecentLifecycleLogs(limit: number): Promise<LifecycleLog[]>;
 }
 
 /** SaaS 运营基础存储端口聚合 */

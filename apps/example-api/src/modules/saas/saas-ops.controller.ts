@@ -9,7 +9,10 @@
  *   POST /saas/tenant-subscriptions               需 ops:saas:write —— 创建订阅（一租户一生效）
  *   POST /saas/tenant-subscriptions/:id/cancel    需 ops:saas:write —— 取消订阅
  *   GET  /saas/tenant-subscriptions               需 ops:saas:read  —— 订阅分页列表（租户/套餐/状态/到期范围过滤）
- *   GET  /saas/tenants/:id/subscriptions/history  需 ops:saas:read  —— 租户订阅历史（含 cancelled/expired）
+ *   GET  /saas/tenants/:id/subscriptions/history  需 ops:saas:read —— 租户订阅历史（含 cancelled/expired）
+ *   GET  /saas/tenants/:id/usage/trend            需 ops:saas:read  —— 用量趋势（hours 白名单，小时/天桶聚合填零）
+ *   GET  /saas/tenants/:id/usage/events           需 ops:saas:read  —— 用量事件明细分页（窗口 ≤30 天，内存分页）
+ *   GET  /saas/usage/overview                     需 ops:saas:read  —— 平台总览（配额风险 TOP20 + 7 天到期 + 五态计数 + 最近迁移）
  *   GET  /saas/tenants/:id/subscription           需 ops:saas:read  —— 当前生效订阅
  *   GET  /saas/tenants/:id/quotas                 需 ops:saas:read  —— 生效配额（覆盖 ?? 默认）
  *   GET  /saas/tenants/:id/usage                  需 ops:saas:read  —— 窗口用量（rollup 重算）
@@ -25,11 +28,15 @@
  * @modified 2026-10-20 M14/PRD-014 B2（FR-14-05~07）：套餐创建 / 版本发布端点转正 PlanService 领域能力；
  *   订阅分页列表与租户订阅历史（store 端口新增 listSubscriptions/listSubscriptionsByTenant）；
  *   发布后不可变语义沿用 M13 领域实现；全部写操作补 saas.plan.* 审计事件。
+ * @modified 2026-10-20 M14/PRD-014 B4（FR-14-12/13/14）：用量趋势（hours 白名单 + UTC 桶聚合填零）、
+ *   事件明细分页（内存分页，OQ-14-3 定案查询时聚合零迁移）、平台总览 overview
+ *   （风险 TOP20 + 7 天到期订阅 + 五态计数 + 最近迁移）；端口扩展 listWindows/countTenantsByStatus/listRecentLifecycleLogs。
  * @module example-api/saas
  */
 
 import { Body, Controller, Get, Inject, Param, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
+import { BizError, ErrorCode } from '@fw/core';
 import { AuditService, CurrentUser, IgnoreTenant, PERM, Permissions } from '@fw/auth';
 import type { RequestUser } from '@fw/auth';
 import { clientIp } from '../auth/auth.controller.js';
@@ -67,6 +74,9 @@ interface PublishVersionBody {
 
 /** 订阅状态过滤白名单（M14 FR-14-07） */
 const SUBSCRIPTION_STATUSES: readonly SubscriptionView['status'][] = ['active', 'expired', 'cancelled'];
+
+/** 用量趋势时间范围白名单（小时；M14 FR-14-12）；事件明细范围白名单（小时） */
+const TREND_HOURS = [24, 48, 72, 168, 720] as const;
 
 /** 合法迁移动作白名单（控制器层先校验，领域层迁移表再校验一次，双保险） */
 const LIFECYCLE_ACTIONS: readonly LifecycleAction[] = ['activate', 'expire', 'freeze', 'resume', 'terminate', 'dispose'];
@@ -106,7 +116,7 @@ export class SaasOpsController {
   @Permissions(PERM.OPS_SAAS_WRITE)
   async createPlan(@Body() body: CreatePlanBody, @CurrentUser() operator?: RequestUser, @Req() request?: Request): Promise<unknown> {
     if (!body?.code?.trim() || !body?.name?.trim()) {
-      return { code: 1001 as const, message: 'code 与 name 必填', data: null, traceId: '' };
+      throw new BizError(ErrorCode.BAD_REQUEST, 'code 与 name 必填');
     }
     const plan = await this.plans.createPlan({ code: body.code.trim(), name: body.name.trim(), description: body.description ?? null });
     this.audit.record({
@@ -132,16 +142,16 @@ export class SaasOpsController {
   async publishPlanVersion(@Param('id') planId: string, @Body() body: PublishVersionBody, @CurrentUser() operator?: RequestUser, @Req() request?: Request): Promise<unknown> {
     const quotas = body?.quotas;
     if (!Array.isArray(quotas) || quotas.length === 0) {
-      return { code: 1001 as const, message: 'quotas 必填且至少一条', data: null, traceId: '' };
+      throw new BizError(ErrorCode.BAD_REQUEST, 'quotas 必填且至少一条');
     }
     const normalized: Array<{ quotaKey: string; limitValue: bigint; execution: 'soft' | 'hard' | 'observe' | null }> = [];
     for (const q of quotas) {
       if (!q?.quotaKey?.trim()) {
-        return { code: 1001 as const, message: 'quotas[].quotaKey 必填', data: null, traceId: '' };
+        throw new BizError(ErrorCode.BAD_REQUEST, 'quotas[].quotaKey 必填');
       }
       const n = typeof q.limitValue === 'string' ? Number(q.limitValue) : q.limitValue;
       if (!Number.isFinite(n) || (n as number) < 0) {
-        return { code: 1001 as const, message: `quotas[].limitValue 非法：${String(q?.limitValue)}`, data: null, traceId: '' };
+        throw new BizError(ErrorCode.BAD_REQUEST, `quotas[].limitValue 非法：${String(q?.limitValue)}`);
       }
       normalized.push({ quotaKey: q.quotaKey.trim(), limitValue: BigInt(Math.floor(n as number)), execution: q.execution ?? null });
     }
@@ -228,10 +238,10 @@ export class SaasOpsController {
     const p = Number(page);
     const ps = Number(pageSize);
     if (!Number.isInteger(p) || p < 1 || !Number.isInteger(ps) || ps < 1 || ps > 200) {
-      return { code: 1001 as const, message: 'page/pageSize 非法（正整数，pageSize ≤ 200）', data: null, traceId: '' };
+      throw new BizError(ErrorCode.BAD_REQUEST, 'page/pageSize 非法（正整数，pageSize ≤ 200）');
     }
     if (status !== undefined && status !== '' && !SUBSCRIPTION_STATUSES.includes(status as SubscriptionView['status'])) {
-      return { code: 1001 as const, message: 'status 仅支持 active/expired/cancelled', data: null, traceId: '' };
+      throw new BizError(ErrorCode.BAD_REQUEST, 'status 仅支持 active/expired/cancelled');
     }
     const filter: { tenantId?: string; planId?: string; status?: SubscriptionView['status']; expireFrom?: Date; expireTo?: Date } = {};
     if (tenantId) filter.tenantId = tenantId;
@@ -245,7 +255,7 @@ export class SaasOpsController {
       if (raw) {
         const d = new Date(raw);
         if (Number.isNaN(d.getTime())) {
-          return { code: 1001 as const, message: `${key} 非法日期（ISO 8601）`, data: null, traceId: '' };
+          throw new BizError(ErrorCode.BAD_REQUEST, `${key} 非法日期（ISO 8601）`);
         }
         filter[key] = d;
       }
@@ -346,6 +356,123 @@ export class SaasOpsController {
       }
       throw e;
     }
+  }
+
+  // ---- 用量趋势 / 明细 / 平台看板（M14/PRD-014 FR-14-12/14，OQ-14-3 定案：查询时聚合零迁移） ----
+
+  @Get('tenants/:id/usage/trend')
+  @Permissions(PERM.OPS_SAAS_READ)
+  async usageTrend(@Param('id') tenantId: string, @Query('quotaKey') quotaKey: string, @Query('hours') hours = '24'): Promise<unknown> {
+    if (!quotaKey) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'quotaKey 必填');
+    }
+    const h = Number(hours);
+    if (!TREND_HOURS.includes(h as never)) {
+      throw new BizError(ErrorCode.BAD_REQUEST, `hours 仅支持 ${TREND_HOURS.join('/')}`);
+    }
+    const bucketType: 'hour' | 'day' = h <= 48 ? 'hour' : 'day';
+    const to = new Date();
+    const from = new Date(to.getTime() - h * 3_600_000);
+    const events = await this.store.listEvents(tenantId, quotaKey, from, to);
+    const bucketStart = (t: Date): Date =>
+      bucketType === 'hour'
+        ? new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate(), t.getUTCHours()))
+        : new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate()));
+    const buckets = new Map<string, { quantity: bigint; eventCount: number }>();
+    for (const e of events) {
+      const key = bucketStart(e.occurredAt).toISOString();
+      const b = buckets.get(key) ?? { quantity: 0n, eventCount: 0 };
+      b.quantity += e.quantity;
+      b.eventCount += 1;
+      buckets.set(key, b);
+    }
+    // 填零序列：前端直接画图，无需再补空桶
+    const points: Array<{ bucketStart: string; quantity: string; eventCount: number }> = [];
+    const step = bucketType === 'hour' ? 3_600_000 : 86_400_000;
+    for (let cursor = bucketStart(from); cursor <= bucketStart(to); cursor = new Date(cursor.getTime() + step)) {
+      const b = buckets.get(cursor.toISOString());
+      points.push({ bucketStart: cursor.toISOString(), quantity: (b?.quantity ?? 0n).toString(), eventCount: b?.eventCount ?? 0 });
+    }
+    return { quotaKey, from: from.toISOString(), to: to.toISOString(), bucketType, points };
+  }
+
+  /** 用量事件明细分页（内存分页：窗口 ≤30 天且运营面低频，事件量级可控；大量化后立 ADR 升级存储分页） */
+  @Get('tenants/:id/usage/events')
+  @Permissions(PERM.OPS_SAAS_READ)
+  async usageEventList(
+    @Param('id') tenantId: string,
+    @Query('quotaKey') quotaKey: string,
+    @Query('hours') hours = '168',
+    @Query('page') page = '1',
+    @Query('pageSize') pageSize = '50',
+  ): Promise<unknown> {
+    if (!quotaKey) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'quotaKey 必填');
+    }
+    const h = Number(hours);
+    if (![24, 72, 168, 720].includes(h)) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'hours 仅支持 24/72/168/720');
+    }
+    const p = Number(page);
+    const ps = Number(pageSize);
+    if (!Number.isInteger(p) || p < 1 || !Number.isInteger(ps) || ps < 1 || ps > 200) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'page/pageSize 非法（正整数，pageSize ≤ 200）');
+    }
+    const to = new Date();
+    const from = new Date(to.getTime() - h * 3_600_000);
+    const events = await this.store.listEvents(tenantId, quotaKey, from, to);
+    const sorted = events.sort((a, b) => b.occurredAt.getTime() - a.occurredAt.getTime());
+    return {
+      items: sorted.slice((p - 1) * ps, p * ps).map((e) => ({ quotaKey, quantity: e.quantity.toString(), occurredAt: e.occurredAt.toISOString() })),
+      total: sorted.length,
+      page: p,
+      pageSize: ps,
+    };
+  }
+
+  /** 平台运营总览（FR-14-14 数据源）：配额风险（≥80% TOP20）+ 7 天内到期订阅 + 五态计数 + 最近迁移 */
+  @Get('usage/overview')
+  @Permissions(PERM.OPS_SAAS_READ)
+  async opsOverview(): Promise<unknown> {
+    const now = new Date();
+    const dayStart = windowStartFor('day', now);
+    const monthStart = windowStartFor('month', now);
+    const [dayRows, monthRows, expiring, pendingC, activeC, graceC, frozenC, terminatedC, recent] = await Promise.all([
+      this.store.listWindows('day', dayStart),
+      this.store.listWindows('month', monthStart),
+      this.store.listActiveSubscriptionsExpiredAt(new Date(now.getTime() + 7 * 86_400_000)),
+      this.store.countTenantsByStatus('pending'),
+      this.store.countTenantsByStatus('active'),
+      this.store.countTenantsByStatus('grace'),
+      this.store.countTenantsByStatus('frozen'),
+      this.store.countTenantsByStatus('terminated'),
+      this.store.listRecentLifecycleLogs(10),
+    ]);
+    const quotaRisks = [
+      ...dayRows.map((r) => ({ r, windowType: 'day' as const, ws: dayStart })),
+      ...monthRows.map((r) => ({ r, windowType: 'month' as const, ws: monthStart })),
+    ]
+      .filter(({ r }) => r.limitValue > 0n)
+      .map(({ r, windowType, ws }) => ({
+        tenantId: r.tenantId,
+        quotaKey: r.quotaKey,
+        windowType,
+        windowStart: ws.toISOString(),
+        used: r.used.toString(),
+        limitValue: r.limitValue.toString(),
+        ratio: Number((r.used * 10000n) / r.limitValue) / 100,
+      }))
+      .filter((r) => r.ratio >= 80)
+      .sort((a, b) => b.ratio - a.ratio)
+      .slice(0, 20);
+    return {
+      quotaRisks,
+      expiringSubscriptions: expiring
+        .filter((s) => s.expireAt && s.expireAt >= now)
+        .map((s) => ({ subscriptionId: s.id, tenantId: s.tenantId, expireAt: s.expireAt ? s.expireAt.toISOString() : null })),
+      tenantCounts: { pending: pendingC, active: activeC, grace: graceC, frozen: frozenC, terminated: terminatedC },
+      recentTransitions: recent,
+    };
   }
 
   // ---- 生命周期（写 + 读） ----

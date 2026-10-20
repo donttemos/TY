@@ -16,6 +16,10 @@
  *   与列表页所见一致——口径本身无误，缺的是**标注**：非 all 档时在范围敏感卡（用户数 / 审计记录）
  *   副标题标注生效范围，避免「用户数 1」被误读为全站规模；角色数 / 权限点是全局目录（无范围概念），不标注。
  * @module admin-web/views
+ * @modified 2026-10-20 donttemo M14/PRD-014 B4（FR-14-14）：新增「SaaS 运营」卡区——ops:saas:read
+ *   才请求 /saas/usage/overview（无权限不发请求，沿 R4-05 范式不刷 403、不用 0 冒充）：五态计数 +
+ *   7 天内到期订阅 + 配额风险（≥80% TOP）+ 最近迁移；每项可点击跳转对应运营页。常用入口补套餐/
+ *   订阅/生命周期三项（按权限过滤）。
 -->
 
 <script setup lang="ts">
@@ -25,6 +29,8 @@ import { useUserStore } from '@/store/user';
 import * as userApi from '@/api/user';
 import * as roleApi from '@/api/role';
 import * as auditApi from '@/api/audit';
+import { fetchOpsOverview } from '@/api/saas';
+import type { OpsOverview } from '@/api/saas';
 import type { PermissionCode } from '@/api/types';
 
 const router = useRouter();
@@ -69,7 +75,31 @@ const QUICK_LINKS: { title: string; path: string; desc: string; permission: Perm
   { title: '用户管理', path: '/system/users', desc: '账号、角色分配与状态', permission: 'user:read' },
   { title: '角色权限', path: '/system/roles', desc: '菜单 / 按钮 / 接口三层授权', permission: 'role:read' },
   { title: '审计日志', path: '/system/audit-logs', desc: '操作记录与字段级 diff', permission: 'audit:read' },
+  { title: '套餐管理', path: '/saas/plans', desc: '套餐版本、配额与发布', permission: 'ops:saas:read' },
+  { title: '订阅管理', path: '/saas/subscriptions', desc: '全局订阅、状态与详情', permission: 'ops:saas:read' },
+  { title: '租户生命周期', path: '/saas/lifecycle', desc: '状态迁移与操作时间线', permission: 'ops:saas:read' },
 ];
+
+/** SaaS 运营卡区（FR-14-14）：权限门控取数，失败降级为 null（显示「—」不用 0 冒充） */
+const saasCanRead = computed(() => user.hasPermission('ops:saas:read'));
+const saasLoading = ref(true);
+const saasOverview = ref<OpsOverview | null>(null);
+const saasFailed = ref(false);
+
+/** 五态计数卡定义（顺序即展示顺序） */
+const SAAS_STATUS_CARDS: Array<{ key: keyof OpsOverview['tenantCounts']; label: string; path: string }> = [
+  { key: 'active', label: '生效中', path: '/saas/subscriptions' },
+  { key: 'grace', label: '宽限期', path: '/saas/subscriptions' },
+  { key: 'frozen', label: '已冻结', path: '/saas/lifecycle' },
+  { key: 'terminated', label: '已终止', path: '/saas/lifecycle' },
+];
+
+/** 剩余天数（到期文案；负数 = 已过期） */
+function daysLeft(expireAt: string | null): string {
+  if (!expireAt) return '无期限';
+  const d = Math.ceil((new Date(expireAt).getTime() - Date.now()) / 86_400_000);
+  return d >= 0 ? `${d} 天` : `已逾期 ${-d} 天`;
+}
 
 const quickLinks = computed(() => QUICK_LINKS.filter((link) => user.hasPermission(link.permission)));
 
@@ -102,6 +132,16 @@ onMounted(async () => {
     }),
   );
   loading.value = false;
+
+  // SaaS 运营总览：无 ops:saas:read 不发请求（不刷 403、不显示误导性 0）
+  if (saasCanRead.value) {
+    try {
+      saasOverview.value = await fetchOpsOverview();
+    } catch {
+      saasFailed.value = true;
+    }
+  }
+  saasLoading.value = false;
 });
 </script>
 
@@ -132,6 +172,55 @@ onMounted(async () => {
           <div class="fw-dashboard-link-title">{{ link.title }}</div>
           <div class="fw-text-weak">{{ link.desc }}</div>
         </div>
+      </div>
+    </div>
+
+    <!-- SaaS 运营卡区（M14 FR-14-14）：权限门控；失败显示「—」不用 0 冒充 -->
+    <div v-if="saasCanRead" class="fw-card">
+      <h3 class="fw-dashboard-section-title">SaaS 运营</h3>
+      <div v-loading="saasLoading" class="fw-saas-body">
+        <template v-if="saasOverview">
+          <div class="fw-saas-status-row">
+            <div v-for="c in SAAS_STATUS_CARDS" :key="c.key" class="fw-saas-status-card" @click="router.push(c.path)">
+              <div class="fw-saas-status-value">{{ saasOverview.tenantCounts[c.key] }}</div>
+              <div class="fw-text-weak">{{ c.label }}</div>
+            </div>
+          </div>
+          <div class="fw-saas-grid">
+            <div>
+              <h4 class="fw-saas-sub-title">即将到期订阅（7 天）</h4>
+              <div v-if="saasOverview.expiringSubscriptions.length" class="fw-saas-list">
+                <div v-for="s in saasOverview.expiringSubscriptions" :key="s.subscriptionId" class="fw-saas-item" @click="router.push(`/saas/subscriptions?tenantId=${s.tenantId}`)">
+                  <span class="fw-saas-item-main">{{ s.tenantId }}</span>
+                  <span class="fw-text-weak">{{ daysLeft(s.expireAt) }}</span>
+                </div>
+              </div>
+              <p v-else class="fw-text-weak">7 天内无到期订阅。</p>
+            </div>
+            <div>
+              <h4 class="fw-saas-sub-title">配额风险（≥80%）</h4>
+              <div v-if="saasOverview.quotaRisks.length" class="fw-saas-list">
+                <div v-for="(r, i) in saasOverview.quotaRisks.slice(0, 5)" :key="`${r.tenantId}-${r.quotaKey}-${r.windowType}-${i}`" class="fw-saas-item" @click="router.push(`/saas/usage?tenantId=${r.tenantId}`)">
+                  <span class="fw-saas-item-main">{{ r.quotaKey }}</span>
+                  <el-progress :percentage="Math.min(100, Math.round(r.ratio))" :stroke-width="10" :status="r.ratio >= 100 ? 'exception' : 'warning'" class="fw-saas-ratio" />
+                  <span class="fw-text-weak">{{ r.used }}/{{ r.limitValue }}</span>
+                </div>
+              </div>
+              <p v-else class="fw-text-weak">当前无接近上限的指标。</p>
+            </div>
+            <div>
+              <h4 class="fw-saas-sub-title">最近生命周期变更</h4>
+              <div v-if="saasOverview.recentTransitions.length" class="fw-saas-list">
+                <div v-for="(l, i) in saasOverview.recentTransitions.slice(0, 5)" :key="i" class="fw-saas-item" @click="router.push(`/saas/lifecycle?tenantId=${l.tenantId}`)">
+                  <span class="fw-saas-item-main">{{ l.tenantId }}</span>
+                  <el-tag size="small" :type="l.toStatus === 'active' ? 'success' : 'warning'">{{ l.fromStatus ?? '∅' }} → {{ l.toStatus }}</el-tag>
+                </div>
+              </div>
+              <p v-else class="fw-text-weak">暂无迁移记录。</p>
+            </div>
+          </div>
+        </template>
+        <p v-else-if="saasFailed" class="fw-text-weak">运营总览取数失败（点击各运营页查看实时数据）。</p>
       </div>
     </div>
   </div>
@@ -194,5 +283,76 @@ onMounted(async () => {
 .fw-dashboard-link-title {
   font-weight: 600;
   margin-bottom: 4px;
+}
+
+.fw-saas-body {
+  min-height: 120px;
+}
+
+.fw-saas-status-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.fw-saas-status-card {
+  padding: 12px;
+  border: 1px solid var(--fw-border);
+  border-radius: 8px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.fw-saas-status-card:hover {
+  border-color: var(--el-color-primary);
+}
+
+.fw-saas-status-value {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--el-color-primary);
+}
+
+.fw-saas-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 16px;
+}
+
+.fw-saas-sub-title {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.fw-saas-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fw-saas-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--fw-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.fw-saas-item:hover {
+  border-color: var(--el-color-primary);
+}
+
+.fw-saas-item-main {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fw-saas-ratio {
+  flex: 1;
 }
 </style>

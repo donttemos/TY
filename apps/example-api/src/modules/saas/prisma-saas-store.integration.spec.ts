@@ -276,3 +276,120 @@ describe('PrismaSaasStore 订阅列表查询（M14/PRD-014 FR-14-07 端口语义
     expect(history.map((s) => s.id)).toEqual([t2sub!.id]);
   });
 });
+
+/*
+ * 五态 Int 编码的真实库回归（ADR-0029 §2.4，P0 修正）。
+ * 全部用例在真实 SQLite（全量迁移 DDL 直建）上跑，不用 Fake——编码缺陷只会在驱动层暴露：
+ * 旧实现「读 0 → frozen、写 pending → 0、frozen 条件更新按 3 匹配」，使存量停用租户
+ * 永远 resume/terminate 不了（4030 死锁），并把存量停用误计为 pending。
+ */
+describe('PrismaSaasStore 五态 Int 编码（0 = 存量停用 → frozen，pending 独占 5）', () => {
+  it('status = 0 直读为 frozen，且不计入 pending 计数', async () => {
+    const frozenBefore = await store!.countTenantsByStatus('frozen');
+    const pendingBefore = await store!.countTenantsByStatus('pending');
+    await prisma!.tenant.create({ data: { id: 'lg-disabled', code: 'lg-disabled', name: '存量停用租户', status: 0 } });
+
+    // 0 是存量停用（M8 语义：管理端停用与历史数据都写 0），按 frozen 读
+    expect(await store!.findTenantStatus('lg-disabled')).toBe('frozen');
+    // 存量 0 属冻结：frozen 计数 +1；pending 计数不得变化（旧实现把 0 当 pending 记）
+    expect(await store!.countTenantsByStatus('frozen')).toBe(frozenBefore + 1);
+    expect(await store!.countTenantsByStatus('pending')).toBe(pendingBefore);
+  });
+
+  it('存量 0 可经 resume 迁移为 active（条件更新须匹配 0，否则 4030 死锁）', async () => {
+    await prisma!.tenant.create({ data: { id: 'lg-resume', code: 'lg-resume', name: '存量停用待恢复', status: 0 } });
+    // 旧实现：读 0 得 frozen → 条件更新按 status=3 匹配不到 → 重读仍 frozen ≠ active → 4030
+    await expect(lifecycle!.transition('lg-resume', 'resume', { actorType: 'user', reason: '存量恢复' })).resolves.toEqual({
+      from: 'frozen',
+      to: 'active',
+      alreadyApplied: false,
+    });
+    // 写码恒为规范值：库里由存量 0 归一为 1
+    expect((await prisma!.tenant.findUnique({ where: { id: 'lg-resume' } }))?.status).toBe(1);
+    const logs = await store!.listLifecycleLogs('lg-resume');
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ fromStatus: 'frozen', toStatus: 'active', action: 'resume', reason: '存量恢复' });
+  });
+
+  it('存量 0 在布尔拦截口径下仍按冻结拒绝（4031），不因 0/3 双码漏拦', async () => {
+    await prisma!.tenant.create({ data: { id: 'lg-blocked', code: 'lg-blocked', name: '存量停用待拦截', status: 0 } });
+    expect(await store!.findTenantStatus('lg-blocked')).toBe('frozen');
+    await expect(lifecycle!.assertNotSuspended('lg-blocked')).rejects.toMatchObject({ code: 4031 });
+  });
+
+  it('pending 读写一致：落库 5 → 读回 pending，且 pending → active 可开通', async () => {
+    const pendingBefore = await store!.countTenantsByStatus('pending');
+    // 模拟开通流程落库的待开通租户（旧实现该态写 0，读回即 frozen，此后 activate 恒 4030）
+    await prisma!.tenant.create({ data: { id: 'pd-new', code: 'pd-new', name: '待开通租户', status: 5 } });
+
+    expect(await store!.findTenantStatus('pd-new')).toBe('pending');
+    expect(await store!.countTenantsByStatus('pending')).toBe(pendingBefore + 1);
+
+    await expect(lifecycle!.transition('pd-new', 'activate', { actorType: 'user' })).resolves.toEqual({
+      from: 'pending',
+      to: 'active',
+      alreadyApplied: false,
+    });
+    expect((await prisma!.tenant.findUnique({ where: { id: 'pd-new' } }))?.status).toBe(1);
+  });
+
+  it('写路径只产生规范码：全链迁移落库值依次为 2/3/1/4，永不写存量码 0', async () => {
+    await prisma!.tenant.create({ data: { id: 'chain', code: 'chain', name: '全链租户', status: 1 } });
+    const steps = [
+      ['expire', 2], // active → grace
+      ['freeze', 3], // grace  → frozen
+      ['resume', 1], // frozen → active
+      ['terminate', 4], // active → terminated
+    ] as const;
+    for (const [action, expected] of steps) {
+      await lifecycle!.transition('chain', action, { actorType: 'system' });
+      const row = await prisma!.tenant.findUnique({ where: { id: 'chain' } });
+      expect(row?.status).toBe(expected);
+      // 关键不变量：领域写路径绝不产生 0（0 只作为存量读码存在）
+      expect(row?.status).not.toBe(0);
+    }
+  });
+
+  it('未知编码 fail-closed 按 frozen 兜底（null 仅表示租户不存在），并可经 terminate 归一', async () => {
+    const frozenBefore = await store!.countTenantsByStatus('frozen');
+    await prisma!.tenant.create({ data: { id: 'dirty', code: 'dirty', name: '脏编码租户', status: 9 } });
+
+    // 脏值不得被读成 null（旧实现 → 生命周期服务误报 404 租户不存在）
+    expect(await store!.findTenantStatus('dirty')).toBe('frozen');
+    expect(await store!.findTenantStatus('no-such-tenant')).toBeNull();
+    // 计数与直读同口径
+    expect(await store!.countTenantsByStatus('frozen')).toBe(frozenBefore + 1);
+
+    await expect(lifecycle!.transition('dirty', 'terminate', { actorType: 'user' })).resolves.toEqual({
+      from: 'frozen',
+      to: 'terminated',
+      alreadyApplied: false,
+    });
+    expect((await prisma!.tenant.findUnique({ where: { id: 'dirty' } }))?.status).toBe(4);
+  });
+});
+
+describe('PrismaSaasStore 运营看板端口（M14/PRD-014 FR-14-12/14）', () => {
+  it('listWindows（day 当前窗口）/ countTenantsByStatus / listRecentLifecycleLogs', async () => {
+    // t1 产生 day 窗口行（limit=12，消耗 6）
+    await store!.consumeAtomic(
+      { tenantId: 't1', quotaKey: 'api_calls', quantity: 6n, occurredAt: new Date(), source: 'test', idempotencyKey: 'ov-int-1' },
+      12n,
+      'hard',
+    );
+    const dayStart = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), new Date().getUTCDate()));
+    const wins = await store!.listWindows('day', dayStart);
+    expect(wins.some((w) => w.tenantId === 't1' && w.used === 6n && w.limitValue === 12n)).toBe(true);
+
+    // 五态计数（seedDomain：t2 保持 Int=1 → active；前序 describe 改过 t1/t9，故用相对断言）
+    expect(await store!.countTenantsByStatus('active')).toBeGreaterThanOrEqual(1);
+
+    // 最近迁移：跨租户 desc + take（t2 冻结 → frozen 计数 +1）
+    await lifecycle!.transition('t2', 'freeze', { actorType: 'system', reason: '看板测试' });
+    expect(await store!.countTenantsByStatus('frozen')).toBeGreaterThanOrEqual(1);
+    const recent = await store!.listRecentLifecycleLogs(5);
+    expect(recent.length).toBeGreaterThanOrEqual(1);
+    expect(recent[0].action).toBe('freeze');
+    for (let i = 1; i < recent.length; i++) expect(recent[i].at.getTime()).toBeLessThanOrEqual(recent[i - 1].at.getTime());
+  });
+});

@@ -18,6 +18,13 @@
 
 ## [Unreleased]
 
+### Fixed（P0：生命周期状态映射，2026-10-21）
+
+- **修正 `tenants.status` 五态 Int 映射非双射**（ADR-0029 §2.4）：旧实现「写 `pending=0` / 读 `0=frozen`」，而 0 自 M8 起即「存量停用」（`@fw/tenant` 4001 判定、租户管理端 `disableTenant`、回填脚本均依赖该语义）。**已可达**后果：① 存量停用租户 `resume`/`terminate` 的条件更新按 `status=3` 匹配不到存量 0 → 恒 4030 死锁，且错误码把排障引向迁移表；② `countTenantsByStatus('pending')` 把存量停用计为待开通、`'frozen'` 反而漏计，运营总览 `tenantCounts` 双口径失真。**定案**：0 为只读兼容码（读作 frozen，写路径永不产生），`pending` 独占编码 **5**——读写双射且**零迁移**（Int 列空闲值，存量语义不变、可回滚）。
+- `frozen` 的条件匹配与计数改用「非冻结码补集」（`status NOT IN (1,2,4,5)`），一次覆盖存量 0、规范 3 与未知脏值，使 `findTenantStatus` / `countTenantsByStatus` / `conditionalUpdateStatus` 三者口径一致；未知编码 fail-closed 按 frozen 处理（可经 resume/terminate 归一），不再被误报为 404「租户不存在」。
+- `@fw/tenant.assertUsable` 同拒 0 与 5（未开通租户 fail-closed 不可用）。新增真实库集成测试 6 例（`status=0` 直读/计数/resume/4031、pending 往返与开通、写路径不产生 0、脏值兜底）与 `@fw/tenant` 待开通用例。
+- **升级提示**：本项涉及 `packages/tenant` 运行时代码，需重建产物（`pnpm --filter @fw/tenant build`）后 example-api 才生效。
+
 ## [0.7.0] - 2026-10-19
 
 ### M13：SaaS 运营基础全量（六个 Added 批次 + 一个 Fixed 批次，见下）
@@ -26,6 +33,19 @@
 - 真机部署按 release10 范式执行：M13 十表 PG 迁移 + seed 重跑（权限点/菜单，用户需重登）+ backfill 幂等回填 + 原子切换。
 - **真机验收通过**（106.55.32.251）：迁移/seed/backfill/切换/HTTPS 全链 ✓；冻结-恢复 E2E 落库与日志 ✓；4031 拦截在单租户模式（TENANT_ENABLED=false）按设计不生效，启用为环境决策项（详见 docs/90 §4）。
 - **修复：SaaS 四页真机 404**——四页误挂 /system 目录导致前端嵌套路由拼成 /system/saas/*；seed/mock 改为顶层「SaaS 运营」目录（/saas），真机重跑 seed 已验证（用户刷新/重登即恢复）。附带根治：1Panel 站点 index.html 补 no-cache 头（详见 docs/90 §4）。
+
+## [Unreleased]
+
+### Added（M14/PRD-014 B4：用量看板 + 运营首页，2026-10-20）
+
+- **用量趋势 / 明细 / 平台总览端点（FR-14-12/14，OQ-14-3 定案：查询时聚合零迁移）**：`GET /saas/tenants/:id/usage/trend`（hours ∈ 24/48/72/168/720，UTC 小时（≤48h）/天（>48h）桶聚合并填零序列）；`GET /saas/tenants/:id/usage/events`（明细分页，hours ∈ 24/72/168/720 ≤30 天，occurredAt desc，内存分页 pageSize ≤200，事件量级可控大量化后立 ADR 升级）；`GET /saas/usage/overview`（配额风险 day+month 窗口 ≥80% TOP20 + 7 天内到期订阅 + 五态计数 + 最近迁移 10 条）。存储端口扩展 `listWindows` / `countTenantsByStatus` / `listRecentLifecycleLogs`（Fake + Prisma 双实现，三库矩阵 CI 覆盖）。
+- **用量页看板化（FR-14-13）**：趋势柱状图（纯 CSS 零新依赖）+ hours 切换 + 事件明细分页表；切换指标一键刷新用量/趋势/明细。
+- **工作台 SaaS 运营首页（FR-14-14）**：新增「SaaS 运营」卡区——五态计数 + 即将到期订阅（7 天）+ 配额风险（≥80%，含 mini 进度条）+ 最近生命周期变更；`ops:saas:read` 权限门控取数（无权限不发请求、失败降级「—」不用 0 冒充）；常用入口补套餐/订阅/生命周期三项。点击卡片跳转对应运营页。
+- **测试**：@fw/saas 31/31（+2 看板端口用例，覆盖率 91.8/82.1/88.9/94.2）；example-api saas 44/44（控制器 19 + Prisma 集成 + 守卫）；admin-web 新增视图测试 9 例（dashboard-saas 4 + usage-page 2 + 既有 dashboard-permission 补 saas mock）；api-spec §3.21 十七端点；mock 三端点同构；smoke-saas-ops +S15 四例（33/33）。
+
+### Fixed（M14 B2/B4：运营端点入参校验错误通道修正，2026-10-20）
+
+- **B2/B4 新增端点的入参校验从「信封直返」改为 `throw BizError`（BAD_REQUEST）**：此前 return `{code:1001,...}` 会被全局响应拦截器再包一层信封（`{code:0, data:{code:1001}}`），前端按顶层 code 判定会误判为成功——B4 端到端冒烟实测暴露。现 12 处校验统一走异常过滤器：HTTP 400 + 单层信封 + 1001。M13 既有端点（usage GET / usage/events POST / lifecycle POST 的同形态校验）本次不改动以稳定契约，登记遗留小修。控制器单测 8 处断言同步改 rejects 形态。
 
 ## [0.7.5] - 2026-10-20
 

@@ -5,9 +5,12 @@
  *   - consumeAtomic：单事务内「事件插入（幂等键唯一约束）→ 窗口行初始化（撞唯一键重读）→
  *     条件 UPDATE（used + qty <= limit）」；exceeded 时整体回滚（事件一并撤销，不留痕不扣减）；
  *   - conditionalUpdateStatus：tenants.status 条件更新（Int 映射，affected===1 才算生效）；
+ *     存量停用的 0 与规范的 3 同读作 frozen（见下方编码表），写路径只产生规范码；
  *   - 一租户一生效订阅：active_marker 唯一索引兜底，服务层先行校验（ADR-0029 §3.3）。
  * @author donttemo
  * @created 2026-10-19
+ * @modified 2026-10-21 donttemo P0：修正五态 Int 映射不对称——0 归还「存量停用」只读语义，
+ *   pending 改占独立编码 5（原写 pending=0 / 读 0=frozen，写 pending 即落成停用且永久卡死）
  * @module example-api/saas
  */
 
@@ -29,9 +32,60 @@ import type {
 } from '@fw/saas';
 import type { SaasStore } from '@fw/saas';
 
-/** 五态 ↔ tenants.status Int 映射（ADR-0029 §2.2：0 存量停用 → frozen，1 → active） */
-const STATUS_TO_INT: Record<LifecycleStatus, number> = { pending: 0, active: 1, grace: 2, frozen: 3, terminated: 4 };
-const INT_TO_STATUS: Record<number, LifecycleStatus> = { 0: 'frozen', 1: 'active', 2: 'grace', 3: 'frozen', 4: 'terminated' };
+/**
+ * 五态 ↔ tenants.status Int 编码（ADR-0029 §2.4，2026-10-21 修正）。
+ *
+ * **写码**（唯一权威，写路径只产生这五个值）：
+ *   pending=5 / active=1 / grace=2 / frozen=3 / terminated=4。
+ *
+ * **读码**（兼容存量，0 与 3 同为 frozen）：
+ *   0 = 存量停用（M8 既有语义：租户管理端停用、历史数据均为 0）→ 读作 frozen；
+ *   1/2/3/4 = 同写码；5 = pending。
+ *
+ * 为什么 pending 不复用 0（本次修正的 P0 起因）：0 自 M8 起就是「停用」的既有语义，且被三处强依赖——
+ *   ① `@fw/tenant` 的 assertUsable 仅拒 0（4001 fail-closed）；② 租户管理端 disableTenant 写 0；
+ *   ③ ADR-0029 回填脚本把 0 读作 frozen 并落 cancelled 订阅。
+ * 旧实现「写 pending=0 / 读 0=frozen」因此**非双射**，已可达的后果有两个：
+ *   ① frozen 的条件更新按 3 匹配不到存量 0 → 经生命周期服务 resume/terminate 恒 4030（只能绕道
+ *      租户管理端直写 status，而那是 ADR-0031 §2.3 禁止的写路径；错误码还误导排障方向）；
+ *   ② 0 横跨两个领域态 → countTenantsByStatus('pending') 把存量停用误计为待开通、'frozen' 又漏计，
+ *      同一行还会被 findTenantStatus 读作 frozen 却被统计成 pending（读路径与统计自相矛盾）。
+ *   另有契约地雷：未来任何开通流程按旧表写 pending 都会落成停用（4001/4031 双拒且 activate 恒 4030）。
+ * 故 0 只读不写（存量兼容），pending 独占 5——读写双射。
+ * 0 不需要数据迁移：5 是 Int 列上从未使用过的空闲值，存量 0 语义不变（旧环境零破坏）。
+ */
+const STATUS_TO_INT: Record<LifecycleStatus, number> = { pending: 5, active: 1, grace: 2, frozen: 3, terminated: 4 };
+
+/** 读码 → 领域态：登记存量 0 → frozen；未登记编码（脏值）由调用方兜底，见 findTenantStatus */
+const INT_TO_STATUS: Readonly<Record<number, LifecycleStatus>> = {
+  0: 'frozen',
+  1: 'active',
+  2: 'grace',
+  3: 'frozen',
+  4: 'terminated',
+  5: 'pending',
+};
+
+/**
+ * 非冻结态的规范编码集。frozen 的匹配集取其**补集**（`notIn`）而非枚举 [0, 3]：
+ * 既覆盖存量 0 与规范 3，也把未登记的脏值一并按冻结处理（fail-closed —— 未知状态绝不放行为可用），
+ * 使 findTenantStatus / countTenantsByStatus / conditionalUpdateStatus 三者口径完全一致；
+ * 且脏值租户仍可经 resume / terminate 归一到规范码，不会卡在无法迁移的死态。
+ */
+const NON_FROZEN_INTS: readonly number[] = [
+  STATUS_TO_INT.pending,
+  STATUS_TO_INT.active,
+  STATUS_TO_INT.grace,
+  STATUS_TO_INT.terminated,
+];
+
+/** tenants.status 的条件形态：等值 / 集合（frozen 用补集表达，见 NON_FROZEN_INTS） */
+type StatusFilter = number | { notIn: number[] };
+
+/** 某领域态「来源」匹配条件：frozen 匹配全部非冻结码的补集，其余为等值 */
+function statusMatchFilter(status: LifecycleStatus): StatusFilter {
+  return status === 'frozen' ? { notIn: [...NON_FROZEN_INTS] } : STATUS_TO_INT[status];
+}
 
 /** Prisma 唯一约束冲突（P2002）判定 */
 function isUniqueViolation(e: unknown): boolean {
@@ -81,6 +135,7 @@ interface SaasTx {
   };
   tenantQuotaWindow: {
     findUnique(args: { where: { tenantId_quotaKey_windowType_windowStart: { tenantId: string; quotaKey: string; windowType: string; windowStart: Date } } }): Promise<{ used: bigint; limitValue: bigint; execution: string; warnedAt: Date | null } | null>;
+    findMany(args: { where: { windowType: string; windowStart: Date } }): Promise<Array<{ tenantId: string; quotaKey: string; used: bigint; limitValue: bigint; execution: string }>>;
     create(args: { data: { tenantId: string; quotaKey: string; windowType: string; windowStart: Date; limitValue: bigint; execution: string } }): Promise<unknown>;
     updateMany(args: { where: { tenantId: string; quotaKey: string; windowType: string; windowStart: Date; used?: { lte: bigint }; warnedAt?: { isSet: false } | null }; data: { used?: { increment: bigint }; warnedAt?: Date } }): Promise<{ count: number }>;
   };
@@ -94,11 +149,12 @@ interface SaasTx {
   };
   tenant: {
     findUnique(args: { where: { id: string } }): Promise<{ status: number } | null>;
-    updateMany(args: { where: { id: string; status: number }; data: { status: number } }): Promise<{ count: number }>;
+    updateMany(args: { where: { id: string; status: StatusFilter }; data: { status: number } }): Promise<{ count: number }>;
+    count(args: { where: { status: StatusFilter } }): Promise<number>;
   };
   tenantLifecycleLog: {
     create(args: { data: { tenantId: string; fromStatus: string | null; toStatus: string; action: string; actorType: string; actorId?: string | null; reason?: string | null; ip?: string | null; userAgent?: string | null; traceId?: string | null; requestId?: string | null } }): Promise<unknown>;
-    findMany(args: { where: { tenantId: string }; orderBy?: Array<Record<string, string>> }): Promise<Array<Omit<LifecycleLog, 'at'> & { createdAt: Date }>>;
+    findMany(args: { where?: { tenantId?: string }; orderBy?: Array<Record<string, string>>; take?: number }): Promise<Array<Omit<LifecycleLog, 'at'> & { createdAt: Date }>>;
   };
 }
 
@@ -337,6 +393,10 @@ export class PrismaSaasStore implements SaasStore {
     return row ? { used: row.used, limitValue: row.limitValue, execution: row.execution, warnedAt: row.warnedAt } : null;
   }
 
+  async listWindows(windowType: string, windowStart: Date): Promise<Array<{ tenantId: string; quotaKey: string; used: bigint; limitValue: bigint; execution: string }>> {
+    return this.tx.tenantQuotaWindow.findMany({ where: { windowType, windowStart } });
+  }
+
   async markWarned(tenantId: string, quotaKey: string, windowType: string, windowStart: Date, at: Date): Promise<boolean> {
     const res = await this.tx.tenantQuotaWindow.updateMany({
       where: { tenantId, quotaKey, windowType, windowStart, warnedAt: null },
@@ -365,13 +425,17 @@ export class PrismaSaasStore implements SaasStore {
   // ---- LifecycleStore ----
   async findTenantStatus(tenantId: string): Promise<LifecycleStatus | null> {
     const row = await this.tx.tenant.findUnique({ where: { id: tenantId } });
-    return row ? (INT_TO_STATUS[row.status] ?? null) : null;
+    if (!row) return null; // 端口契约：null 仅表示「租户不存在」，不与未知编码混淆
+    // 存量 0 → frozen（见编码表）；未登记脏值 fail-closed 按 frozen 处理（未知状态绝不放行为可用）
+    return INT_TO_STATUS[row.status] ?? 'frozen';
   }
 
   async conditionalUpdateStatus(tenantId: string, from: LifecycleStatus, to: LifecycleStatus): Promise<boolean> {
     const res = await this.tx.tenant.updateMany({
-      where: { id: tenantId, status: STATUS_TO_INT[from] },
-      data: { status: STATUS_TO_INT[to] },
+      // from='frozen' 匹配 0 与 3 两码（含脏值）——存量停用租户据此可被 resume/terminate 迁移，
+      // 不再出现「读作 frozen、条件更新匹配不到 3、重读仍是 frozen → 4030」的永久死锁
+      where: { id: tenantId, status: statusMatchFilter(from) },
+      data: { status: STATUS_TO_INT[to] }, // 写码恒为规范值：存量 0 被迁移时归一为 3
     });
     return res.count === 1;
   }
@@ -396,6 +460,17 @@ export class PrismaSaasStore implements SaasStore {
 
   async listLifecycleLogs(tenantId: string): Promise<LifecycleLog[]> {
     const rows = await this.tx.tenantLifecycleLog.findMany({ where: { tenantId }, orderBy: [{ createdAt: 'asc' }] });
+    return rows.map((r) => ({ ...r, at: r.createdAt }));
+  }
+
+  async countTenantsByStatus(status: LifecycleStatus): Promise<number> {
+    // 与 findTenantStatus 同口径：'frozen' 计 {0, 3, 脏值}（存量停用属冻结，不再漏计）；
+    // 'pending' 只计 5（存量 0 不会再被误计为待开通）
+    return this.tx.tenant.count({ where: { status: statusMatchFilter(status) } });
+  }
+
+  async listRecentLifecycleLogs(limit: number): Promise<LifecycleLog[]> {
+    const rows = await this.tx.tenantLifecycleLog.findMany({ orderBy: [{ createdAt: 'desc' }], take: limit });
     return rows.map((r) => ({ ...r, at: r.createdAt }));
   }
 
