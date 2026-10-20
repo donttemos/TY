@@ -76,11 +76,25 @@ CSV 导出列同步：`...,traceId,requestId,familyId,category,event,before,afte
 M12 十五列位置与顺序不变。`eventName`/`risk` 由注册表现算，未登记事件留空——
 导出面与页面同语义，不另造一套口径）。
 
+**CSV 单元格编码含公式注入防护**（M15 安全加固）：`summary` / `targetLabel` / `actorLabel` / `reason`
+等列是用户可控文本（导入数据、历史数据、其他写入路径都会带进来），**引号转义不等于防护**——
+`"=1+1"` 在 Excel 里仍是公式（引号只是分隔符，不进单元格值）。统一由 `@fw/auth` 的
+`escapeCsvCell` 编码：`= + - @` 与制表符开头的单元格加单引号前缀强制按文本解析，CR/LF 压成空格，
+其余字符（含引号）原样转义、不截断。mock 侧 `apps/admin-web/mock/csv-cell.ts` 是同源实现，
+两侧锚点由 `check:triway-consistency` 轴 H 对撞，行为由三处同组向量单测锁定；
+不能只靠 UI 输入校验防住——导入数据、历史数据与其他写入路径都不经过前端。
+
 **事件语义不在数据库里，在注册表里**（M15/ADR-0032 R1）：`GET /api/v1/audit-logs/events` 返回
 `{ version, items }`，`items[]` 定义事件名称/说明/分类/风险/处理指引/摘要模板/变更字段中文名。
 日志、审计行、页面、导出四处对同一事件码的解释都必须来自这一份定义——前端不得维护第二份翻译表。
 审计行只冻结**事实快照**（`summary` / `target_label` / `actor_label` / `reason` / `audit_source`），
 不冻结字典：文案纠错不需要重写历史行。
+
+**快照缺失时的展示口径**：`actor_label` 由 `AuditService.persist` 在**写入时刻**集中补全
+（调用方未显式传值时按 `userId` 回查昵称/账号名），因此新行不会有「有操作人 ID 却没有名字」的情况。
+历史行（加固前写入）确实没有快照：页面与详情**标注「名称快照缺失（ID: …）」**，绝不拿当前用户列表
+的名称回填——管理员「运营 A」改名「运营 B」后，历史行必须仍显示当时的人，否则是把今天的事实写成昨天的。
+用户已删除 / 回查失败同样留空，不用后来者的名字冒充。
 
 ## 6. 排障样例：看到 `replay_detected`，一次拉全链（G12-3）
 
@@ -123,6 +137,13 @@ curl -s http://127.0.0.1:3000/metrics | grep '^fw_security_replay_detected_total
 > 口径：**「必须审计」= 改了权限、动了租户、动了钱（套餐/配额）、动了全局配置、或发生拒绝**。
 > 矩阵是评审与门禁的共同依据：新增事件必须同时出现在注册表（`packages/auth/src/audit-events.ts`）、
 > 本表与一个真实写入点；三者缺一不算交付——由 `pnpm run check:audit-events` 门禁强制（CI 已接入）。
+>
+> **「写入点」的判定口径（M15 安全加固后收紧）**：注册表定义文件本身**不算**写入点（它列出全部事件码，
+> 是码表不是「有人真的记了这条审计」）；只认 `recordEvent('…')` / `recordEventSync('…')` 直接调用、
+> 服务端文件里的 `event: '…'` 属性，以及**显式标注 `@audit-event-map` 的事件映射表**
+> （如 saas 的 `LIFECYCLE_EVENTS[action]`）。「任意字面量出现即算」的做法已废弃——那样删掉真实写入调用
+> 后门禁依旧是绿的。门禁判定逻辑（`scripts/lib/audit-gate.mjs`）另有反向测试
+> （`pnpm run check:audit-events:test`）：删掉某事件唯一写入点后必须判红。
 >
 > mock 侧注册表（`apps/admin-web/mock/audit-events.ts`）是**自动生成物**：由 `pnpm run gen:audit-events-mock`
 > 从 `@fw/auth` 注册表生成，`check:audit-events` 校验其是否最新。手抄副本会漂移——B3 首版只抄 12 条，

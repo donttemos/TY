@@ -11,6 +11,8 @@
  * @created 2026-10-19
  * @modified 2026-10-21 donttemo P0：修正五态 Int 映射不对称——0 归还「存量停用」只读语义，
  *   pending 改占独立编码 5（原写 pending=0 / 读 0=frozen，写 pending 即落成停用且永久卡死）
+ * @modified 2026-10-20 donttemo 订阅开通落地为单事务（createSubscriptionWithSnapshot：订阅行 +
+ *   全部配额快照行同成同败），移除独立 createSubscription
  * @module example-api/saas
  */
 
@@ -248,15 +250,38 @@ export class PrismaSaasStore implements SaasStore {
     return this.tx.tenantSubscription.findUnique({ where: { id } });
   }
 
-  async createSubscription(s: { tenantId: string; planId: string; planVersionId: string; effectiveAt: Date; expireAt?: Date | null; activeMarker: string | null }): Promise<SubscriptionView> {
-    try {
-      return await this.tx.tenantSubscription.create({
-        data: { tenantId: s.tenantId, planId: s.planId, planVersionId: s.planVersionId, effectiveAt: s.effectiveAt, expireAt: s.expireAt ?? null, activeMarker: s.activeMarker },
-      });
-    } catch (e) {
-      if (isUniqueViolation(e)) throw new BizError(ErrorCode.CONFLICT, `租户已有生效订阅（active_marker 唯一冲突）`);
-      throw e;
-    }
+  /**
+   * 订阅创建 + 配额快照：**单事务**（ADR-0029 §2.5）。订阅行与全部 tenant_quotas 行同成同败——
+   * 快照第 k 条写失败时，前 k-1 条与订阅行一并回滚，不会留下「已生效但权益不完整」的订阅。
+   * 超时与 consumeAtomic 同档（10s）：批量快照条数为量级可控的小集合（套餐配额项数个位数）。
+   */
+  async createSubscriptionWithSnapshot(
+    s: { tenantId: string; planId: string; planVersionId: string; effectiveAt: Date; expireAt?: Date | null; activeMarker: string | null },
+    quotas: TenantQuotaOverride[],
+  ): Promise<SubscriptionView> {
+    return (this.client as unknown as ClientLike).$transaction(
+      async (tx) => {
+        let sub: SubscriptionView;
+        try {
+          sub = await tx.tenantSubscription.create({
+            data: { tenantId: s.tenantId, planId: s.planId, planVersionId: s.planVersionId, effectiveAt: s.effectiveAt, expireAt: s.expireAt ?? null, activeMarker: s.activeMarker },
+          });
+        } catch (e) {
+          // 抛在事务内：唯一冲突即整体回滚（无任何快照行落库）
+          if (isUniqueViolation(e)) throw new BizError(ErrorCode.CONFLICT, `租户已有生效订阅（active_marker 唯一冲突）`);
+          throw e;
+        }
+        for (const q of quotas) {
+          await tx.tenantQuota.upsert({
+            where: { tenantId_quotaKey: { tenantId: q.tenantId, quotaKey: q.quotaKey } },
+            create: q,
+            update: { overrideValue: q.overrideValue, execution: q.execution ?? null, source: q.source },
+          });
+        }
+        return sub;
+      },
+      { timeout: 10_000 },
+    );
   }
 
   async closeSubscription(id: string, patch: { status: 'expired' | 'cancelled'; reason?: string | null; closedAt: Date }): Promise<void> {

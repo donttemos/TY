@@ -5,6 +5,7 @@
  *   observe 仅留痕、rollup 重算闭环。store 为内存 Fake（原子语义按 ADR-0030 §2.5 模拟）。
  * @author donttemo
  * @created 2026-10-19
+ * @modified 2026-10-20 donttemo 新增订阅开通原子性用例（快照中途失败全回滚 + 单行入口回归哨兵）
  * @module @fw/saas
  */
 import { describe, expect, it } from 'vitest';
@@ -25,7 +26,7 @@ async function setup() {
   await store.upsertQuotaDefinition({ key: 'storage_gb', name: '存储', unit: 'gb', windowType: 'total', execution: 'soft' });
   await store.upsertQuotaDefinition({ key: 'audit_rows', name: '审计导出行数', unit: 'count', windowType: 'day', execution: 'observe' });
   const plans = new PlanService(store);
-  const subs = new SubscriptionService(store, store, store);
+  const subs = new SubscriptionService(store, store);
   const quotas = new QuotaService(store, store, store);
   const usage = new UsageService(quotas, store, store);
   return { store, plans, subs, quotas, usage };
@@ -88,6 +89,89 @@ describe('SubscriptionService（ADR-0029 一租户一生效 + 版本快照）', 
     const s2 = await subs.create({ tenantId: 't2', planCode: 'default', planVersion: 1 });
     expect(s2.planVersionId).toBe(v1.id);
     await expect(subs.create({ tenantId: 't3', planCode: 'default', planVersion: 99 })).rejects.toMatchObject({ code: 1002 });
+  });
+});
+
+describe('订阅创建 + 配额快照原子性（ADR-0029 §2.5，故障注入）', () => {
+  /** 三配额项的已发布版本（顺位：api_calls → storage_gb → audit_rows） */
+  async function setupThreeQuotas() {
+    const ctx = await setup();
+    const plan = await ctx.plans.createPlan({ code: 'default', name: '基础版' });
+    const v1 = await ctx.plans.publishVersion(plan.id, {
+      quotas: [
+        { quotaKey: 'api_calls', limitValue: 100n },
+        { quotaKey: 'storage_gb', limitValue: 50n },
+        { quotaKey: 'audit_rows', limitValue: 1000n },
+      ],
+    });
+    return { ...ctx, plan, v1 };
+  }
+
+  it('正常路径：订阅与三条快照一次写全', async () => {
+    const { store, subs, v1 } = await setupThreeQuotas();
+    const sub = await subs.create({ tenantId: 't1', planCode: 'default' });
+    expect(sub.planVersionId).toBe(v1.id);
+    const rows = await store.listTenantQuotaOverrides('t1');
+    expect(rows.map((r) => r.quotaKey).sort()).toEqual(['api_calls', 'audit_rows', 'storage_gb']);
+    expect(rows.every((r) => r.source === 'plan_snapshot')).toBe(true);
+  });
+
+  it('快照第 2 条失败 → 订阅与已写的第 1 条全部回滚', async () => {
+    const { store, subs } = await setupThreeQuotas();
+    store.faultQuotaWriteAt = 2;
+    await expect(subs.create({ tenantId: 't1', planCode: 'default' })).rejects.toThrow(/FAULT_INJECTED/);
+    // 不得留下已生效订阅（含 active_marker 残留——否则重试恒 1003，租户永久无法开通）
+    expect(await subs.findActive('t1')).toBeNull();
+    expect(await store.listSubscriptionsByTenant('t1')).toEqual([]);
+    // 已成功写入的第 1 条快照同样回滚（不留「部分权益」）
+    expect(await store.listTenantQuotaOverrides('t1')).toEqual([]);
+  });
+
+  it('第 1 条快照即失败 → 订阅行也不落库', async () => {
+    const { store, subs } = await setupThreeQuotas();
+    store.faultQuotaWriteAt = 1;
+    await expect(subs.create({ tenantId: 't1', planCode: 'default' })).rejects.toThrow(/FAULT_INJECTED/);
+    expect(await store.listSubscriptionsByTenant('t1')).toEqual([]);
+    expect(await store.listTenantQuotaOverrides('t1')).toEqual([]);
+  });
+
+  it('故障消除后重试：一次成功且快照完整（失败不污染唯一键/序号）', async () => {
+    const { store, subs } = await setupThreeQuotas();
+    store.faultQuotaWriteAt = 3;
+    await expect(subs.create({ tenantId: 't1', planCode: 'default' })).rejects.toThrow(/FAULT_INJECTED/);
+    store.faultQuotaWriteAt = null;
+    const sub = await subs.create({ tenantId: 't1', planCode: 'default' });
+    expect(sub.status).toBe('active');
+    expect((await store.listTenantQuotaOverrides('t1')).length).toBe(3);
+  });
+
+  it('快照读取阶段失败 → 库上零写入（先读后写，读失败不产生订阅）', async () => {
+    const { store, subs } = await setupThreeQuotas();
+    const original = store.listPlanQuotas.bind(store);
+    store.listPlanQuotas = async () => {
+      throw new Error('READ_FAILED'); // fw-allow-raw-throw: ②类测试信号——读阶段故障注入
+    };
+    await expect(subs.create({ tenantId: 't1', planCode: 'default' })).rejects.toThrow('READ_FAILED');
+    expect(await store.listSubscriptionsByTenant('t1')).toEqual([]);
+    store.listPlanQuotas = original;
+  });
+
+  it('服务层只经单事务端口写一次：单行入口 upsertTenantQuota 全程未被调用', async () => {
+    const { store, subs } = await setupThreeQuotas();
+    const atomic = store.createSubscriptionWithSnapshot.bind(store);
+    let atomicCalls = 0;
+    store.createSubscriptionWithSnapshot = (s, q) => {
+      atomicCalls += 1;
+      return atomic(s, q);
+    };
+    // 单行入口一旦被服务层用于快照，即说明退回「订阅与快照分两步写」的旧形态
+    store.upsertTenantQuota = async () => {
+      throw new Error('SINGLE_ROW_WRITE_USED'); // fw-allow-raw-throw: ②类测试信号——写入路径回归哨兵
+    };
+    const sub = await subs.create({ tenantId: 't1', planCode: 'default' });
+    expect(sub.status).toBe('active');
+    expect(atomicCalls).toBe(1);
+    expect((await store.listTenantQuotaOverrides('t1')).length).toBe(3);
   });
 });
 

@@ -5,6 +5,8 @@
  *   涉及并发/幂等语义的方法在注释中写明驱动必须遵守的约束（与 ADR 逐条对应）。
  * @author donttemo
  * @created 2026-10-19
+ * @modified 2026-10-20 donttemo 订阅开通收敛为 createSubscriptionWithSnapshot（订阅 + 配额快照单事务），
+ *   移除可被误用的单步 createSubscription
  * @module @fw/saas
  */
 import type {
@@ -42,14 +44,27 @@ export interface PlanStore {
 export interface SubscriptionStore {
   findActiveSubscription(tenantId: string): Promise<SubscriptionView | null>;
   findSubscriptionById(id: string): Promise<SubscriptionView | null>;
-  createSubscription(s: {
-    tenantId: string;
-    planId: string;
-    planVersionId: string;
-    effectiveAt: Date;
-    expireAt?: Date | null;
-    activeMarker: string | null;
-  }): Promise<SubscriptionView>;
+  /**
+   * 订阅创建 + 版本配额快照（**单事务原子**，ADR-0029 §2.5）：
+   * 驱动必须在同一事务内写入 ① 订阅行 ② quotas 的全部 tenant_quotas 行；
+   * 任一写入失败 → 整体回滚，**不得**留下「订阅已生效、快照缺失/不完整」的半程状态。
+   * active_marker 唯一冲突 → CONFLICT 1003（与既有「一租户一生效订阅」口径一致）。
+   * quotas 由服务层按 plan_quotas 快照生成（source=plan_snapshot）；空数组表示该版本无配额项。
+   *
+   * 端口故意**不提供**「只写订阅、稍后补快照」的入口：订阅生效与权益快照是同一不变量，
+   * 拆两步就必然存在可观测的中间态（旧实现即在此基础上留下半成品订阅）。
+   */
+  createSubscriptionWithSnapshot(
+    s: {
+      tenantId: string;
+      planId: string;
+      planVersionId: string;
+      effectiveAt: Date;
+      expireAt?: Date | null;
+      activeMarker: string | null;
+    },
+    quotas: TenantQuotaOverride[],
+  ): Promise<SubscriptionView>;
   /** 关闭订阅：status ∈ {expired, cancelled}，同时置 activeMarker=NULL 与 closedAt */
   closeSubscription(id: string, patch: { status: 'expired' | 'cancelled'; reason?: string | null; closedAt: Date }): Promise<void>;
   /** 到期扫描（ADR-0031 §2.3）：status=active 且 expireAt < cutoff 的订阅（含 tenantId，供任务逐条迁移） */
@@ -80,6 +95,7 @@ export interface SubscriptionStore {
 export interface QuotaStore {
   findQuotaDefinition(key: string): Promise<QuotaDefinitionView | null>;
   findTenantQuotaOverride(tenantId: string, quotaKey: string): Promise<TenantQuotaOverride | null>;
+  /** 单行覆盖写入（手工覆盖 / 后台改额）；**订阅开通的快照写入不走这里**——必须随订阅同事务 */
   upsertTenantQuota(o: TenantQuotaOverride): Promise<void>;
   listTenantQuotaOverrides(tenantId: string): Promise<TenantQuotaOverride[]>;
 

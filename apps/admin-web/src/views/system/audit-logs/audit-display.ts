@@ -5,9 +5,12 @@
  *   ① 摘要只认 `row.summary`（服务端写入时固化）；缺失时退化为「事件名称 · 对象」，
  *      **不重新渲染模板、不编造句子**——历史行不能凭空长出当时不存在的业务描述；
  *   ② 未登记事件码显示原始码并标注「未登记」，绝不猜测含义；
- *   ③ 结果/风险标签是展示语义，取值集合与后端契约一致（success/denied/failed/unknown）。
+ *   ③ 结果/风险标签是展示语义，取值集合与后端契约一致（success/denied/failed/unknown）；
+ *   ④ 操作人只认 `row.actorLabel`（写入时固化的名称快照）——缺失时标注「名称快照缺失」并附
+ *      操作人 ID，**绝不用当前用户列表的名称回填**（那是把今天的事实写成昨天的）。
  * @author donttemo
  * @created 2026-10-20
+ * @modified 2026-10-20 donttemo M15 安全加固：actorText 不再回退当前用户名，改为「名称快照缺失 + ID」
  * @module admin-web/views
  */
 
@@ -40,8 +43,7 @@ export const RISK_META: Record<string, { label: string; tagType: '' | 'success' 
   critical: { label: '紧急', tagType: 'danger' },
 };
 
-/** 风险筛选项（顺序 = 严重度递增） */
-export const RISK_OPTIONS = [
+/** 风险筛选项（顺序 = 严重度递增） */export const RISK_OPTIONS = [
   { label: '一般', value: 'low' },
   { label: '注意', value: 'notice' },
   { label: '高风险', value: 'high' },
@@ -132,12 +134,23 @@ export function riskMeta(definition?: AuditEventDefinition): { label: string; ta
 }
 
 /**
- * 操作人文本：优先名称快照，其次 ID，最后「系统」
+ * 名称快照缺失时的显式文案（PRD-015 FR-15-04 / AC-15-02）
+ *
+ * 历史行没有 `actorLabel` 只能说明「写入时没固化」，不能说明「操作人就是现在这个名字」。
+ * 展示层据此如实标注，而不是拿当前用户列表的名称回填一个看起来完整的答案。
+ */
+export const ACTOR_SNAPSHOT_MISSING = '名称快照缺失';
+
+/**
+ * 操作人文本：名称快照优先；无快照时显式标注「名称快照缺失」，**不回退到当前用户列表**
+ *
+ * 回退当前名称是把今天的事实写成昨天的：管理员当时叫「运营 A」、之后改名「运营 B」，
+ * 历史行不能因此显示「运营 B」。缺失是可核验的事实（附 ID 便于追查），不是需要美化的空白。
  * @param row 审计行
  */
 export function actorText(row: AuditLogRecord): string {
   if (row.actorLabel) return row.actorLabel;
-  if (row.userId) return row.userId;
+  if (row.userId) return `${ACTOR_SNAPSHOT_MISSING}（ID: ${row.userId}）`;
   return '系统';
 }
 

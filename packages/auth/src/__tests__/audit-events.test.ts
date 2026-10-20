@@ -264,6 +264,48 @@ describe('认证事件覆盖（PRD-015 FR-15-08）', () => {
   });
 });
 
+describe('操作人名称快照（FR-15-04 / ADR-0032 R2）', () => {
+  /** 构造一条不传 actorLabel 的事件（模拟漏传的写入点） */
+  function targetPayload(userId: string, targetId = 'u-target') {
+    return { userId, targetType: 'user', targetId, targetLabel: '被操作用户' };
+  }
+
+  it('调用方未传 actorLabel：写入时刻回查并固化（昵称优先，账号名兜底）', async () => {
+    const h = createHarness();
+    const seeded = await h.seed();
+    await h.audit.recordEventSync('user.update', targetPayload(seeded.admin.id));
+    expect((await rowOf(h.store, 'user.update')).actorLabel).toBe('管理员');
+  });
+
+  it('改名不改写历史行；新事件用新名字（快照 = 写入时刻的事实，不是当前值）', async () => {
+    const h = createHarness();
+    const seeded = await h.seed();
+    await h.audit.recordEventSync('user.update', targetPayload(seeded.admin.id));
+    await h.store.updateUser(seeded.admin.id, { nickname: '改名后的管理员' });
+
+    // 历史行仍是当时的名称——这正是「运营 A 改名运营 B」不能污染历史的原因
+    expect((await rowOf(h.store, 'user.update')).actorLabel).toBe('管理员');
+
+    // 改名后的新事件固化新名称（快照跟随写入时刻，不是一次写死）
+    await h.audit.recordEventSync('user.delete', targetPayload(seeded.admin.id));
+    expect((await rowOf(h.store, 'user.delete')).actorLabel).toBe('改名后的管理员');
+  });
+
+  it('显式传入的 actorLabel 优先于回查（代操作等场景由业务决定显示谁）', async () => {
+    const h = createHarness();
+    const seeded = await h.seed();
+    await h.audit.recordEventSync('user.update', { ...targetPayload(seeded.admin.id), actorLabel: '值班运维' });
+    expect((await rowOf(h.store, 'user.update')).actorLabel).toBe('值班运维');
+  });
+
+  it('用户已不存在：留空而不是猜（展示侧标注「名称快照缺失」）', async () => {
+    const h = createHarness();
+    await h.seed();
+    await h.audit.recordEventSync('user.update', targetPayload('u-ghost'));
+    expect((await rowOf(h.store, 'user.update')).actorLabel).toBeNull();
+  });
+});
+
 describe('审计事件限流器（ADR-0032 R6）', () => {
   it('窗口内放行 max 条，跨窗口重新计数；reset 清空', () => {
     const throttle = new AuditEventThrottle();
@@ -275,5 +317,38 @@ describe('审计事件限流器（ADR-0032 R6）', () => {
     expect(throttle.allow('other', 2, 60_000, start + 3)).toBe(true);
     throttle.reset();
     expect(throttle.allow('k', 2, 60_000, start + 4)).toBe(true);
+  });
+
+  it('容量满且同窗口内无过期桶：拒绝新建桶（内存上限是真的上限）', () => {
+    const throttle = new AuditEventThrottle({ maxBuckets: 3 });
+    const start = 2_000_000;
+    for (let i = 0; i < 3; i += 1) {
+      expect(throttle.allow(`login:10.0.0.${i}:acct`, 3, 60_000, start + i)).toBe(true);
+    }
+    // 第 4 个维度键：容量已满、没有过期桶可清 → 丢弃本条审计样本，而不是继续长内存
+    expect(throttle.allow('login:10.0.0.9:acct', 3, 60_000, start + 10)).toBe(false);
+    expect(throttle.stats()).toEqual({ buckets: 3, droppedForCapacity: 1 });
+
+    // 已存在的维度键不受影响：仍按窗口计数放行
+    expect(throttle.allow('login:10.0.0.0:acct', 3, 60_000, start + 11)).toBe(true);
+    expect(throttle.stats().buckets).toBe(3);
+
+    // 所有桶过期后清理腾出空间，新维度键重新可以建桶
+    expect(throttle.allow('login:10.0.0.9:acct', 3, 60_000, start + 120_000)).toBe(true);
+    expect(throttle.stats().buckets).toBe(1);
+  });
+
+  it('同一分钟内输入数千个不同账号：桶数不超过上限（不会因「都未过期」持续增长）', () => {
+    const throttle = new AuditEventThrottle({ maxBuckets: 200 });
+    const start = 5_000_000;
+    for (let i = 0; i < 5_000; i += 1) {
+      throttle.allow(`login:10.0.0.1:acct-${i}`, 3, 60_000, start + i);
+    }
+    expect(throttle.stats()).toEqual({ buckets: 200, droppedForCapacity: 4_800 });
+    // 追加更多键也不会再增长（攻击者换维度键 = 换一批被丢弃的样本，不是换一批内存）
+    for (let i = 5_000; i < 6_000; i += 1) {
+      throttle.allow(`login:10.0.0.1:acct-${i}`, 3, 60_000, start + i);
+    }
+    expect(throttle.stats().buckets).toBe(200);
   });
 });

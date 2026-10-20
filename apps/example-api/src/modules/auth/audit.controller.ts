@@ -12,6 +12,8 @@
  * @modified 2026-10-15 donttemo N-02：新增 GET /audit-logs/export（需 audit:export）——异步导出，
  *   派发到任务中心返回 jobId（进度 / 下载 / 重跑走 /jobs/:id/*）；同样受 dataScope 收敛。
  *   路由刻意声明在 @Get(':id') 之前，否则 'export' 会被当作 id 命中详情分支。
+ * @modified 2026-10-20 donttemo M15 安全加固：CSV 单元格编码改走 @fw/auth 的 escapeCsvCell——
+ *   新增公式注入防护（= + - @ / 制表符前缀加单引号），存量引号转义与列序不变。
  * @module example-api/auth
  */
 
@@ -26,6 +28,7 @@ import {
   PERM,
   Permissions,
   auditRegistryVersion,
+  escapeCsvCell,
   findAuditEvent,
   listAuditEvents,
   resolveDataScopeFilter,
@@ -452,13 +455,6 @@ function rebuildExportQuery(params: Record<string, unknown>): ExportQuery {
   };
 }
 
-/** CSV 单元格转义：包引号 + 内部引号翻倍；换行统一为空格避免破坏行结构 */
-function csvCell(value: unknown): string {
-  if (value === null || value === undefined) return '';
-  const text = typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
-  return `"${text.replace(/"/g, '""').replace(/[\r\n]+/g, ' ')}"`;
-}
-
 /**
  * 组装审计 CSV
  *
@@ -468,6 +464,10 @@ function csvCell(value: unknown): string {
  *
  * 业务列是「运营可读」的导出面：事件名/摘要/对象/操作人/原因/结果/来源/风险，
  * 其中事件名与风险由注册表现算（不落库），历史行取不到时留空而不是编造。
+ *
+ * 单元格编码统一走 `@fw/auth` 的 `escapeCsvCell`：引号转义之外还中和 `= + - @` 等
+ * 公式注入前缀——摘要 / 对象名称 / 操作原因都可能来自用户可控文本（导入数据、历史数据、
+ * 其他写入路径同样会带进来），只在 UI 校验不足以防住「导出文件被 Excel 打开即执行」。
  *
  * 带 UTF-8 BOM：Excel 直接打开中文列头不乱码（这是导出功能最常见的落地问题）。
  */
@@ -483,30 +483,30 @@ export function buildAuditCsv(rows: AuditLogRecord[]): string {
     const definition = findAuditEvent(row.event ?? '');
     lines.push(
       [
-        csvCell(row.id),
-        csvCell(row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt),
-        csvCell(row.userId),
-        csvCell(row.module),
-        csvCell(row.action),
-        csvCell(row.targetType),
-        csvCell(row.targetId),
-        csvCell(row.ip),
-        csvCell(row.traceId),
-        csvCell(row.requestId),
-        csvCell(row.familyId),
-        csvCell(row.category),
-        csvCell(row.event),
-        csvCell(row.beforeValue),
-        csvCell(row.afterValue),
+        escapeCsvCell(row.id),
+        escapeCsvCell(row.createdAt instanceof Date ? row.createdAt.toISOString() : row.createdAt),
+        escapeCsvCell(row.userId),
+        escapeCsvCell(row.module),
+        escapeCsvCell(row.action),
+        escapeCsvCell(row.targetType),
+        escapeCsvCell(row.targetId),
+        escapeCsvCell(row.ip),
+        escapeCsvCell(row.traceId),
+        escapeCsvCell(row.requestId),
+        escapeCsvCell(row.familyId),
+        escapeCsvCell(row.category),
+        escapeCsvCell(row.event),
+        escapeCsvCell(row.beforeValue),
+        escapeCsvCell(row.afterValue),
         // 注册表可解释的列（未登记事件 → 空，不猜）
-        csvCell(definition?.name ?? null),
-        csvCell(row.summary),
-        csvCell(row.targetLabel),
-        csvCell(row.actorLabel),
-        csvCell(row.reason),
-        csvCell(row.result),
-        csvCell(row.auditSource),
-        csvCell(definition?.risk ?? null),
+        escapeCsvCell(definition?.name ?? null),
+        escapeCsvCell(row.summary),
+        escapeCsvCell(row.targetLabel),
+        escapeCsvCell(row.actorLabel),
+        escapeCsvCell(row.reason),
+        escapeCsvCell(row.result),
+        escapeCsvCell(row.auditSource),
+        escapeCsvCell(definition?.risk ?? null),
       ].join(','),
     );
   }

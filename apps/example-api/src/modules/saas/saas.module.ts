@@ -32,7 +32,7 @@ function serviceProviders(): Provider[] {
     { provide: SAAS_STORE, useClass: PrismaSaasStore },
     { provide: PlanService, useFactory: (store: PrismaSaasStore) => new PlanService(store), inject: [SAAS_STORE] },
     { provide: QuotaService, useFactory: (store: PrismaSaasStore) => new QuotaService(store, store, store), inject: [SAAS_STORE] },
-    { provide: SubscriptionService, useFactory: (store: PrismaSaasStore) => new SubscriptionService(store, store, store), inject: [SAAS_STORE] },
+    { provide: SubscriptionService, useFactory: (store: PrismaSaasStore) => new SubscriptionService(store, store), inject: [SAAS_STORE] },
     { provide: UsageService, useFactory: (store: PrismaSaasStore) => new UsageService(new QuotaService(store, store, store), store, store), inject: [SAAS_STORE] },
     { provide: TenantLifecycleService, useFactory: (store: PrismaSaasStore) => new TenantLifecycleService(store), inject: [SAAS_STORE] },
     // 业务入口拦截（4031）：全局守卫，注册序在 RbacGuard 之后（app.module imports 顺序保证）

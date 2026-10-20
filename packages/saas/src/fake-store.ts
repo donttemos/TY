@@ -1,10 +1,11 @@
 /*
  * @file 内存 Fake 驱动（测试用 SaasStore 实现）
  * @description 以内存结构实现 store.port 的全部语义不变量：幂等键去重、条件更新、
- *   active_marker 唯一、窗口行唯一初始化。用于领域逻辑单测；真竞态语义由 Prisma 驱动在
- *   集成层验证（ADR-0030 竞态测试随 example-api 批次入 CI）。
+ *   active_marker 唯一、窗口行唯一初始化、订阅与配额快照的单事务原子性（含故障注入点）。
+ *   用于领域逻辑单测；真竞态语义由 Prisma 驱动在集成层验证（ADR-0030 竞态测试随 example-api 批次入 CI）。
  * @author donttemo
  * @created 2026-10-19
+ * @modified 2026-10-20 donttemo createSubscriptionWithSnapshot 落地「全成/全败」语义 + faultQuotaWriteAt 故障注入
  * @module @fw/saas
  */
 import type {
@@ -49,6 +50,14 @@ export class FakeSaasStore implements SaasStore {
   private planSeq = 0;
   private versionSeq = 0;
   private subSeq = 0;
+
+  /**
+   * 故障注入点（仅测试用）：原子写第 n 条配额快照行时抛错（n 从 1 计，null=关闭）。
+   * 语义 = 驱动事务里「订阅行已 INSERT、前 n-1 条快照已 upsert」后失败——
+   * 断言用：异常抛出后必须整体回滚（无订阅行、无任何快照行、active_marker 不残留）。
+   */
+  faultQuotaWriteAt: number | null = null;
+
   private windowKey(t: string, q: string, w: string, s: Date): string {
     return `${t}|${q}|${w}|${s.getTime()}`;
   }
@@ -110,7 +119,42 @@ export class FakeSaasStore implements SaasStore {
   async findSubscriptionById(id: string): Promise<SubscriptionView | null> {
     return this.subscriptions.find((s) => s.id === id) ?? null;
   }
-  async createSubscription(s: { tenantId: string; planId: string; planVersionId: string; effectiveAt: Date; expireAt?: Date | null; activeMarker: string | null }): Promise<SubscriptionView> {
+  async createSubscriptionWithSnapshot(
+    s: { tenantId: string; planId: string; planVersionId: string; effectiveAt: Date; expireAt?: Date | null; activeMarker: string | null },
+    quotas: TenantQuotaOverride[],
+  ): Promise<SubscriptionView> {
+    // 事务前像：任一步失败即整体回滚（与 Prisma 驱动 $transaction 的全成/全败同语义）
+    const subsBefore = this.subscriptions.slice();
+    const quotasBefore = new Map(this.tenantQuotas);
+    const subSeqBefore = this.subSeq;
+    try {
+      const view = this.insertSubscriptionRow(s);
+      let written = 0;
+      for (const q of quotas) {
+        written += 1;
+        if (this.faultQuotaWriteAt === written) {
+          throw new Error(`FAULT_INJECTED：配额快照第 ${written} 条（${q.quotaKey}）写入失败`); // fw-allow-raw-throw: ②类测试信号——故障注入点，仅测试开启
+        }
+        this.tenantQuotas.set(`${q.tenantId}|${q.quotaKey}`, q);
+      }
+      return view;
+    } catch (e) {
+      this.subscriptions = subsBefore;
+      this.tenantQuotas = quotasBefore;
+      this.subSeq = subSeqBefore;
+      throw e;
+    }
+  }
+
+  /** 订阅行追加（唯一写入 active 订阅的内存入口；active_marker 唯一校验在服务层之前兜底） */
+  private insertSubscriptionRow(s: {
+    tenantId: string;
+    planId: string;
+    planVersionId: string;
+    effectiveAt: Date;
+    expireAt?: Date | null;
+    activeMarker: string | null;
+  }): SubscriptionView {
     if (s.activeMarker !== null && this.subscriptions.some((x) => x.activeMarker === s.activeMarker)) {
       throw new Error('UNIQUE(active_marker)'); // fw-allow-raw-throw: ②类内部信号——active_marker 唯一约束模拟（服务层先行校验，此为兜底）
     }

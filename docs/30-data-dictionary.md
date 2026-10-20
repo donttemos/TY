@@ -414,7 +414,7 @@ erDiagram
 | `created_at` | datetime(3) | 是 | — | 操作时间（仅创建，不更新不删除） | `idx_audit_created` |
 | `summary` | varchar(255) | 否 | NULL | 业务摘要快照（M15/ADR-0032：写入时固化，超长截断并以 `…` 标记） | — |
 | `target_label` | varchar(128) | 否 | NULL | 目标对象名称快照（租户名/套餐名/用户名；改名后历史不变） | — |
-| `actor_label` | varchar(64) | 否 | NULL | 操作人名称快照（改名后历史不变） | — |
+| `actor_label` | varchar(64) | 否 | NULL | 操作人名称快照（改名后历史不变；写入时刻由 `AuditService.persist` 集中补全：调用方未显式传值时按 `user_id` 回查昵称/账号名，回查失败留 NULL，展示为「名称快照缺失」） | — |
 | `reason` | varchar(255) | 否 | NULL | 操作原因（人工填写或系统生成；系统任务自动生成原因） | — |
 | `audit_source` | varchar(16) | 否 | NULL | 记录来源：`domain`（领域层显式记录）/ `interceptor`（`@Audit` 兜底，仅代表 HTTP 成功返回）/ NULL（未标注） | — |
 
@@ -622,6 +622,8 @@ erDiagram
 > 一租户至多一个生效订阅：**`active_marker` 方案**——生效时写入 `tenant_id`、关闭时置 NULL；
 > 三库唯一索引对 NULL 不去重，无需 partial index 即可表达，triway 零方言分叉。
 > 订阅创建即按 `plan_quotas` 快照生成 `tenant_quotas`（source=plan_snapshot）。
+> **二者同事务写入**（ADR-0029 §2.5）：订阅行与全部快照行同成同败，中途失败全部回滚——
+> 不允许「订阅已生效、快照不完整/为空」的半程状态，也不允许失败后残留 `active_marker`。
 
 | 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
 |---|---|---|---|---|---|

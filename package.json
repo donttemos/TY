@@ -20,6 +20,7 @@
     "gen:error-codes": "node scripts/gen-error-codes-json.mjs",
     "check:triway-consistency": "node scripts/check-triway-consistency.mjs",
     "check:audit-events": "node --experimental-strip-types scripts/check-audit-events.mjs",
+    "check:audit-events:test": "node --test scripts/__tests__/audit-gate.test.mjs",
     "gen:audit-events-mock": "node --experimental-strip-types scripts/gen-audit-events-mock.mjs",
     "smoke:template-admin": "node scripts/smoke-template-admin.mjs"
   },

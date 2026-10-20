@@ -2,28 +2,33 @@
  * @file 订阅服务
  * @description 订阅创建/变更/取消（ADR-0029 §2.1）：绑定套餐版本 + 一租户至多一个生效订阅
  *   （active_marker 方案）；创建即按 plan_quotas 快照生成 tenant_quotas（source=plan_snapshot）。
+ *   订阅生效与权益快照是同一不变量：两者经端口单事务方法一次写入（ADR-0029 §2.5）。
  * @author donttemo
  * @created 2026-10-19
+ * @modified 2026-10-20 donttemo 订阅创建与配额快照收敛为单事务（先读快照、后一次原子写；中途失败全回滚）
  * @module @fw/saas
  */
 import { BizError, ErrorCode } from '@fw/core';
 import { Injectable } from '@nestjs/common';
-import type { PlanStore, QuotaStore, SubscriptionStore } from './store.port.js';
-import type { SubscriptionView } from './types.js';
+import type { PlanStore, SubscriptionStore } from './store.port.js';
+import type { SubscriptionView, TenantQuotaOverride } from './types.js';
 
 @Injectable()
 export class SubscriptionService {
   constructor(
     private readonly plans: PlanStore,
     private readonly subscriptions: SubscriptionStore,
-    private readonly quotas: QuotaStore,
   ) {}
 
   /**
    * 为租户创建订阅：
    * - 套餐与版本必须存在且已发布（published）；
    * - 已有生效订阅 → 1003 CONFLICT；
-   * - 创建成功后按版本快照回写 tenant_quotas（source=plan_snapshot）。
+   * - 成功后按版本快照生成 tenant_quotas（source=plan_snapshot）。
+   *
+   * 原子性（ADR-0029 §2.5）：快照**先在内存里算好**（版本发布后 plan_quotas 不可变，
+   * 故读快照不引入竞态），再与新订阅行交给端口的单事务方法一次写入——
+   * 快照任一条写失败即整体回滚，不存在「订阅已生效、快照不完整」的时间窗。
    */
   async create(input: {
     tenantId: string;
@@ -51,27 +56,28 @@ export class SubscriptionService {
       throw new BizError(ErrorCode.NOT_FOUND, `套餐 ${input.planCode} 无可用发布版本${input.planVersion ? `：v${input.planVersion}` : ''}`);
     }
 
-    const sub = await this.subscriptions.createSubscription({
+    // 版本快照：plan_quotas → tenant_quotas（source=plan_snapshot）。读在写之前，
+    // 读取失败时库上零副作用；写入由驱动保证同事务全成/全败。
+    const planQuotas = await this.plans.listPlanQuotas(target.id);
+    const snapshot: TenantQuotaOverride[] = planQuotas.map((q) => ({
       tenantId: input.tenantId,
-      planId: plan.id,
-      planVersionId: target.id,
-      effectiveAt: input.effectiveAt ?? new Date(),
-      expireAt: input.expireAt ?? null,
-      activeMarker: input.tenantId,
-    });
+      quotaKey: q.quotaKey,
+      overrideValue: q.limitValue,
+      execution: q.execution,
+      source: 'plan_snapshot',
+    }));
 
-    // 版本快照：plan_quotas → tenant_quotas（source=plan_snapshot）
-    const quotas = await this.plans.listPlanQuotas(target.id);
-    for (const q of quotas) {
-      await this.quotas.upsertTenantQuota({
+    return this.subscriptions.createSubscriptionWithSnapshot(
+      {
         tenantId: input.tenantId,
-        quotaKey: q.quotaKey,
-        overrideValue: q.limitValue,
-        execution: q.execution,
-        source: 'plan_snapshot',
-      });
-    }
-    return sub;
+        planId: plan.id,
+        planVersionId: target.id,
+        effectiveAt: input.effectiveAt ?? new Date(),
+        expireAt: input.expireAt ?? null,
+        activeMarker: input.tenantId,
+      },
+      snapshot,
+    );
   }
 
   /** 取消订阅（运营动作）：置 cancelled + activeMarker=NULL；幂等（已关闭直接返回） */

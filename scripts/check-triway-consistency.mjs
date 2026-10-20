@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /*
  * @file 三方一致性门禁（框架包 ↔ example-api ↔ admin 模板）
- * @description 把「框架包实现、example-api 参考实现、admin 模板生成结果」三份同源实现拉平七轴对撞
+ * @description 把「框架包实现、example-api 参考实现、admin 模板生成结果」三份同源实现拉平八轴对撞
  *   （A 模板调用面自洽 / B 模板 ⊆ 参考实现 / C 权限码三方同源 / D Prisma 共有模型字段一致 /
- *   E 框架依赖面 / F 配置键面 / G 错误码表单一来源），任一轴失败即退出码 1；0 = 全绿；
+ *   E 框架依赖面 / F 配置键面 / G 错误码表单一来源 / H 审计导出 CSV 单元格编码同源），任一轴失败即退出码 1；0 = 全绿；
  *   2 = 解析失败（宁可将 CI 挂红，也不放行未知状态）。背景与各轴细则见下方注释块——
  *   仓库里有三份「同一套框架能力」的实现，任何一份单方面演进都会让另外两份悄悄漂移：
  *   ① 框架包实现（packages/*）：权限码 PERM / 配置键 ENV_KEY_PATHS / 框架控制器 / auth 核心表契约；
@@ -16,11 +16,13 @@
  * @author donttemo
  * @created 2026-10-17
  * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-03）：新增轴 G 错误码表单一来源对撞
+ * @modified 2026-10-20 donttemo M15 安全加固：新增轴 H 审计导出 CSV 单元格编码同源
+ *   （@fw/auth csv.ts ↔ admin-web mock/csv-cell.ts 的危险前缀锚点必须逐字一致）
  * @module scripts
  */
 
 /*
- * 七轴对撞细则：
+ * 八轴对撞细则：
  *     轴 A 路由面·生成结果自洽：模板 admin-web 调用面 ⊆ 模板后端路由面
  *         （模板 server 控制器 + 其装配的框架包控制器——按模块类名判定装配，未装配不计入）；
  *     轴 B 路由面·模板是参考实现的裁剪子集：模板后端路由面 ⊆ example-api 路由面；
@@ -35,7 +37,11 @@
  *         （example-api .env.example 同时反向 ⊆ ENV_KEY_PATHS）；
  *     轴 G 错误码表单一来源（PRD-012 OBS-03）：@fw/core ErrorCode 为唯一权威——
  *         error-codes.json 工件与源同源（gen-error-codes-json --check）+ 前端 BIZ_CODE / 模板
- *         BIZ_CODE / mock CODE 三副本值集合与 core 全集逐一相等（篡改任意一份即构建失败）。
+ *         BIZ_CODE / mock CODE 三副本值集合与 core 全集逐一相等（篡改任意一份即构建失败）；
+ *     轴 H 审计导出 CSV 单元格编码同源（PRD-015 FR-15-19 安全加固）：mock 是独立进程、不装
+ *         Nest，防护实现必然有两份（@fw/auth 的 csv.ts ↔ admin-web mock/csv-cell.ts）——
+ *         两侧的「危险前缀正则 + 中和前缀」锚点必须逐字相同（单侧收紧即「dev 全绿、真机被
+ *         Excel 求值」）；行为一致性另有两侧同组向量单测兜底。
  */
 
 import { readdir, readFile } from 'node:fs/promises';
@@ -536,6 +542,53 @@ async function axisErrorCodes() {
   }
 }
 
+/* ============================== 轴 H：审计导出 CSV 单元格编码同源 ============================== */
+
+/** 取「const 名字 = 值;」的右值文本（去空白，只做锚点比较） */
+function extractConstValue(text, name) {
+  const match = text.match(new RegExp(`const\\s+${name}\\s*=\\s*(.+?);`));
+  return match ? match[1].replace(/\s+/g, '') : null;
+}
+
+/**
+ * 审计导出 CSV 单元编码：框架实现（@fw/auth）与 mock 实现必须是同一套防护规则
+ *
+ * mock 不引用框架包（独立进程、不装 Nest），所以防护实现必然有两份。两份实现靠单测
+ * 逐向量对齐（packages/auth、apps/admin-web/mock、apps/example-api 三处同一组载荷），
+ * 这里再对「危险前缀正则 + 中和前缀」两个锚点做文本级对撞：
+ * 任一侧单独改规则（例如只在一侧加了 `@`）都会在此变红——mock 产物与真实产物
+ * 不一致的话，「dev 全绿、真机被 Excel 求值」这条路径又回来了。
+ */
+async function axisCsvEncoding() {
+  const frameworkPath = join(PACKAGES_DIR, 'auth/src/csv.ts');
+  const mockPath = join(ROOT, 'apps/admin-web/mock/csv-cell.ts');
+  if (!existsSync(frameworkPath) || !existsSync(mockPath)) {
+    fail('H', `CSV 编码实现缺失：${existsSync(frameworkPath) ? mockPath : frameworkPath}（框架与 mock 各必须有一份同源实现）`);
+    return;
+  }
+  const framework = await readText(frameworkPath);
+  const mock = await readText(mockPath);
+  const anchors = ['FORMULA_TRIGGER', 'TEXT_GUARD'];
+
+  for (const name of anchors) {
+    const fwValue = extractConstValue(framework, name);
+    const mockValue = extractConstValue(mock, name);
+    if (!fwValue) fail('H', `@fw/auth 的 csv.ts 缺少锚点 ${name}（公式注入防护的单一事实来源）`);
+    if (!mockValue) fail('H', `apps/admin-web/mock/csv-cell.ts 缺少锚点 ${name}（mock 导出的 CSV 会与后端行为不一致）`);
+    if (fwValue && mockValue && fwValue !== mockValue) {
+      fail('H', `${name} 两侧不一致：@fw/auth=${fwValue} vs mock=${mockValue}（改防护规则必须同步 mock）`);
+    }
+  }
+
+  for (const [label, text] of [['@fw/auth csv.ts', framework], ['mock/csv-cell.ts', mock]]) {
+    if (!/export function escapeCsvCell\(/.test(text)) {
+      fail('H', `${label} 未导出 escapeCsvCell（两侧同名同语义，测试才能逐向量对齐）`);
+    }
+  }
+
+  console.log('[triway][H] CSV 单元格编码：框架与 mock 的防护锚点一致（%s）', anchors.join(' / '));
+}
+
 /* ============================== 主流程 ============================== */
 
 async function main() {
@@ -546,6 +599,7 @@ async function main() {
   await axisDependencies();
   await axisConfigKeys();
   await axisErrorCodes();
+  await axisCsvEncoding();
 
   if (hints.length > 0) {
     console.log('\n[triway] 提示（不阻断，共 %d 条）：', hints.length);
@@ -558,7 +612,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log('\n[triway] OK：框架包 ↔ example-api ↔ admin 模板七轴全绿（路由×2 / 权限码 / 模型 / 依赖 / 配置键 / 错误码表）');
+  console.log('\n[triway] OK：框架包 ↔ example-api ↔ admin 模板八轴全绿（路由×2 / 权限码 / 模型 / 依赖 / 配置键 / 错误码表 / CSV 编码）');
   process.exit(0);
 }
 

@@ -87,6 +87,10 @@ const LIFECYCLE_ACTIONS: readonly LifecycleAction[] = ['activate', 'expire', 'fr
 /**
  * 生命周期动作 → 事件码（PRD-015 FR-15-09）
  *
+ * @audit-event-map 本表是审计事件的**间接写入点**（`recordEvent(LIFECYCLE_EVENTS[action])`）：
+ * 门禁（scripts/check-audit-events.mjs）只对带本标记的文件把「事件码字面量」计为写入点，
+ * 其余文件一律只认 `recordEvent('…')` / `event: '…'`。标记是显式声明，不靠猜。
+ *
  * 此前用模板字符串 `saas.lifecycle.${action}` 拼码：值虽然稳定，但事件不可枚举，
  * 注册表与门禁都覆盖不到。显式映射让「新增动作」必须同时登记事件定义。
  */

@@ -18,6 +18,20 @@
 
 ## [Unreleased]
 
+### Changed（M15：三条 AC 延后取证登记，2026-10-20）
+
+- **AC-15-07 / 15-12 / 15-13 延后取证**（用户决定；PRD-015 §7 已内联每条的具体验收动作）：① **15-07 数据范围回归**——`self/org/org_below/all` 四档 × 列表/详情/归档/导出需多账号 × 真机多租户数据；② **15-12 性能容量**——列表带新过滤 p95 ≤ 基线 1.2 倍需真实数据量与生产级环境；③ **15-13 覆盖矩阵抽样**——七类事件的「真实记录」需运行期触发后查库（集成测试只证明写入点存在）。三条保持未勾选，代码与门禁状态不变（CI 四腿全绿；`check:audit-events` 32 条事件 / 387 个生产文件 CI 常驻）。
+- **为什么不在本机凑证据**：沙箱是单租户种子数据、无代表性负载，勉强勾选只会制造「假绿」；真机部署窗口（`cs.donttemo.top`，reseed 后）一次性取齐三类证据。
+- **其余未勾 AC 不在本次延后范围**：15-02（五要素快照 DB 断言——安全加固批次已把 `actorLabel` 改为写入时刻集中固化，收口时可直接勾）、15-03（四态与 `audit_source`，主体行为已成立）、15-06（在线/归档/导出三处同码同文案，B4 已同源）、15-09（租户维度，代码已交付待运行期核对）——按原计划下一迭代收口。
+
+### Security（M15 安全加固：CSV 公式注入 / 门禁写入点 / 限流器内存 / 操作人快照，2026-10-20）
+
+- **CSV 导出防公式注入（P1）**：新增 `@fw/auth` 的 `escapeCsvCell`，审计导出统一走它——`=` `+` `-` `@` 与制表符开头的单元格加单引号前缀强制按文本解析（OWASP CSV Injection），CR/LF 压成空格，引号转义/列序/BOM 不变。**引号转义 ≠ 公式注入防护**：`"=1+1"` 在 Excel 里仍是公式；`summary` / `targetLabel` / `actorLabel` / `reason` 都是用户可控文本，导入数据与历史数据不经过 UI 校验，所以防护放在单元格编码这一处。mock 侧抽出同源实现 `apps/admin-web/mock/csv-cell.ts`（顺带修正 mock 空值形态 `""` → 空串，与后端一致）；两侧锚点由 `check:triway-consistency` **轴 H** 对撞，行为由 `@fw/auth` / example-api / mock **三处同组向量单测**锁定（DDE、`HYPERLINK`、前导空白/制表符绕过、普通中文不误伤、重复导出幂等）。
+- **审计事件门禁不再自证（P2）**：`check:audit-events` 的写入点判定从「任意字面量出现即算」收紧为——**排除注册表定义文件**，只认 `recordEvent('…')` / `recordEventSync('…')` 直接调用、服务端 `event: '…'` 属性、**显式标注 `@audit-event-map` 的事件映射表**（saas 的 `LIFECYCLE_EVENTS`）。判定逻辑抽到 `scripts/lib/audit-gate.mjs`（纯函数），新增**反向测试** `pnpm run check:audit-events:test`（node:test）：删掉某事件唯一写入点必须判红、注册表里的字面量不算写入点、无标记文件的字面量不算写入点、前端 `event:` 参数不算写入点、映射表拼错码必须报缺口；CI base 作业紧随门禁步骤执行。
+- **审计限流器内存真正有界（P2）**：`AuditEventThrottle` 的 `MAX_BUCKETS` 过去只是「清理过期桶后的期望值」——攻击者同一分钟内不断换维度键（换账号 / 换权限串），新桶都未过期，Map 仍会一路涨。现在清理后仍满则**拒绝新建桶并丢弃本条样本**，丢弃量经 `stats().droppedForCapacity` 可观测；过期扫描加最小间隔（容量满时不再每键一次 O(n) 全扫，避免把限流器变成 CPU 放大器）。新增「数千个不同账号」容量测试（桶数恒 ≤ 上限）。
+- **操作人名称快照（P2）**：`AuditService.persist` 在**写入时刻**集中补 `actorLabel`（调用方未显式传值时按 `userId` 回查昵称/账号名；回查失败/用户已删除留空），把「有没有快照」从调用纪律变成结构保证——用户 / 角色 / 配置等写入点此前漏传，页面回退「当前用户列表」的名称，改名后历史行显示改名后的名字。展示侧改为如实标注 **「名称快照缺失（ID: …）」**，不再用当前用户名回填历史事实；新增测试覆盖「未传 → 回查固化」「改名不改写历史行，新事件用新名字」「显式传值优先」「用户不存在留空」。
+- **验证**：`@fw/auth` 263/263（覆盖率门禁全过，`csv.ts` / `audit-throttle.ts` 100% 语句）、example-api 191/191（+4 CSV 注入用例）、admin-web 262/262（+5 mock 编码用例，需在 `vitest.config.ts` 的 include 增补 mock 测试目录——此前 mock 侧无任何单测入口；`vue-tsc` 零错 + 构建通过）、`smoke-mock` 143/143；门禁 `check:audit-events`（32 条事件 / 388 文件 / **42 处真实写入点**）、`check:audit-events:test` 10/10、`check:triway-consistency` 八轴、`check:api-parity`、`check:no-raw-throw`、`check:headers` 全绿。反向实测：把 `role.create` 的两处 `recordEvent` 改成拼错码后门禁 `RC=1` 并精确报「注册表条目无写入点：role.create」，还原后恢复绿。
+
 ### Fixed（M15 收口：smoke-admin 字典断言漏同步，2026-10-20）
 
 - `apps/example-api/scripts/smoke-admin.mjs` 的 `audit_module` 断言仍为「六项」，而 M15 已给种子补 `saas`（七项）。首轮 CI run `39446395221` 因此在第 15 步 C-06 冒烟失败、其后矩阵被 skip。**范围固定断言扩键必须三处同改：seed / smoke-mock / smoke-admin**——这次前两处改了，第三处漏了。修复后 run `39447355932` 四腿全绿。

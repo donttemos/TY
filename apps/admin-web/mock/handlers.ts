@@ -37,6 +37,8 @@
  * @modified 2026-10-16 donttemo M10 E-09：附件三端点（`POST /files` multipart 上传 + `file:create`
  *   守卫，`GET /files/:id` 元数据与 `GET /files/:id/download` 登录即可）——类型/大小白名单默认
  *   收紧口径与 @fw/storage 同源（20MB + 扩展名白名单，400 文案逐字一致），下载逐字节回放
+ * @modified 2026-10-20 donttemo M15 安全加固：审计导出 CSV 单元格改走 `mock/csv-cell.ts` 的
+ *   `escapeCsvCell`（与 @fw/auth 同源，含 `= + - @`/制表符公式注入防护），空值形态由 `""` 改为空串与后端对齐
  * @module admin-web/mock
  */
 
@@ -60,6 +62,7 @@ import type {
   MockUser,
 } from './db';
 import { db as defaultDb } from './db';
+import { escapeCsvCell } from './csv-cell';
 import { MOCK_AUDIT_EVENTS } from './audit-events';
 
 /** 统一响应信封（与 @fw/core ResponseInterceptor 一致） */
@@ -1689,7 +1692,8 @@ export async function handleMockRequest(
 
     // 产物快照在派发时固化（与后端「导出时的筛选结果」一致，不随后续新日志漂移）。
     // CSV 形状与 example-api 的 buildAuditCsv **逐字节同构**：同表头、同 BOM、同 CRLF、
-    // 同引号转义——mock 与真实后端零差异，切真实 API 后下载产物行为不变。
+    // 同引号转义、同公式注入防护（escapeCsvCell 两侧同源，见 mock/csv-cell.ts）——
+    // mock 与真实后端零差异，切真实 API 后下载产物行为不变。
     // M15 B4：与 example-api buildAuditCsv 逐字节同构——15 列位置不变，业务列追加在末尾
     const header = [
       'id', 'createdAt', 'userId', 'module', 'action', 'targetType', 'targetId', 'ip', 'traceId',
@@ -1700,37 +1704,32 @@ export async function handleMockRequest(
     const eventMeta = new Map<string, { name: string; risk: string }>(
       MOCK_AUDIT_EVENTS.map((item) => [item.code as string, { name: item.name, risk: item.risk }]),
     );
-    const csvCell = (value: unknown): string => {
-      if (value === null || value === undefined) return '""';
-      const text = typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
-      return `"${text.replace(/"/g, '""').replace(/[\r\n]+/g, ' ')}"`;
-    };
     const lines = rows.map((a) =>
       [
-        csvCell(a.id),
-        csvCell(a.createdAt),
-        csvCell(a.userId),
-        csvCell(a.module),
-        csvCell(a.action),
-        csvCell(a.targetType),
-        csvCell(a.targetId),
-        csvCell(a.ip),
-        csvCell(a.traceId),
-        csvCell(a.requestId),
-        csvCell(a.familyId),
-        csvCell(a.category),
-        csvCell(a.event),
-        csvCell(a.beforeValue),
-        csvCell(a.afterValue),
+        escapeCsvCell(a.id),
+        escapeCsvCell(a.createdAt),
+        escapeCsvCell(a.userId),
+        escapeCsvCell(a.module),
+        escapeCsvCell(a.action),
+        escapeCsvCell(a.targetType),
+        escapeCsvCell(a.targetId),
+        escapeCsvCell(a.ip),
+        escapeCsvCell(a.traceId),
+        escapeCsvCell(a.requestId),
+        escapeCsvCell(a.familyId),
+        escapeCsvCell(a.category),
+        escapeCsvCell(a.event),
+        escapeCsvCell(a.beforeValue),
+        escapeCsvCell(a.afterValue),
         // 注册表可解释列（mock 只用演示子集；未登记码留空，与后端同语义）
-        csvCell(eventMeta.get(a.event ?? '')?.name ?? null),
-        csvCell(a.summary ?? null),
-        csvCell(a.targetLabel ?? null),
-        csvCell(a.actorLabel ?? null),
-        csvCell(a.reason ?? null),
-        csvCell(a.result ?? null),
-        csvCell(a.auditSource ?? null),
-        csvCell(eventMeta.get(a.event ?? '')?.risk ?? null),
+        escapeCsvCell(eventMeta.get(a.event ?? '')?.name ?? null),
+        escapeCsvCell(a.summary ?? null),
+        escapeCsvCell(a.targetLabel ?? null),
+        escapeCsvCell(a.actorLabel ?? null),
+        escapeCsvCell(a.reason ?? null),
+        escapeCsvCell(a.result ?? null),
+        escapeCsvCell(a.auditSource ?? null),
+        escapeCsvCell(eventMeta.get(a.event ?? '')?.risk ?? null),
       ].join(','),
     );
     const job = dispatchJob(database, {

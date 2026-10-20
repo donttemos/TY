@@ -16,6 +16,8 @@
  *   与 example-api seed 同形——审计页模块筛选项的数据源）
  * @modified 2026-10-16 donttemo M10 E-09：新增附件元数据（uploadFiles 内存表，镜像后端 upload_files
  *   表与 @fw/storage 语义：元数据行 + 内存字节，下载逐字节回放）与 file:create 权限点（授予 user 角色）
+ * @modified 2026-10-20 donttemo M15 安全加固：审计种子补 `actorLabel`（有事件码的行 = M15 后由
+ *   recordEvent 落库，必有名称快照；无事件码的旧行刻意留空，用于验证「名称快照缺失」展示）
  * @module admin-web/mock
  */
 
@@ -556,6 +558,9 @@ function seedAuditLogs(): MockAuditLog[] {
             afterValue: { reason: 'bad_credentials', code: 3001 },
           }
         : {}),
+      // PRD-015 安全加固：写入了事件码的行 = M15 之后由 recordEvent 落库，一定有操作人名称快照；
+      // 「上线前旧行」（无事件码）则确实没有快照——两类都保留样本，页面对后者显示「名称快照缺失」
+      ...(i % 5 === 0 ? {} : { actorLabel: userId === 'u-alice' ? 'Alice' : '平台管理员' }),
       // PRD-015：每 4 条一条「已登记事件 + 业务快照」（domain 来源），其余留空演示旧数据降级路径。
       // 事件码用注册表真实码（user.status_change / saas.lifecycle.freeze），保证「按风险筛选」在 mock 下可验证
       ...(i % 4 === 0

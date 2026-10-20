@@ -152,7 +152,7 @@ plan_versions        套餐版本（plan_id, version 递增, snapshot JSON, publ
 plan_quotas          版本内配额默认项（plan_version_id, quota_key, limit_value, execution）
 quota_definitions    配额字典（key 唯一, name, unit, window_type[day/month/total], execution[soft/hard/observe]）
 tenant_subscriptions 租户订阅（tenant_id, plan_id, plan_version_id, status[active/expired/cancelled],
-                     effective_at, expire_at；partial unique: tenant_id + status=active）
+                     effective_at, expire_at；active_marker 唯一（NULL 可重复）表达「一租户一生效」）
 tenant_quotas        生效配额覆盖（tenant_id, quota_key, override_value, source[plan_snapshot/manual]）
 usage_events         原始用量（tenant_id, quota_key, quantity, occurred_at, source,
                      idempotency_key 唯一约束；按 occurred_at 分区/索引）
@@ -162,6 +162,10 @@ tenant_lifecycle_logs 生命周期日志（tenant_id, from_status, to_status, ac
                      actor_id, reason, 审计六字段）
 bills / bill_items   账单头/明细（P1：period, plan_version 快照, 用量来源引用, 调整项, rounding_rule）
 ```
+
+> **开通写路径（ADR-0029 §2.5）**：`tenant_subscriptions` 行与 `tenant_quotas` 快照行必须由
+> `SubscriptionStore.createSubscriptionWithSnapshot` 在**同一事务**写入（同成同败）。端口刻意不提供
+> 「先建订阅、再逐条补快照」的入口——那会在任何一次写失败时留下「已生效但权益不完整」的订阅。
 
 ### 4.2 存量字段兼容（ADR-0029）
 

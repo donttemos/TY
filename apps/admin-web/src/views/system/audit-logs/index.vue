@@ -10,6 +10,8 @@
  * @modified 2026-10-14 donttemo 移除 exportable：后端 /audit-logs/export 尚未实现
  * @modified 2026-10-15 donttemo N-02：恢复导出入口并改为异步任务；E-07：模块筛选项改字典
  * @modified 2026-10-20 donttemo M15 B3：列表运营视图 + 详情分层 + 结果/风险/租户筛选 + 旧数据降级
+ * @modified 2026-10-20 donttemo M15 安全加固：操作人列改走 actorText（缺快照时显式标注），
+ *   不再用当前用户列表的用户名回填历史行——改名会让历史记录显示错误的人
  * @module admin-web/views
 -->
 
@@ -180,11 +182,8 @@ function formatTime(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false });
 }
 
-function userName(userId: string | null): string {
-  if (!userId) return '系统';
-  return userOptions.value.find((u) => u.value === userId)?.label ?? userId;
-}
-
+// 操作人列只认写入时固化的名称快照（见模板 #cell-user）：不回退 `userOptions`（当前用户列表）——
+// 管理员改名后历史行必须仍显示事件发生时的名称，没有快照就如实标注「名称快照缺失」。
 function copyTraceId(traceId: string): void {
   void navigator.clipboard.writeText(traceId).then(() => ElMessage.success('traceId 已复制'));
 }
@@ -255,7 +254,8 @@ async function handleExport(payload: { search: SearchModel; sort: string | null 
         <span v-else class="fw-text-weak">—</span>
       </template>
       <template #cell-target="{ row }">{{ targetText(asAudit(row)) }}</template>
-      <template #cell-user="{ row }">{{ asAudit(row).actorLabel ?? userName(asAudit(row).userId) }}</template>
+      <!-- 操作人只认写入时固化的名称快照；缺快照时标注「名称快照缺失（ID: …）」，不用当前用户名回填 -->
+      <template #cell-user="{ row }">{{ actorText(asAudit(row)) }}</template>
       <template #cell-createdAt="{ row }">{{ formatTime(row.createdAt) }}</template>
       <template #cell-module="{ row }">{{ row.module }}</template>
       <template #cell-action="{ row }">{{ row.action }}</template>
@@ -291,7 +291,7 @@ async function handleExport(payload: { search: SearchModel; sort: string | null 
 
           <el-descriptions :column="2" border>
             <el-descriptions-item label="事件">{{ detailDefinition?.name ?? detail.event ?? '—' }}</el-descriptions-item>
-            <el-descriptions-item label="操作人">{{ detail.actorLabel ?? actorText(detail) }}</el-descriptions-item>
+            <el-descriptions-item label="操作人">{{ actorText(detail) }}</el-descriptions-item>
             <el-descriptions-item label="操作对象">{{ targetText(detail) }}</el-descriptions-item>
             <el-descriptions-item label="记录来源">{{ sourceText(detail) }}</el-descriptions-item>
             <el-descriptions-item label="操作原因" :span="2">{{ detail.reason ?? '未填写' }}</el-descriptions-item>

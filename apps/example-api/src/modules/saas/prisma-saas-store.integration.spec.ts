@@ -66,8 +66,9 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import fs from 'node:fs';
 import { PrismaClient } from '@prisma/client';
+import type { PrismaClientLike } from '@fw/db';
 import { PrismaSaasStore } from './prisma-saas-store.js';
-import { QuotaExceededError, TenantLifecycleService } from '@fw/saas';
+import { QuotaExceededError, TenantLifecycleService, type TenantQuotaOverride } from '@fw/saas';
 
 const execFileAsync = promisify(execFile);
 
@@ -197,15 +198,15 @@ describe('PrismaSaasStore.consumeAtomic（ADR-0030 不变量）', () => {
 describe('PrismaSaasStore 订阅与生命周期（ADR-0029/0031 不变量）', () => {
   it('active_marker 唯一：重复创建生效订阅 → 1003', async () => {
     await expect(
-      store.createSubscription({ tenantId: 't1', planId: 'plan-1', planVersionId: 'pv-1', effectiveAt: new Date(), activeMarker: 't1' }),
+      store.createSubscriptionWithSnapshot({ tenantId: 't1', planId: 'plan-1', planVersionId: 'pv-1', effectiveAt: new Date(), activeMarker: 't1' }, []),
     ).rejects.toMatchObject({ code: 1003 });
   });
 
   it('closeSubscription 置 activeMarker=NULL 后可重新创建', async () => {
-    const sub = await store.createSubscription({ tenantId: 't9', planId: 'plan-1', planVersionId: 'pv-1', effectiveAt: new Date(), activeMarker: 't9' });
+    const sub = await store.createSubscriptionWithSnapshot({ tenantId: 't9', planId: 'plan-1', planVersionId: 'pv-1', effectiveAt: new Date(), activeMarker: 't9' }, []);
     await store.closeSubscription(sub.id, { status: 'cancelled', closedAt: new Date(), reason: '测试' });
     await expect(
-      store.createSubscription({ tenantId: 't9', planId: 'plan-1', planVersionId: 'pv-1', effectiveAt: new Date(), activeMarker: 't9' }),
+      store.createSubscriptionWithSnapshot({ tenantId: 't9', planId: 'plan-1', planVersionId: 'pv-1', effectiveAt: new Date(), activeMarker: 't9' }, []),
     ).resolves.toMatchObject({ tenantId: 't9', status: 'active' });
   });
 
@@ -236,6 +237,75 @@ describe('PrismaSaasStore 订阅与生命周期（ADR-0029/0031 不变量）', (
       { field: 'used', message: '12' },
       { field: 'limit', message: '12' },
     ]);
+  });
+});
+
+/*
+ * 订阅开通原子性（ADR-0029 §2.5）：真实库上验证「订阅行 + 全部配额快照行」同成同败。
+ * 故障注入不靠 mock：用 Prisma query extension 包住 tenantQuota.upsert，在第 n 次调用抛错——
+ * 这正是旧实现（先 createSubscription、再逐条 upsertTenantQuota 两次独立写）留下半成品的时点。
+ */
+describe('PrismaSaasStore 订阅开通原子性（ADR-0029 §2.5，真实事务 + 故障注入）', () => {
+  const SUB = {
+    tenantId: 'atom1',
+    planId: 'plan-1',
+    planVersionId: 'pv-1',
+    effectiveAt: new Date(Date.UTC(2026, 9, 20, 10, 0, 0)),
+    expireAt: null,
+    activeMarker: 'atom1',
+  };
+  const QUOTAS: TenantQuotaOverride[] = [
+    { tenantId: 'atom1', quotaKey: 'api_calls', overrideValue: 10n, execution: 'hard', source: 'plan_snapshot' },
+    { tenantId: 'atom1', quotaKey: 'storage_gb', overrideValue: 2n, execution: 'soft', source: 'plan_snapshot' },
+    { tenantId: 'atom1', quotaKey: 'audit_rows', overrideValue: 100n, execution: 'observe', source: 'plan_snapshot' },
+  ];
+
+  /** fault.at = 第几次 tenantQuota.upsert 抛错（null=关闭）；reset() 归零计数器（重试场景） */
+  function faultyStore(fault: { at: number | null }): { store: PrismaSaasStore; reset: () => void } {
+    let writes = 0;
+    const extended = prisma!.$extends({
+      query: {
+        tenantQuota: {
+          async upsert({ args, query }) {
+            writes += 1;
+            if (fault.at !== null && writes === fault.at) {
+              throw new Error('FAULT_INJECTED：配额快照写入失败'); // fw-allow-raw-throw: ②类测试信号——故障注入点，仅测试使用
+            }
+            return query(args);
+          },
+        },
+      },
+    });
+    return { store: new PrismaSaasStore(extended as unknown as PrismaClientLike), reset: () => { writes = 0; } };
+  }
+
+  it('快照第 2 条失败 → 订阅行与已写的第 1 条一并回滚（无半成品订阅）', async () => {
+    const fault = { at: 2 as number | null };
+    const { store: faulty } = faultyStore(fault);
+    await expect(faulty.createSubscriptionWithSnapshot(SUB, QUOTAS)).rejects.toThrow(/FAULT_INJECTED/);
+
+    // ① 订阅行不存在 ② active_marker 不残留（否则该租户重试恒 1003）③ 任何快照行都未落库
+    expect(await prisma!.tenantSubscription.count({ where: { tenantId: 'atom1' } })).toBe(0);
+    expect(await prisma!.tenantSubscription.count({ where: { activeMarker: 'atom1' } })).toBe(0);
+    expect(await prisma!.tenantQuota.count({ where: { tenantId: 'atom1' } })).toBe(0);
+  });
+
+  it('故障消除后同参数重试：一次写全 3 条快照，常规驱动可读回同一订阅', async () => {
+    const fault = { at: 1 as number | null };
+    const { store: faulty, reset } = faultyStore(fault);
+    await expect(faulty.createSubscriptionWithSnapshot(SUB, QUOTAS)).rejects.toThrow(/FAULT_INJECTED/);
+    expect(await prisma!.tenantQuota.count({ where: { tenantId: 'atom1' } })).toBe(0); // 首条也回滚
+
+    fault.at = null;
+    reset();
+    const sub = await faulty.createSubscriptionWithSnapshot(SUB, QUOTAS);
+    expect(sub.status).toBe('active');
+    expect(await prisma!.tenantQuota.count({ where: { tenantId: 'atom1' } })).toBe(3);
+    expect((await store!.findActiveSubscription('atom1'))?.id).toBe(sub.id);
+
+    // 清理，避免污染后续 describe 的列表/计数断言
+    await prisma!.tenantQuota.deleteMany({ where: { tenantId: 'atom1' } });
+    await prisma!.tenantSubscription.deleteMany({ where: { tenantId: 'atom1' } });
   });
 });
 

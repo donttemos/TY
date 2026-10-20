@@ -8,6 +8,9 @@
  * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-06，ADR-0025）：统一审计事件契约——
  *   AuditEntry / AuditLogRecord 全量落位 category/event/result/familyId/jti/requestId（缺省 null），
  *   persist 统一填充，杜绝「部分调用方带事件字段、部分不带」的形状漂移
+ * @modified 2026-10-20 donttemo M15 安全加固（FR-15-04）：persist 在写入时刻集中补 `actorLabel`
+ *   快照（调用方未显式提供时按 userId 回查昵称/账号名）。此前用户 / 角色 / 配置等写入点漏传该字段，
+ *   页面回退到「当前用户列表」的名称 → 改名后历史记录显示改名后的名字，历史身份失真
  * @module @fw/auth
  */
 
@@ -40,6 +43,16 @@ const MAX_REASON_LENGTH = 255;
 
 /** 敏感字段名集合（大小写不敏感匹配） */
 const SENSITIVE = new Set<string>(SENSITIVE_FIELDS.map((f) => f.toLowerCase()));
+
+/**
+ * 操作人名称回查所需的最小存储端口（`AuthStore` 的子集，成员可选）
+ *
+ * 声明成可选是为了让「只实现了 writeAuditLog 的只读测试桩」也能工作：缺方法时按
+ * 「无法确定操作人名称」处理，而不是让审计写入因为一个可选增强字段而失败。
+ */
+interface ActorLabelLookupPort {
+  findUserById?: (id: ID) => Promise<{ nickname: string | null; username: string } | null>;
+}
 
 /** 审计记录入参 */
 export interface AuditEntry {
@@ -329,8 +342,13 @@ export class AuditService {
 
   /** 组装并写入记录（统一事件契约字段全量落位，缺省为 null——OBS-08「字段完整」） */
   private async persist(entry: AuditEntry): Promise<void> {
+    const userId = entry.userId ?? getRequestContext()?.userId ?? null;
+    // PRD-015 FR-15-04：操作人名称快照——调用方没显式给，就在「写入时刻」回查并固化。
+    // 之后改名不回头改历史行；展示侧也不允许用当前用户列表回填（ADR-0032 R2 事实与字典分离）。
+    const actorLabel =
+      clip(entry.actorLabel, MAX_ACTOR_LABEL_LENGTH) ?? clip(await this.lookupActorLabel(userId), MAX_ACTOR_LABEL_LENGTH);
     await this.store.writeAuditLog({
-      userId: entry.userId ?? getRequestContext()?.userId ?? null,
+      userId,
       module: entry.module,
       action: entry.action,
       category: entry.category ?? null,
@@ -351,11 +369,35 @@ export class AuditService {
       // PRD-015 FR-15-04：业务快照（缺省 null，不做任何推断性填充）
       summary: clip(entry.summary, MAX_SUMMARY_LENGTH),
       targetLabel: clip(entry.targetLabel, MAX_TARGET_LABEL_LENGTH),
-      actorLabel: clip(entry.actorLabel, MAX_ACTOR_LABEL_LENGTH),
+      actorLabel,
       reason: clip(entry.reason, MAX_REASON_LENGTH),
       auditSource: entry.auditSource ?? null,
       traceId: getTraceId() || null,
       createdAt: new Date(),
     });
+  }
+
+  /**
+   * 写入时刻回查操作人名称（快照来源：昵称优先，账号名兜底）
+   *
+   * 为什么在服务端集中补而不是要求每个调用点传：`recordEvent` 有十余个写入点
+   * （用户 / 角色 / 配置 / 租户 / 导出 / 阻断器兜底），漏传一处就会让那条历史失去身份。
+   * 集中补全把「有没有快照」从调用纪律变成结构保证；调用点显式传值时仍以显式值为准
+   * （业务更清楚当时该显示谁，例如代操作场景）。
+   *
+   * 回查失败（用户已删除 / 存储异常 / 只读测试桩）一律返回 null：审计行保留「快照缺失」，
+   * 绝不用后来者的名称冒充当时的人。
+   * @param userId 操作人 ID（缺省表示系统行为）
+   * @returns 名称快照；无法确定时为 null
+   */
+  private async lookupActorLabel(userId: ID | null): Promise<string | null> {
+    if (!userId) return null;
+    try {
+      // 可选调用（?.）：单测里的只读桩可能没实现该端口，缺方法时按「无法确定」处理，不抛错
+      const user = await (this.store as unknown as ActorLabelLookupPort).findUserById?.(userId);
+      return user?.nickname ?? user?.username ?? null;
+    } catch {
+      return null;
+    }
   }
 }

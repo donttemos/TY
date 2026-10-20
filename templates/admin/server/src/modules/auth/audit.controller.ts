@@ -4,10 +4,13 @@
  *   支持 sort 白名单排序（parseSortQuery）。dataScope 四档在查询层收敛：self=仅本人；
  *   org=本人部门成员；org_below=部门及下级成员；all=不限。范围外目标用户绝不返回轨迹。
  *   （示例工程的异步导出走任务中心，模板骨架不含 @fw/queue，故未携带 export 端点；接入
- *   @fw/queue 后参照 example-api 的 audit.controller.ts 补 export 即可。）
+ *   @fw/queue 后参照 example-api 的 audit.controller.ts 补 export 即可。补的时候 CSV 单元格
+ *   必须走 `@fw/auth` 的 `escapeCsvCell`：它同时做引号转义与公式注入（= + - @ 前缀）中和，
+ *   自己拼引号只能解决前者，导出的文件在 Excel 里仍会被求值。）
  * @author donttemo
  * @created 2026-10-15
  * @modified 2026-10-17 donttemo M12 W2（PRD-012 OBS-14）：审计查询/导出增 trace_id/request_id/family_id/category/event 过滤 + 未知过滤参数 400
+ * @modified 2026-10-20 donttemo M15 安全加固：补导出侧 CSV 编码指引（统一用 @fw/auth escapeCsvCell，防公式注入）
  * @module __APP_NAME__/auth
  */
 import { Controller, Get, Inject, Param, Query, Req } from '@nestjs/common';

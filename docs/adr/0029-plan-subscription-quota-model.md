@@ -98,6 +98,26 @@ plan_quotas（版本默认）→ tenant_quotas（租户覆盖）→ 生效值 = 
   grace/frozen/terminated 在管理端均显示停用；② `disableTenant` 直写 0 而非走生命周期服务，
   与 ADR-0031 §2.3「状态写权唯一归属」仍有偏差。两项均为 M14 之后待收口项。
 
+### 2.5 订阅开通是「单事务」不变量（2026-10-20 补充）
+
+开通订阅 = **订阅行生效** + **按 plan_version 快照写入全部 tenant_quotas**。二者不是两个步骤，
+而是同一个可观测状态：只写订阅不写快照，租户即刻「已生效但权益不完整」（生效值回落到
+`plan_quotas` 默认之外的空档，用量校验按无覆盖值判定）；只写部分快照则权益按条数截断。
+因此定案：
+
+- **端口只暴露一个写入口**：`SubscriptionStore.createSubscriptionWithSnapshot(sub, quotas)`，
+  驱动必须在**同一事务**内写订阅行与全部快照行；任一条失败 → 整体回滚。端口**不提供**
+  「只写订阅、稍后补快照」的方法（旧实现 `createSubscription` 即此形态，已移除）。
+- **读在写前**：`plan_quotas` 读取在事务之外先完成（版本发布后不可变，读不引入竞态），
+  读失败时库上零副作用；映射（`limit_value → override_value`、`source=plan_snapshot`）留在
+  领域服务，驱动只负责原子落库。
+- **失败语义**：唯一冲突 → 1003（事务内抛出，快照零落库）；其余失败原样上抛（无新增错误码）。
+  失败后不得残留 `active_marker`——否则该租户重试恒 1003，等于永久无法开通。
+- **验收口径**：Fake 驱动提供 `faultQuotaWriteAt` 故障注入点（第 n 条快照写入抛错），
+  Prisma 驱动用 query extension 在事务内第 n 次 `tenant_quota.upsert` 抛错；两处均断言
+  「订阅 0 行 + active_marker 0 行 + 快照 0 行」，并验证故障消除后同参数重试可一次写全。
+  该用例对非事务实现有判别力（去掉 `$transaction` 后实测失败：残留订阅行 + active_marker）。
+
 ## 3. 影响与约束
 
 ### 3.1 数据模型

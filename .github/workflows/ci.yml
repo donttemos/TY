@@ -277,6 +277,12 @@ jobs:
       - name: 审计事件门禁（PRD-015 FR-15-21）
         run: pnpm run check:audit-events
 
+      # 门禁自身的反向测试：证明「删掉某事件唯一的写入点」会被判红、注册表定义文件不算写入点。
+      # 没有这步的话，判定逻辑被无意改宽松（例如又回到「任意字面量出现即算」）时 CI 依旧常绿，
+      # 「门禁通过」就不再等于「覆盖完整」。node:test 执行，毫秒级、无外部依赖。
+      - name: 审计事件门禁反向测试（node:test）
+        run: pnpm run check:audit-events:test
+
   # ---------- 三库集成矩阵（TC-ORM-001：同一套用例三库各跑一遍） ----------
   integration:
     name: 集成测试 / ${{ matrix.db }}

@@ -3,6 +3,8 @@
  * @description 锁定三级降级链与标签语义：
  *   摘要优先（row.summary）→ 事件名+对象 → 未登记原始码 → 上线前旧行的 module/action 中文；
  *   结果四态（success/denied/failed/unknown）与「未标注」必须可区分；风险缺失时显示空。
+ *   操作人只认写入时固化的名称快照，缺失时显式标注「名称快照缺失」——不能用当前用户名回填
+ *   （否则改名后的历史行会显示改名后的名字，等于把今天的事实写成昨天的）。
  *   这些是「不编造历史」的底线，回归时最先被破坏。
  * @author donttemo
  * @created 2026-10-20
@@ -111,9 +113,11 @@ describe('结果 / 风险标签', () => {
 });
 
 describe('操作人 / 对象 / 来源', () => {
-  it('操作人优先名称快照 → ID → 系统', () => {
+  it('操作人只认名称快照；缺失时显式标注 + ID，不回退当前用户名', () => {
     expect(actorText(row())).toBe('平台管理员');
-    expect(actorText(row({ actorLabel: null }))).toBe('u-1');
+    // 关键反向断言：早期实现返回 'u-1'（ID），页面再拿当前用户列表把 ID 翻译成「现在的名字」，
+    // 于是「运营 A → 运营 B」改名后历史行显示「运营 B」。缺失必须说出来，不能翻译成今天的名字。
+    expect(actorText(row({ actorLabel: null }))).toBe('名称快照缺失（ID: u-1）');
     expect(actorText(row({ actorLabel: null, userId: null }))).toBe('系统');
   });
 

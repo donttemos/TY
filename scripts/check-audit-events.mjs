@@ -1,16 +1,21 @@
 #!/usr/bin/env node
 /*
  * @file 审计事件门禁（PRD-015 FR-15-21，ADR-0032 R1）
- * @description 一条事件必须同时满足三件事才算「已接入」，本脚本把三者对撞：
+ * @description 一条事件必须同时满足四件事才算「已接入」，本脚本把四者对撞：
  *   ① 注册表（packages/auth/src/audit-events.ts）自检通过：码唯一、命名合规、文案/模板变量完整；
  *   ② 代码里不出现未登记的事件码（`event: 'x'` 与 `recordEvent('x')` 两处语义位置）；
- *   ③ 注册表每个未废弃条目都能在生产代码中找到写入点（字符串字面量出现即可，
- *      兼容「动作→事件码」映射表这类间接引用）；
+ *   ③ 注册表每个未废弃条目都能在生产代码中找到**真实写入点**；
  *   ④ 覆盖矩阵（docs/45 §7）逐一列出注册表条目——文档与代码不许各说各话。
+ *   另有 ⑤ mock 侧注册表为生成物，与后端注册表逐字节一致。
  *
- *   「写入点」为何用「字面量出现」而不是「recordEvent 调用」：生命周期事件经
- *   `LIFECYCLE_EVENTS[action]` 映射表间接传入，只认直接调用会把已接入的事件误判为缺失；
- *   而「未登记码」只认 `event:` 与直接调用两个语义位置，避免把普通说明文字当成事件码。
+ *   ③ 的口径是本次安全加固的重点（此前用「任意字面量出现即算」，注册表自身也在扫描范围内，
+ *   于是删掉唯一写入调用后门禁依旧是绿的）：
+ *   - 注册表定义文件**整体排除**：它列出全部事件码，是码表而不是「有人真的记了这条审计」；
+ *   - 写入点只认 `recordEvent('x')` / `recordEventSync('x')` 与 `event: 'x'` 属性（仅服务端文件）；
+ *   - 间接引用只认**显式标注的映射表**（文件内含 `@audit-event-map`，如 saas 的
+ *     `LIFECYCLE_EVENTS[action]`）——「任意字面量出现」不再算数。
+ *   判定逻辑拆在 scripts/lib/audit-gate.mjs（纯函数），由 scripts/__tests__/audit-gate.test.mjs
+ *   反向验证：删掉某事件唯一的写入点后，分析结果必须报「无写入点」。
  *
  *   注册表以 TypeScript 源码直接导入（Node --experimental-strip-types），
  *   **不生成第二份码表副本**——否则门禁本身会成为新的漂移源。
@@ -19,6 +24,8 @@
  *   退出码：0 = 通过；1 = 存在缺口；2 = 注册表读取失败
  * @author donttemo
  * @created 2026-10-20
+ * @modified 2026-10-20 donttemo M15 安全加固：写入点判定排除注册表定义文件、只认真实事件调用与
+ *   显式映射表，判定逻辑抽到 lib/audit-gate.mjs 以支持反向测试
  * @module scripts
  */
 
@@ -26,32 +33,21 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildMockAuditEventsFile } from './gen-audit-events-mock.mjs';
+import { analyzeAuditCoverage } from './lib/audit-gate.mjs';
 
 const ROOT = process.cwd();
-const REGISTRY_PATH = join(ROOT, 'packages', 'auth', 'src', 'audit-events.ts');
+/** 注册表定义文件（相对仓库根，POSIX 分隔符）：既是导入源，也是「不是写入点」的定义文件 */
+const REGISTRY_REL = 'packages/auth/src/audit-events.ts';
+const REGISTRY_PATH = join(ROOT, REGISTRY_REL);
 const MATRIX_DOC = join(ROOT, 'docs', '45-observability-contract.md');
 /** 生产代码扫描根（模板项目是独立产物，不参与框架门禁） */
-const SCAN_ROOTS = ['packages', join('apps', 'example-api', 'src'), join('apps', 'admin-web', 'src')];
+const SERVER_ROOTS = ['packages', join('apps', 'example-api', 'src')];
+/** 前端扫描根：仍要检查未登记码，但 `event:` 只是查询参数，不算写入点 */
+const FRONTEND_ROOTS = [join('apps', 'admin-web', 'src')];
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'coverage', '.turbo', '.git', 'migrations']);
 const TEST_FILE = /(\.spec\.ts|\.test\.ts)$|__tests__/;
 
-/** 语义位置上必须登记的事件码：属性 `event:` 与 `recordEvent('…')` */
-const DECLARED_PATTERNS = [
-  /(?:^|[^a-zA-Z0-9_])event:\s*['"]([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)['"]/g,
-  /recordEvent(?:Sync)?\(\s*['"]([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)['"]/g,
-];
-
-/** 任意字符串字面量（用于「注册表条目是否有写入点」判定） */
-const ANY_LITERAL = /['"]([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+)['"]/g;
-
-/**
- * 动态事件码调用（无法静态校验，仅提示）
- *
- * 只认「成员调用」（`.recordEvent(`），避免把方法定义 `recordEvent(code: string)` 误报成动态调用。
- */
-const DYNAMIC_CALL = /\.\s*recordEvent(?:Sync)?\(\s*(?!['"])/g;
-
-/** 递归收集待扫描文件 */
+/** 递归收集待扫描文件（返回绝对路径） */
 function collectFiles(dir, out = []) {
   let entries;
   try {
@@ -72,11 +68,9 @@ function collectFiles(dir, out = []) {
   return out;
 }
 
-/** 行号（1 基） */
-function lineOf(content, index) {
-  let line = 1;
-  for (let cursor = 0; cursor < index; cursor += 1) if (content[cursor] === '\n') line += 1;
-  return line;
+/** 绝对路径 → 仓库相对 POSIX 路径（门禁输出与定义文件比对都用它） */
+function toRel(file) {
+  return relative(ROOT, file).replace(/\\/g, '/');
 }
 
 /** 主流程 */
@@ -94,49 +88,28 @@ async function main() {
   }
 
   const { AUDIT_EVENTS, verifyAuditRegistry } = registry;
-  const registered = new Set(AUDIT_EVENTS.map((item) => item.code));
   const active = AUDIT_EVENTS.filter((item) => !item.deprecated);
   const findings = [];
-  const warnings = [];
 
   // ① 注册表自检
   for (const issue of verifyAuditRegistry()) findings.push(`注册表自检失败：${issue}`);
 
-  // ② 扫描生产代码
-  const files = SCAN_ROOTS.flatMap((root) => collectFiles(join(ROOT, root)));
-  const usedLiterals = new Set();
-  const declared = new Map(); // code → [file:line]
+  // ②③ 扫描生产代码并按「真实写入点」判定覆盖
+  const files = [
+    ...SERVER_ROOTS.flatMap((root) => collectFiles(join(ROOT, root))).map((file) => ({ file, countsEventProperty: true })),
+    ...FRONTEND_ROOTS.flatMap((root) => collectFiles(join(ROOT, root))).map((file) => ({ file, countsEventProperty: false })),
+  ].map((entry) => ({
+    path: toRel(entry.file),
+    content: readFileSync(entry.file, 'utf8'),
+    countsEventProperty: entry.countsEventProperty,
+  }));
 
-  for (const file of files) {
-    const content = readFileSync(file, 'utf8');
-    const rel = relative(ROOT, file).replace(/\\/g, '/');
-
-    for (const pattern of DECLARED_PATTERNS) {
-      pattern.lastIndex = 0;
-      let match;
-      while ((match = pattern.exec(content)) !== null) {
-        const code = match[1];
-        if (!registered.has(code)) findings.push(`未登记事件码：${code}（${rel}:${lineOf(content, match.index)}）`);
-        declared.set(code, [...(declared.get(code) ?? []), `${rel}:${lineOf(content, match.index)}`]);
-      }
-    }
-
-    ANY_LITERAL.lastIndex = 0;
-    let literal;
-    while ((literal = ANY_LITERAL.exec(content)) !== null) {
-      if (registered.has(literal[1])) usedLiterals.add(literal[1]);
-    }
-
-    const dynamicCount = (content.match(DYNAMIC_CALL) ?? []).length;
-    if (dynamicCount > 0) warnings.push(`动态事件码调用 ${dynamicCount} 处（无法静态校验）：${rel}`);
-  }
-
-  // ③ 注册表条目必须有写入点
-  for (const item of active) {
-    if (!usedLiterals.has(item.code)) {
-      findings.push(`注册表条目无写入点：${item.code}（生产代码中找不到该码的字面量）`);
-    }
-  }
+  const coverage = analyzeAuditCoverage({
+    registry: AUDIT_EVENTS,
+    files,
+    definitionPaths: [REGISTRY_REL],
+  });
+  findings.push(...coverage.findings);
 
   // ④ 覆盖矩阵与注册表一致
   const doc = readFileSync(MATRIX_DOC, 'utf8');
@@ -157,23 +130,25 @@ async function main() {
     findings.push(`mock 注册表校验失败：${error instanceof Error ? error.message : String(error)}`);
   }
 
+  const writePointTotal = [...coverage.writePoints.values()].reduce((sum, list) => sum + list.length, 0);
   console.log('[audit-events] 注册表条目 %d（有效 %d / 废弃 %d）', AUDIT_EVENTS.length, active.length, AUDIT_EVENTS.length - active.length);
-  console.log('[audit-events] 扫描生产文件 %d，命中已登记码 %d 个', files.length, usedLiterals.size);
-  if (declared.size > 0) console.log('[audit-events] 显式声明点 %d 处（event: / recordEvent 字面量）', [...declared.values()].flat().length);
+  console.log('[audit-events] 扫描生产文件 %d，有真实写入点的事件 %d 个（共 %d 处）', files.length, coverage.writePoints.size, writePointTotal);
+  console.log('[audit-events] 显式声明点 %d 处（event: / recordEvent 字面量）', coverage.declaredCount);
 
-  if (warnings.length > 0) {
-    console.log('\n[audit-events] 提示（不阻断，共 %d 条）：', warnings.length);
-    for (const warning of warnings) console.log('    - %s', warning);
+  if (coverage.warnings.length > 0) {
+    console.log('\n[audit-events] 提示（不阻断，共 %d 条）：', coverage.warnings.length);
+    for (const warning of coverage.warnings) console.log('    - %s', warning);
   }
 
   if (findings.length > 0) {
     console.error('\n[audit-events] 发现 %d 处缺口：', findings.length);
     for (const finding of findings) console.error('    - %s', finding);
-    console.error('\n修复方式：先在 packages/auth/src/audit-events.ts 登记事件，再补写入点与 docs/45 §7 矩阵行。');
+    console.error('\n修复方式：先在 packages/auth/src/audit-events.ts 登记事件，再补真实写入调用');
+    console.error('（recordEvent / event: 属性，或显式标注 @audit-event-map 的映射表），最后补 docs/45 §7 矩阵行。');
     process.exit(1);
   }
 
-  console.log('\n[audit-events] OK：注册表 / 写入点 / 覆盖矩阵三方一致（PRD-015 FR-15-21）');
+  console.log('\n[audit-events] OK：注册表 / 真实写入点 / 覆盖矩阵三方一致（PRD-015 FR-15-21）');
 }
 
 await main();
