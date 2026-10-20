@@ -11,6 +11,9 @@
  *   （危险动作必填，普通动作选填，FR-14-08）。
  * @modified 2026-10-20 M14 跨页闭环：租户上下文取 useTenantQuery —— `/saas/lifecycle?tenantId=` 直达即
  *   自动加载状态与迁移历史（工作台「已冻结/已终止」跳转不再要求二次选择）；无参只复位不发请求。
+ * @modified 2026-10-20 M14/PRD-014 FR-14-04（AC-14-04）：状态 + 历史接入 createRequestGuard
+ *   （租户快照校验），切租户即复位并作废在途票据 —— 旧租户的迟到响应不得改写当前状态，
+ *   否则按钮合法性（allowedActions）会按错误状态计算。
  * @module admin-web/views
 -->
 
@@ -22,6 +25,7 @@ import type { LifecycleLog } from '@/api/types';
 import TenantPicker from '@/components/TenantPicker/index.vue';
 import { confirmWithReason } from '@/components/ConfirmWithReason';
 import { useTenantQuery } from '@/composables/useTenantQuery';
+import { createRequestGuard } from '@/composables/useRequestGuard';
 import { BizError, describeBizError } from '@/utils/biz-error';
 
 const ACTIONS: Array<{ action: string; label: string; danger?: boolean }> = [
@@ -38,6 +42,9 @@ const logs = ref<LifecycleLog[]>([]);
 /** 真实状态（store 直读，非日志推导）+ 合法动作集（后端迁移表派生） */
 const statusInfo = ref<{ status: string | null; allowedActions: string[] } | null>(null);
 
+/** 状态 + 历史来自同一次「加载」，共用一个守卫（两次请求由 Promise.all 同时发出） */
+const guard = createRequestGuard();
+
 /** 当前租户：由路由 `?tenantId=` 初始化（缺失 = 无租户态，不发起任何查询） */
 const { tenantId } = useTenantQuery({
   onTenant: () => load(),
@@ -46,14 +53,16 @@ const { tenantId } = useTenantQuery({
 
 /** 清空当前租户的状态与迁移历史（不发请求：切换租户复位 / 路由参数缺失复位） */
 function resetTenantData(): void {
+  guard.invalidate();
   statusInfo.value = null;
   logs.value = [];
+  // 作废后旧请求的 finally 不再关 loading，必须显式复位，否则「加载状态与历史」按钮永转
+  loading.value = false;
 }
 
-// 选择器清空（用户主动 / 路由撤参）：立即复位，避免空租户态下仍展示上一租户状态
-watch(tenantId, (value) => {
-  if (!value) resetTenantData();
-});
+// 租户一变即复位（sync：赋值瞬间执行，早于在途 promise 恢复），
+// 避免「选择器已指向 B、页面仍是 A 的状态与历史」（FR-14-04 / AC-14-04）
+watch(tenantId, () => resetTenantData(), { flush: 'sync' });
 
 function actionLabel(action: string): string {
   return ACTIONS.find((a) => a.action === action)?.label ?? action;
@@ -73,22 +82,27 @@ function disabledHint(action: string): string {
 }
 
 async function load(): Promise<void> {
-  if (!tenantId.value) {
+  const tenant = tenantId.value;
+  if (!tenant) {
     ElMessage.warning('请先选择租户');
     return;
   }
+  const ticket = guard.begin(() => tenantId.value);
   loading.value = true;
   try {
     const [status, logList] = await Promise.all([
-      saasApi.fetchTenantLifecycleStatus(tenantId.value),
-      saasApi.fetchLifecycleLogs(tenantId.value),
+      saasApi.fetchTenantLifecycleStatus(tenant),
+      saasApi.fetchLifecycleLogs(tenant),
     ]);
-    statusInfo.value = status;
-    logs.value = logList;
+    // 旧租户的迟到响应不得改写当前状态（否则按钮合法性按错误状态计算）
+    ticket.apply(() => {
+      statusInfo.value = status;
+      logs.value = logList;
+    });
   } catch (e) {
-    ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
+    if (ticket.isFresh()) ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
   } finally {
-    loading.value = false;
+    if (ticket.isFresh()) loading.value = false;
   }
 }
 

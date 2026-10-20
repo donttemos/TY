@@ -9,17 +9,20 @@
  *   取消原因走 confirmWithReason 统一入口（U-14-1 收口）。
  * @modified 2026-10-20 M14 跨页闭环：租户筛选取 useTenantQuery —— `/saas/subscriptions?tenantId=` 直达
  *   即按该租户自动筛选（工作台「即将到期订阅」跳转不再要求二次选择），前进/后退同步跟随。
+ * @modified 2026-10-20 M14/PRD-014 FR-14-04（AC-14-04）：列表与详情历史接入 createRequestGuard，
+ *   连续切换租户/筛选/页码时旧响应不再覆盖新结果；切租户即复位列表与抽屉（sync watch）。
  * @module admin-web/views
 -->
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import * as saasApi from '@/api/saas';
 import type { SubscriptionRow } from '@/api/saas';
 import TenantPicker from '@/components/TenantPicker/index.vue';
 import { confirmWithReason } from '@/components/ConfirmWithReason';
 import { useTenantQuery } from '@/composables/useTenantQuery';
+import { createRequestGuard } from '@/composables/useRequestGuard';
 import { BizError, describeBizError } from '@/utils/biz-error';
 
 const STATUS_TAG: Record<string, 'success' | 'warning' | 'info' | 'danger'> = { active: 'success', expired: 'warning', cancelled: 'info' };
@@ -37,8 +40,31 @@ const pageSize = ref(20);
 const total = ref(0);
 const rows = ref<SubscriptionRow[]>([]);
 
+/** 列表 / 详情历史各自一个守卫（两处请求生命周期独立，共享会互相作废） */
+const listGuard = createRequestGuard();
+const historyGuard = createRequestGuard();
+
+// 切换租户筛选即复位列表与抽屉：sync 保证「先清空、再取新租户数据」，
+// 且让 A 的在途票据当场失效（FR-14-04 / AC-14-04：切租户后不残留上一租户数据）
+watch(
+  tenantId,
+  () => {
+    listGuard.invalidate();
+    historyGuard.invalidate();
+    rows.value = [];
+    total.value = 0;
+    detailRow.value = null;
+    history.value = [];
+    // 作废后旧请求的 finally 不再关 loading，必须显式复位，否则「查询」按钮永转
+    loading.value = false;
+    historyLoading.value = false;
+  },
+  { flush: 'sync' },
+);
+
 async function loadList(resetPage = false): Promise<void> {
   if (resetPage) page.value = 1;
+  const ticket = listGuard.begin(() => tenantId.value);
   loading.value = true;
   try {
     const r = await saasApi.fetchSubscriptions({
@@ -48,12 +74,15 @@ async function loadList(resetPage = false): Promise<void> {
       planCode: filters.planCode || undefined,
       status: filters.status || undefined,
     });
-    rows.value = r.items;
-    total.value = r.total;
+    // 旧租户/旧筛选的响应不得落地（迟到的 A 列表不能覆盖 B 列表）
+    ticket.apply(() => {
+      rows.value = r.items;
+      total.value = r.total;
+    });
   } catch (e) {
-    ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
+    if (ticket.isFresh()) ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
   } finally {
-    loading.value = false;
+    if (ticket.isFresh()) loading.value = false;
   }
 }
 
@@ -73,13 +102,17 @@ const historyLoading = ref(false);
 async function openDetail(row: SubscriptionRow): Promise<void> {
   detailRow.value = row;
   drawerVisible.value = true;
+  // 先清空再取：连续点开不同租户的详情时，不显示上一行的历史（旧响应由票据丢弃）
+  history.value = [];
+  const ticket = historyGuard.begin(() => detailRow.value?.tenantId ?? '');
   historyLoading.value = true;
   try {
-    history.value = await saasApi.fetchTenantSubscriptionHistory(row.tenantId);
+    const list = await saasApi.fetchTenantSubscriptionHistory(row.tenantId);
+    ticket.apply(() => { history.value = list; });
   } catch (e) {
-    ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
+    if (ticket.isFresh()) ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
   } finally {
-    historyLoading.value = false;
+    if (ticket.isFresh()) historyLoading.value = false;
   }
 }
 

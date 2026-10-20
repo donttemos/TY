@@ -6,12 +6,22 @@
  * @author donttemo
  * @created 2026-10-20
  * @modified 2026-10-20 M14 跨页闭环：mount 挂 memory router，补深链自动查询与前进/后退用例。
+ * @modified 2026-10-20 M14/PRD-014 AC-14-04：补乱序返回用例（A 的配额晚到不得覆盖 B 的配额/用量）。
  * @module admin-web/views
  */
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+/** 可控 promise：手动决定何时返回，用于构造「后发先至」 */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 vi.mock('@/api/saas', () => ({
   fetchTenantQuotas: vi.fn(),
@@ -153,5 +163,33 @@ describe('用量页看板化（M14 B4）', () => {
 
     expect(saasApi.fetchUsageTrend).toHaveBeenLastCalledWith('t1', 'storage_gb', 168);
     expect(saasApi.fetchTenantUsage).toHaveBeenLastCalledWith('t1', 'storage_gb');
+  });
+
+  it('乱序返回：A 的配额晚到不覆盖 B 的配额与用量（AC-14-04）', async () => {
+    const pendingA = deferred<Awaited<ReturnType<typeof saasApi.fetchTenantQuotas>>>();
+    vi.mocked(saasApi.fetchTenantQuotas).mockImplementation((id) =>
+      id === 'tenant-A'
+        ? pendingA.promise
+        : Promise.resolve([{ tenantId: 'tenant-B', quotaKey: 'api_calls', limitValue: '222', execution: 'hard', source: 'manual' }]),
+    );
+
+    // A 的请求发出但未返回
+    const { wrapper } = await mountPage({ tenantId: 'tenant-A' });
+    expect(wrapper.text()).not.toContain('222');
+
+    // 切到 B 并查询：B 先返回
+    wrapper.findComponent(TenantPicker).vm.$emit('update:modelValue', 'tenant-B');
+    await flushPromises();
+    await wrapper.findAll('button').find((b) => b.text().includes('查询'))!.trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).toContain('222');
+    expect(saasApi.fetchTenantUsage).toHaveBeenCalledWith('tenant-B', 'api_calls');
+
+    // A 晚到：不得覆盖 B 的配额，也不得让后续用量查询落到 A
+    pendingA.resolve([{ tenantId: 'tenant-A', quotaKey: 'api_calls', limitValue: '111', execution: 'hard', source: 'manual' }]);
+    await flushPromises();
+    expect(wrapper.text()).toContain('222');
+    expect(wrapper.text()).not.toContain('111');
+    expect(saasApi.fetchTenantUsage).toHaveBeenLastCalledWith('tenant-B', 'api_calls');
   });
 });

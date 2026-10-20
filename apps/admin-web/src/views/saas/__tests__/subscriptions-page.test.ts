@@ -6,6 +6,7 @@
  * @author donttemo
  * @created 2026-10-20
  * @modified 2026-10-20 M14 跨页闭环：mount 挂 memory router，补路由参数初始化与前进/后退用例。
+ * @modified 2026-10-20 M14/PRD-014 AC-14-04：补乱序返回用例（A 晚到不覆盖 B；同租户旧筛选晚到不覆盖新筛选）。
  * @module admin-web/views
  */
 import { flushPromises, mount } from '@vue/test-utils';
@@ -27,6 +28,7 @@ vi.mock('@/components/ConfirmWithReason', () => ({ confirmWithReason: vi.fn() })
 
 import ElementPlus from 'element-plus';
 import * as saasApi from '@/api/saas';
+import type { SubscriptionPage } from '@/api/saas';
 import { fetchTenants } from '@/api/tenant';
 import { confirmWithReason } from '@/components/ConfirmWithReason';
 import TenantPicker from '@/components/TenantPicker/index.vue';
@@ -34,6 +36,15 @@ import { permission } from '@/directives/permission';
 import { useUserStore } from '@/store/user';
 import type { MeResult } from '@/api/types';
 import Subscriptions from '@/views/saas/subscriptions/index.vue';
+
+/** 可控 promise：手动决定何时返回，用于构造「后发先至」 */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 const row = {
   id: 'sub-1', tenantId: 't1', planId: 'plan-1', planVersionId: 'pv-1', status: 'active' as const,
@@ -129,5 +140,52 @@ describe('订阅页（M14 B3 全局列表优先视图）', () => {
   it('只读角色：取消按钮不渲染（v-permission）', async () => {
     const { wrapper } = await mountPage(['ops:saas:read']);
     expect(wrapper.findAll('button').some((b) => b.text().includes('取消'))).toBe(false);
+  });
+
+  it('乱序返回：A 的列表晚于 B 返回，页面只保留 B 的数据（AC-14-04）', async () => {
+    const pendingA = deferred<SubscriptionPage>();
+    vi.mocked(saasApi.fetchSubscriptions).mockImplementation((q) => {
+      if (q?.tenantId === 'tenant-A') return pendingA.promise;
+      return Promise.resolve({ items: [{ ...row, id: 'sub-b', tenantId: 'tenant-B' }], total: 1, page: 1, pageSize: 20 });
+    });
+
+    // A 的请求发出但未返回
+    const { wrapper } = await mountPage(undefined, { tenantId: 'tenant-A' });
+    expect(saasApi.fetchSubscriptions).toHaveBeenCalledTimes(1);
+
+    // 切到 B：B 先返回
+    wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('change', 'tenant-B');
+    await flushPromises();
+    expect(wrapper.text()).toContain('tenant-B');
+
+    // A 晚到：不得覆盖 B
+    pendingA.resolve({ items: [{ ...row, id: 'sub-a', tenantId: 'tenant-A' }], total: 1, page: 1, pageSize: 20 });
+    await flushPromises();
+    expect(wrapper.text()).toContain('tenant-B');
+    expect(wrapper.text()).not.toContain('tenant-A');
+  });
+
+  it('同租户筛选乱序：先发的旧筛选结果晚到不得覆盖新筛选（仅序号守卫可覆盖）', async () => {
+    const pendingOld = deferred<SubscriptionPage>();
+    let call = 0;
+    vi.mocked(saasApi.fetchSubscriptions).mockImplementation(() => {
+      call += 1;
+      return call === 1
+        ? pendingOld.promise
+        : Promise.resolve({ items: [{ ...row, planCode: 'new-plan' }], total: 1, page: 1, pageSize: 20 });
+    });
+
+    // 首屏请求（旧筛选）在途：真实触发源是分页器/筛选控件（不受 loading 禁用影响）
+    const { wrapper } = await mountPage();
+    // 改每页条数 → 新请求并先返回
+    wrapper.findComponent({ name: 'ElPagination' }).vm.$emit('size-change', 50);
+    await flushPromises();
+    expect(wrapper.text()).toContain('new-plan');
+
+    // 旧筛选结果晚到：租户没变（快照相同），只能靠序号拦住
+    pendingOld.resolve({ items: [{ ...row, planCode: 'old-plan' }], total: 1, page: 1, pageSize: 20 });
+    await flushPromises();
+    expect(wrapper.text()).toContain('new-plan');
+    expect(wrapper.text()).not.toContain('old-plan');
   });
 });

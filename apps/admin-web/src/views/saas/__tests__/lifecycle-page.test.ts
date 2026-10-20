@@ -7,6 +7,7 @@
  * @author donttemo
  * @created 2026-10-20
  * @modified 2026-10-20 M14 跨页闭环：mount 挂 memory router，补深链自动加载与前进/后退用例。
+ * @modified 2026-10-20 M14/PRD-014 AC-14-04：补乱序返回用例（A 状态晚到不得覆盖 B）。
  * @module admin-web/views
 */
 
@@ -14,6 +15,15 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+/** 可控 promise：手动决定何时返回，用于构造「后发先至」 */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 vi.mock('@/api/saas', () => ({
   fetchTenantLifecycleStatus: vi.fn(),
@@ -171,5 +181,35 @@ describe('生命周期页（M14 B1 正确性护栏）', () => {
     expect(wrapper.text()).toContain('未查询到租户生命周期状态');
     expect(findButton(wrapper, '开通')!.attributes('disabled')).toBeDefined();
     expect(findButton(wrapper, '恢复')!.attributes('disabled')).toBeDefined();
+  });
+
+  it('乱序返回：A 的状态晚到，不得覆盖 B 的状态与迁移历史（AC-14-04）', async () => {
+    setPermissions(['ops:saas:read', 'ops:saas:write']);
+    const pendingA = deferred<{ status: string | null; allowedActions: string[] }>();
+    vi.mocked(saasApi.fetchTenantLifecycleStatus).mockImplementation((id) =>
+      id === 'tenant-A' ? pendingA.promise : Promise.resolve({ status: 'frozen', allowedActions: ['resume'] }),
+    );
+    vi.mocked(saasApi.fetchLifecycleLogs).mockResolvedValue([]);
+
+    // A 的请求发出但未返回
+    const router = buildRouter();
+    await router.push({ path: '/saas/lifecycle', query: { tenantId: 'tenant-A' } });
+    await router.isReady();
+    const wrapper = mount(Lifecycle, { global: { plugins: [ElementPlus, router], directives: { permission } } });
+    await flushPromises();
+    expect(wrapper.text()).not.toContain('当前状态：');
+
+    // 切到 B：B 先返回
+    wrapper.findComponent(TenantPicker).vm.$emit('update:modelValue', 'tenant-B');
+    await flushPromises();
+    await findButton(wrapper, '加载状态与历史')!.trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).toContain('当前状态：frozen');
+
+    // A 晚到：不得把状态改回 active（否则按钮合法性会按错误状态计算）
+    pendingA.resolve({ status: 'active', allowedActions: ['expire', 'freeze', 'terminate'] });
+    await flushPromises();
+    expect(wrapper.text()).toContain('当前状态：frozen');
+    expect(wrapper.text()).not.toContain('当前状态：active');
   });
 });

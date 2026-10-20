@@ -1,0 +1,92 @@
+{
+  "base": "http://127.0.0.1:5188",
+  "tenant": "1",
+  "at": "2026-10-20T11:25:36.647Z",
+  "results": [
+    {
+      "id": "登录（UI 表单）",
+      "status": "pass",
+      "detail": "跳到 /dashboard"
+    },
+    {
+      "id": "工作台渲染 SaaS 运营卡",
+      "status": "pass",
+      "detail": "区块=[\"即将到期订阅（7 天）\",\"配额风险（≥80%）\",\"最近生命周期变更\"] 条目=1"
+    },
+    {
+      "id": "入口①「即将到期订阅」→ 订阅页",
+      "status": "skip",
+      "detail": "mock 无 7 天内到期演示数据（empty-section），真机需补测"
+    },
+    {
+      "id": "入口②「配额风险」→ 用量页",
+      "status": "skip",
+      "detail": "mock 无 ≥80% 演示数据（empty-section），真机需补测"
+    },
+    {
+      "id": "入口③「最近迁移」→ 生命周期页",
+      "status": "pass",
+      "detail": "path=/saas/lifecycle tenantId=1 选择器=1"
+    },
+    {
+      "id": "订阅页深链：选择器回填 + 行数据租户一致",
+      "status": "pass",
+      "detail": "选择器=1 行数=1 首行=1 default v1 active 2026-10-19T00:00:00.000Z 无期限 详情 取消"
+    },
+    {
+      "id": "订阅页刷新后仍按 tenantId 取数（深链幂等）",
+      "status": "pass",
+      "detail": "行数=1"
+    },
+    {
+      "id": "后退回到工作台",
+      "status": "pass",
+      "detail": "/dashboard"
+    },
+    {
+      "id": "前进回到生命周期页且租户上下文仍在（keep-alive 复用实例）",
+      "status": "pass",
+      "detail": "选择器 before=1 after=1 url=?tenantId=1"
+    },
+    {
+      "id": "用量页深链：配额表 + 用量面板 + 趋势区渲染",
+      "status": "pass",
+      "detail": "选择器=1"
+    },
+    {
+      "id": "趋势柱数据（需 mock 有 usageWindows 行）",
+      "status": "skip",
+      "detail": "mock 未预置窗口数据（db.ts usageWindows 为空），真机由 rollup 提供；渲染逻辑由 usage-page 单测覆盖"
+    },
+    {
+      "id": "清空租户选择即复位（不残留上一租户数据）",
+      "status": "pass",
+      "detail": "选择器=搜索租户（编码 / 名称） 复位占位=true"
+    },
+    {
+      "id": "生命周期页深链：真实状态 + 迁移历史",
+      "status": "pass",
+      "detail": "选择器=1 历史行=1 状态=shown"
+    },
+    {
+      "id": "暗色主题切换生效",
+      "status": "pass",
+      "detail": "点击=true html.dark=true"
+    },
+    {
+      "id": "1280x720 无横向溢出",
+      "status": "pass",
+      "detail": "scrollWidth=1280 innerWidth=1280"
+    },
+    {
+      "id": "1920x1080 无横向溢出",
+      "status": "pass",
+      "detail": "scrollWidth=1920 innerWidth=1920"
+    },
+    {
+      "id": "只读角色无写按钮（浏览器侧）",
+      "status": "skip",
+      "detail": "mock 仅有 super-admin 持有 ops:saas:*，无「仅 read」账号；单测已覆盖 v-permission，真机需用只读账号复核"
+    }
+  ]
+}

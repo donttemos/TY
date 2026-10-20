@@ -18,12 +18,28 @@
 
 ## [Unreleased]
 
+### Fixed（P0：SaaS 运营页异步请求竞态，AC-14-04 关闭，2026-10-20）
+
+- **三页查询存在「先发后到覆盖」**：订阅 / 用量 / 生命周期页直接把 `await` 结果写入页面状态，切换租户或筛选后若旧请求较晚返回，会覆盖新租户数据（用量页更严重：`usageKey` 跨租户残留，导致配额与用量两组数据不匹配）。**修复**：新增 `admin-web/src/composables/useRequestGuard.ts`（请求序号 + 作用域快照双校验，纯函数、无响应式状态），三页全部查询接入；用量页按数据域拆四个守卫（配额 / 用量 / 趋势 / 明细），订阅页拆列表 / 历史，避免换时间窗时误杀在途用量请求。
+- **切换租户改为 `flush: 'sync'` 的 watch 立即复位**：原先只在点「查询」时复位，选择器已切到 B 仍显示 A 的配额/用量/状态；sync 保证赋值瞬间执行、早于任何在途 promise 恢复。
+- **连带修掉三处易被忽略的竞态表现**：① 旧请求的 `finally` 会把新请求的 `loading` 提前置 false；② 旧租户请求失败会弹错到当前租户页面；③ 复位时未放 `loading`，旧请求票据失效后按钮永远转圈（竞态退化为卡死，单测首次运行即复现）。
+- **附带修正**：已选指标不再属于当前租户生效配额时（换套餐/换租户）自动回落到首个指标，避免用脏指标取数。
+- **测试**：admin-web 232→243 例全绿（+11：`request-guard` 7 例覆盖后发先至/invalidate/快照失效；订阅、用量、生命周期各 1 例乱序——A 先发、B 先回、A 后回仍只显示 B；订阅页 1 例同租户旧筛选晚到不覆盖新筛选），`vue-tsc --noEmit` 零错。
+- **浏览器侧证据**：新增 `apps/admin-web/scripts/e2e-m14-tenant-context.mjs`（本机 Chrome + CDP，零新依赖），本地 mock 环境 pass 13 / fail 0 / skip 4，覆盖 UI 登录、工作台入口→深链、刷新幂等、前进/后退 keep-alive、清空选择复位、暗色切换、1280×720 与 1920×1080 无横向溢出；SKIP 4 项为 mock 缺演示数据（7 天内到期订阅、≥80% 配额、`usageWindows`、仅 read 的 SaaS 账号），留真机补测。**AC-14-11 / AC-14-12 仍未勾选**（证据不完整）。
+
 ### Fixed（P1：SaaS 运营页跨页租户上下文断链，2026-10-20）
 
 - **深链 `?tenantId=` 此前完全不被读取**：工作台「即将到期订阅 / 配额风险 / 最近生命周期变更」三处跳转（`/saas/subscriptions|usage|lifecycle?tenantId=…`）落到目标页后，订阅页按全局列表展示、用量与生命周期页保持空租户态，运营人员必须重新选择租户——M14 跨页运营闭环因此断开。**修复**：新增 `admin-web/src/composables/useTenantQuery.ts`，三页统一：① 首屏读 query 初始化 `TenantPicker` 并**自动取数**（用量页配额/用量/趋势/明细四发，生命周期页状态与迁移历史，订阅页列表按该租户筛选）；② 浏览器前进/后退（或外部跳转）改变 query 时同实例跟随，跨路由跳转与 keep-alive 停用实例不响应（防旧实例被新租户数据污染）；③ 参数缺失/非法（空串、纯空白、数组取首项、非字符串）一律视为「无租户」，**只复位不发请求**，杜绝 `/saas/tenants//quotas` 类必错调用。
 - 工作台三处跳转收敛为 `goTenantPage(path, tenantId)`（对象式 `router.push({ path, query })`，避免字符串拼接漏 encode），与目标页 query 契约同源。
 - **设计约束（已写入 PRD-014 §6.3 / OQ-14-4）**：URL 只作输入，页面内换租户**不回写** query —— `layout/AppMain.vue` 的 keep-alive 以 `route.fullPath` 为 key，回写会重建页面实例，导致在途实例与新实例各取一次数且旧实例缓存被新租户数据污染（违反 FR-14-04 数据隔离）。
 - **测试**：admin-web 216→232 例全绿（新增 16 例：composable 7 —— 归一化/首屏命中/无参零请求/前进后退/参数移除/跨路由不串租户/数组取首项；订阅页 2、用量页 3、生命周期页 3 —— 深链自动取数、前进后退跟随、无参零请求、清空选择即复位；工作台 1 —— 跳转必带 `?tenantId=`），`vue-tsc --noEmit` 零错。无后端改动、无新端点、无迁移。
+
+### Fixed（P0：订阅开通与配额快照的原子性，2026-10-20）
+
+- **`SubscriptionService.create()` 曾是非原子两步写**（ADR-0029 §2.5）：先 `createSubscription` 落订阅行，再逐条 `upsertTenantQuota` 写 `plan_quotas` 快照。快照写在第 k 条失败时，库里留下**已生效但权益不完整**的订阅（前 k-1 条快照已落库、`active_marker` 已占位），且该租户后续重试恒 1003「已有生效订阅」——等于永久无法开通，只能人工清库。**定案**：端口只保留一个写入口 `SubscriptionStore.createSubscriptionWithSnapshot(sub, quotas)`（原 `createSubscription` 移除），Prisma 驱动用 `$transaction` 把订阅行与全部快照行收敛为同一事务，任一条失败整体回滚；Fake 驱动同语义（事务前像 + 回滚）。服务层同时改为「先读 `plan_quotas` 快照、后一次原子写」，读阶段失败即零副作用；`SubscriptionService` 因此不再依赖 `QuotaStore`（构造参数 3→2）。
+- **故障注入回归**：Fake 新增 `faultQuotaWriteAt`（第 n 条快照写入抛错），Prisma 侧用 query extension 在事务内第 n 次 `tenant_quota.upsert` 抛错。用例断言「订阅 0 行 + `active_marker` 0 行 + 快照 0 行」，并验证故障消除后同参数重试可一次写全。**判别力已实测**：把驱动临时改回非事务写法，两例均失败（残留订阅行 / 重试 1003），恢复后绿。
+- **无迁移、无新增错误码**；订阅创建冲突仍为 1003。**升级提示**：涉及 `packages/saas` 与 example-api 存储适配器，需重建产物（`pnpm --filter @fw/saas build`）。
+- 文档同步：ADR-0029 新增 §2.5（单事务不变量 + 验收口径）、数据字典 `tenant_subscriptions` 注记、开发指南 §4.1 开通写路径。
 
 ### Fixed（P0：生命周期状态映射，2026-10-21）
 

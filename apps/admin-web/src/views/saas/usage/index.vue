@@ -11,6 +11,10 @@
  *   与事件明细分页表。
  * @modified 2026-10-20 M14 跨页闭环：租户上下文取 useTenantQuery —— `/saas/usage?tenantId=` 直达即自动
  *   拉配额/用量/趋势/明细（工作台「配额风险」跳转不再要求二次选择）；无参只复位不发请求。
+ * @modified 2026-10-20 M14/PRD-014 FR-14-04（AC-14-04）：四类查询（配额/用量/趋势/明细）接入
+ *   createRequestGuard 序号 + `租户|指标|窗口|页码` 快照双校验，乱序返回时旧租户响应一律丢弃；
+ *   loading 与错误提示同样按票据归属，避免旧请求提前关 loading / 误报新租户。切换租户改为 sync
+ *   watch 立即复位（原先只在点「查询」时复位，选择器已切到 B 仍显示 A 的配额/用量）。
  * @module admin-web/views
 -->
 
@@ -20,6 +24,7 @@ import { ElMessage } from 'element-plus';
 import * as saasApi from '@/api/saas';
 import TenantPicker from '@/components/TenantPicker/index.vue';
 import { useTenantQuery } from '@/composables/useTenantQuery';
+import { createRequestGuard } from '@/composables/useRequestGuard';
 import { BizError, describeBizError } from '@/utils/biz-error';
 
 interface QuotaRow {
@@ -44,28 +49,47 @@ const { tenantId } = useTenantQuery({
   onTenant: () => loadQuotas(),
   onEmpty: () => resetTenantData(),
 });
-/** 已加载租户（FR-14-04：切换租户即重置，防上一租户数据残留） */
-const loadedTenant = ref('');
+
+/**
+ * 四个数据域各自一个守卫（共享实例会互相误杀：换时间窗会让在途的用量请求一并作废）。
+ * 作用域字符串把「租户 + 指标 + 窗口 + 页码」编进快照：任一维度变化时，即使序号仍最新，
+ * 旧响应也不得落地（租户快照是 AC-14-04 的硬约束，指标/窗口/页码是同一租户内的同类问题）。
+ */
+const quotaGuard = createRequestGuard();
+const usageGuard = createRequestGuard();
+const trendGuard = createRequestGuard();
+const eventsGuard = createRequestGuard();
+
 const quotas = ref<QuotaRow[]>([]);
 const usage = ref<UsageRow | null>(null);
 const usageKey = ref('');
 const reportForm = reactive({ quotaKey: 'api_calls', quantity: 1, idempotencyKey: '' });
 
-/** 清空当前租户的全部看板数据（不发请求：切换租户复位 / 路由参数缺失复位） */
-function resetTenantData(): void {
-  quotas.value = [];
+/** 指标维度数据（用量/趋势/明细）：切租户或配额清空时一并复位 */
+function resetMetricData(): void {
   usage.value = null;
-  usageKey.value = '';
   trend.value = [];
   events.value = [];
   eventTotal.value = 0;
-  loadedTenant.value = '';
+  eventPage.value = 1;
 }
 
-// 选择器清空（用户主动 / 路由撤参）：立即复位，避免空租户态下仍展示上一租户数据
-watch(tenantId, (value) => {
-  if (!value) resetTenantData();
-});
+/** 清空当前租户的全部看板数据（不发请求：切换租户复位 / 路由参数缺失复位） */
+function resetTenantData(): void {
+  [quotaGuard, usageGuard, trendGuard, eventsGuard].forEach((g) => g.invalidate());
+  quotas.value = [];
+  usageKey.value = '';
+  // 旧租户的在途请求已作废，其 finally 不会再关 loading（票据失效）——这里必须显式复位，
+  // 否则「查询」按钮会一直处于 loading 禁用态，切到新租户后点不动（竞态退化为卡死）
+  loading.value = false;
+  trendLoading.value = false;
+  eventsLoading.value = false;
+  resetMetricData();
+}
+
+// 选择器/路由参数变化即复位。flush: 'sync' 是刻意选择：赋值瞬间执行，早于任何在途
+// promise 的恢复回调，既保证「切到 B 不残留 A 的数据」，也让 A 的在途票据当场失效。
+watch(tenantId, () => resetTenantData(), { flush: 'sync' });
 
 function percent(used: string, limit: string): number {
   const l = Number(limit);
@@ -74,34 +98,46 @@ function percent(used: string, limit: string): number {
 }
 
 async function loadQuotas(): Promise<void> {
-  if (!tenantId.value) {
+  const tenant = tenantId.value;
+  if (!tenant) {
     ElMessage.warning('请先选择租户');
     return;
   }
+  const ticket = quotaGuard.begin(() => tenantId.value);
   loading.value = true;
   try {
-    if (loadedTenant.value !== tenantId.value) {
-      resetTenantData();
-      loadedTenant.value = tenantId.value;
+    const rows = await saasApi.fetchTenantQuotas(tenant);
+    // 旧租户的响应不得落地（FR-14-04 / AC-14-04：乱序返回仍只显示当前租户）
+    if (!ticket.apply(() => { quotas.value = rows; })) return;
+    if (rows.length === 0) {
+      usageKey.value = '';
+      resetMetricData();
+      return;
     }
-    quotas.value = await saasApi.fetchTenantQuotas(tenantId.value);
-    if (quotas.value.length > 0 && !usageKey.value) {
-      usageKey.value = quotas.value[0].quotaKey;
-      await Promise.all([loadUsage(), loadTrend(), loadEvents()]);
+    // 已选指标可能不在当前租户的生效配额里（换租户/换套餐）→ 回落到首项，避免用脏指标取数
+    if (!usageKey.value || !rows.some((r) => r.quotaKey === usageKey.value)) {
+      usageKey.value = rows[0].quotaKey;
     }
+    await Promise.all([loadUsage(), loadTrend(), loadEvents()]);
   } catch (e) {
-    ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
+    // 旧请求失败不报给当前租户（否则用户会在 B 页看到 A 的错误）
+    if (ticket.isFresh()) ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
   } finally {
-    loading.value = false;
+    // 旧请求不得提前关掉新请求的 loading
+    if (ticket.isFresh()) loading.value = false;
   }
 }
 
 async function loadUsage(): Promise<void> {
-  if (!tenantId.value || !usageKey.value) return;
+  const tenant = tenantId.value;
+  const metric = usageKey.value;
+  if (!tenant || !metric) return;
+  const ticket = usageGuard.begin(() => `${tenantId.value}|${usageKey.value}`);
   try {
-    usage.value = await saasApi.fetchTenantUsage(tenantId.value, usageKey.value);
+    const r = await saasApi.fetchTenantUsage(tenant, metric);
+    ticket.apply(() => { usage.value = r; });
   } catch (e) {
-    ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
+    if (ticket.isFresh()) ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
   }
 }
 
@@ -125,15 +161,19 @@ function bucketLabel(iso: string, hours: number): string {
 }
 
 async function loadTrend(): Promise<void> {
-  if (!tenantId.value || !usageKey.value) return;
+  const tenant = tenantId.value;
+  const metric = usageKey.value;
+  if (!tenant || !metric) return;
+  const hours = trendHours.value;
+  const ticket = trendGuard.begin(() => `${tenantId.value}|${usageKey.value}|${trendHours.value}`);
   trendLoading.value = true;
   try {
-    const r = await saasApi.fetchUsageTrend(tenantId.value, usageKey.value, trendHours.value);
-    trend.value = r.points;
+    const r = await saasApi.fetchUsageTrend(tenant, metric, hours);
+    ticket.apply(() => { trend.value = r.points; });
   } catch (e) {
-    ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
+    if (ticket.isFresh()) ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
   } finally {
-    trendLoading.value = false;
+    if (ticket.isFresh()) trendLoading.value = false;
   }
 }
 
@@ -145,16 +185,24 @@ const events = ref<Array<{ quotaKey: string; quantity: string; occurredAt: strin
 const eventsLoading = ref(false);
 
 async function loadEvents(): Promise<void> {
-  if (!tenantId.value || !usageKey.value) return;
+  const tenant = tenantId.value;
+  const metric = usageKey.value;
+  if (!tenant || !metric) return;
+  const hours = trendHours.value;
+  const page = eventPage.value;
+  const pageSize = eventPageSize.value;
+  const ticket = eventsGuard.begin(() => `${tenantId.value}|${usageKey.value}|${trendHours.value}|${eventPage.value}|${eventPageSize.value}`);
   eventsLoading.value = true;
   try {
-    const r = await saasApi.fetchUsageEventList(tenantId.value, { quotaKey: usageKey.value, hours: trendHours.value, page: eventPage.value, pageSize: eventPageSize.value });
-    events.value = r.items;
-    eventTotal.value = r.total;
+    const r = await saasApi.fetchUsageEventList(tenant, { quotaKey: metric, hours, page, pageSize });
+    ticket.apply(() => {
+      events.value = r.items;
+      eventTotal.value = r.total;
+    });
   } catch (e) {
-    ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
+    if (ticket.isFresh()) ElMessage.error(e instanceof BizError ? describeBizError(e) : '操作失败，请重试');
   } finally {
-    eventsLoading.value = false;
+    if (ticket.isFresh()) eventsLoading.value = false;
   }
 }
 
