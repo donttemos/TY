@@ -17,7 +17,7 @@
  *   任务不存在 404、/audit-logs/export 派发 → 下载 CSV 产物；越权面补 tenant / export 与
  *   「alice 读他人任务 404」的归属人隔离断言
  * @modified 2026-10-15 donttemo BUG-15 增量 + E-07：roles/dict 排序白名单断言（合法排序 + 未知字段
- *   400/1001）与 GET /dict/audit_module 四项断言（M9 起为六项：seed 补 queue/config 两模块）
+ *   400/1001）与 GET /dict/audit_module 四项断言（M9 起为六项：seed 补 queue/config 两模块；M15 起七项：补 saas）
  * @modified 2026-10-15 donttemo M10/E-17：新增前端错误遥测段——POST /telemetry/client-errors
  *   公开摄取（合法上报 received/total、超单批上限 400/1001、非法字段 details 一次回齐）
  * @modified 2026-10-20 donttemo 租户停用契约对齐全 ADR-0031 §2.3：DELETE /tenants/:id 由直写 status=0
@@ -714,8 +714,8 @@ async function main() {
 
   const amDict = await call('/api/v1/dict/audit_module', { token });
   const amValues = (amDict.body.data ?? []).map((i) => i.value).sort();
-  check('GET /dict/audit_module 返回 auth/config/queue/role/tenant/user 六项（E-07 + M9 补 config/queue）',
-    isOk(amDict.status) && JSON.stringify(amValues) === JSON.stringify(['auth', 'config', 'queue', 'role', 'tenant', 'user']),
+  check('GET /dict/audit_module 返回 auth/config/queue/role/saas/tenant/user 七项（E-07 + M9 + M15 补 saas）',
+    isOk(amDict.status) && JSON.stringify(amValues) === JSON.stringify(['auth', 'config', 'queue', 'role', 'saas', 'tenant', 'user']),
     `http=${amDict.status} values=${amValues.join(',')}`);
 
   // ======================= 越权面（alice 仅 user:read） =======================
