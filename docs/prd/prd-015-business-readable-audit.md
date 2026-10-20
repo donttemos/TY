@@ -10,7 +10,7 @@
 
 # PRD-015 · 业务可读审计与运营追溯
 
-> 里程碑：M15｜ 状态：**草案**（2026-10-20）｜ 优先级：P1 ｜ 依赖：M12 审计/错误/ID 契约（已交付）、M13 SaaS 领域服务（已交付）、M14 运营面与页面范式（v0.7.5 已交付）、M10 归档与任务中心（已交付）｜ 负责人：donttemo ｜ 更新：2026-10-20
+> 里程碑：M15｜ 状态：**草案**（2026-10-20）｜ 优先级：P1 ｜ 依赖：M12 审计/错误/ID 契约（已交付）、M13 SaaS 领域服务（已交付）、M14 运营面与页面范式（v0.7.5 已交付）、M10 归档与任务中心（已交付）｜ 负责人：donttemo ｜ 更新：2026-10-21
 >
 > 来源：2026-10-20 运营体验评审意见 + 本仓 main 分支源码逐条核实（证据见 §1.2）。
 >
@@ -269,7 +269,7 @@ v0.7.5 之后，审计的**机制层**已经齐备：统一 `AuditService.record
 | AC-15-04 事件码登记与门禁 | 已实现 | 已完成 | B（门禁可反向证伪） | — |
 | AC-15-05 旧数据降级不伪造 | 已实现 | 已完成 | B | — |
 | AC-15-06 在线 / 归档 / 导出同码同文案 | 已实现 | 待补 | C | 同一事件在三处返回的名称 / 摘要 / 结果对照断言 |
-| AC-15-07 脱敏 + 四档范围不放松 | 已实现 | 部分 | B | 真机四档账号 × 列表 / 详情 / 归档 / 导出；全视图与产物的敏感字样零命中扫描 |
+| AC-15-07 脱敏 + 四档范围不放松 | 已实现 | 部分 | A（单测级，run 104）· 真机 C | 真机四档账号 × 列表 / 详情 / 归档 / 导出；全视图与产物的敏感字样零命中扫描 |
 | AC-15-08 三库迁移与适配 | 已实现 | 已完成 | A | —（run 100 已独立核实，见 7.2） |
 | AC-15-09 租户维度 | 已实现 | 待补 | C | 写入 `tenant_id`、租户筛选与 `dataScope` 交集、存量 0 标注的端到端核验 |
 | AC-15-10 注册表缓存与降级 | 已实现 | 已完成 | B | — |
@@ -285,6 +285,7 @@ v0.7.5 之后，审计的**机制层**已经齐备：统一 `AuditService.record
 |---|---|---|---|
 | `dac84ca`（M15 安全加固 + 订阅单事务） | 103 · [39455559488](https://github.com/donttemos/TY/actions/runs/39455559488) | `completed` / **success** | 构建/单测(SQLite)/静态检查 ✅ · 集成 sqlite ✅ · 集成 mysql ✅ · 集成 postgres ✅ |
 | `8fe98a0`（smoke 断言修复，AC-15-08 的取证 commit） | 100 · [39447355932](https://github.com/donttemos/TY/actions/runs/39447355932) | `completed` / **success** | 四腿全绿 |
+| `2f710d6`（M15 P1/P2 收口：target_label 名称快照、限流丢弃观测、审计详情越权修复） | 104 · [39463134812](https://github.com/donttemos/TY/actions/runs/39463134812) | `completed` / **success** | 构建/单测(SQLite)/静态检查 ✅ · 集成 sqlite ✅ · 集成 mysql ✅ · 集成 postgres ✅ |
 
 取数方式：`GET /repos/donttemos/TY/commits/{sha}/check-runs` → `total_count=4` 且四条均 `conclusion=success`；
 `GET /repos/donttemos/TY/actions/runs?head_sha={sha}` → `total_count=1`、`conclusion=success`。
@@ -299,9 +300,10 @@ v0.7.5 之后，审计的**机制层**已经齐备：统一 `AuditService.record
 上偶发 `EBUSY` / hook 超时，属环境问题，非用例失败）、`@fw/auth` 相关 28 例。
 这些可作为提交说明，但不构成第三方核实。
 
-**尚未进入任何 CI 的改动（无 A 级证据）**：2026-10-21 的 P1 修复（审计详情 `dataScope` 越权 + 归档范围同源 +
-文档）**仍在工作区未提交**，不在 run 103 内；其证据目前只有 B 级（新增/更新单测 13 例、两次反向变异验证），
-提交后需新的 run 补齐 A 级证据。
+**2026-10-21 P1 修复的 CI 核实（A 级）**：审计详情 `dataScope` 越权 + 归档范围同源修复（与同批
+`target_label` 名称快照、限流丢弃观测一起）已于 2026-10-21 01:05 提交为 `2f710d6` 并推送
+`origin/main`；对应 run 104 四腿全绿（见上表），新增/更新单测 13 例（含两次反向变异验证）随之由
+B 级升为 CI 可核实。AC-15-07 仍不勾选——真机四档取证仍缺（见 §7.3）。
 
 ### 7.3 逐条明细
 
@@ -311,7 +313,7 @@ v0.7.5 之后，审计的**机制层**已经齐备：统一 `AuditService.record
 - [x] AC-15-04（代码 已实现 / 证据 已完成 · B）事件码全部登记且稳定；未登记码、码表与写入点不一致时 `check:audit-events` 失败（含反向验证：故意加未登记码，CI 必红）。—— `scripts/check-audit-events.mjs` 已接入 CI base 作业；本机实测：正常状态 `OK（32 条 / 覆盖矩阵一致）`，注入 `event: 'saas.plan.publsh'` 后 `RC=1` 并精确报 `apps/example-api/src/__audit_gate_probe.ts:7`，删除探针后恢复绿。**等级说明**：门禁在 CI 常驻，但反向证伪动作只在本地做过，故记 B。
 - [x] AC-15-05（代码 已实现 / 证据 已完成 · B）旧数据可展示且不伪造：无 `event` / 未登记 / 字典缺失三种降级均有明确提示与正确回退。—— `audit-display.test.ts` 11 例锁定三级降级链（摘要 → 事件名+对象 → 原始码 → module/action 中文），详情页对旧行显示「历史记录（无业务摘要）」提示且不补写摘要。
 - [ ] AC-15-06（代码 已实现 / 证据 待补 · C）在线查询、归档查询、导出三处对同一事件返回的名称、摘要、结果一致（同码同文案断言）。**代码**：三处同源——导出复用 `buildAuditCsv`、归档与在线同一 DTO（`AuditLogRecord`）、解释性文案统一由注册表现算。**缺**：同一事件经三条路径（`/audit-logs`、`/audit-archives`、CSV）返回的名称/摘要/结果**对照断言**；现有 `audit-csv.spec.ts` 只锁列与编码，不锁「三处一字不差」。
-- [ ] AC-15-07（代码 已实现 / 证据 部分 · B）敏感字段持续脱敏；`self/org/org_below/all` 四档范围在列表、详情、归档、导出均不放松（越权一律 403/404）；令牌、密钥、口令不出现在任何视图与产物中。**已有（B 级）**：① 单测级四档范围——`apps/example-api/src/modules/auth/audit-detail-scope.spec.ts`（8 例：四档详情边界 + 共享库多租户正反向 + 列表⇔详情逐条等价）、`audit-archive-scope.spec.ts`（5 例：在线列表/在线导出/归档列表/归档导出四端点范围逐个相同 + `user_id` 放大被交集挡住）；② 写入侧不落敏感值——`audit-no-secrets.test.ts`。**缺（本条仍不勾选）**：真机多账号 × 真实多租户数据的行集与可见字段核对、全视图与导出产物的 `token` / `secret` / `password` 字样零命中扫描（必须扫产物，不能只扫代码）。—— **「四档范围」的代码缺陷已于 2026-10-21 修复（P1）**：审计详情此前只判 `selfOnly`，`org` / `org_below` 档可凭 ID 直读列表外的记录；现与列表共用 `resolveDataScopeActors`，范围外统一 404。该修复**未提交**，其单测证据为上列 13 例。
+- [ ] AC-15-07（代码 已实现 / 证据 部分 · B）敏感字段持续脱敏；`self/org/org_below/all` 四档范围在列表、详情、归档、导出均不放松（越权一律 403/404）；令牌、密钥、口令不出现在任何视图与产物中。**已有（B 级）**：① 单测级四档范围——`apps/example-api/src/modules/auth/audit-detail-scope.spec.ts`（8 例：四档详情边界 + 共享库多租户正反向 + 列表⇔详情逐条等价）、`audit-archive-scope.spec.ts`（5 例：在线列表/在线导出/归档列表/归档导出四端点范围逐个相同 + `user_id` 放大被交集挡住）；② 写入侧不落敏感值——`audit-no-secrets.test.ts`。**缺（本条仍不勾选）**：真机多账号 × 真实多租户数据的行集与可见字段核对、全视图与导出产物的 `token` / `secret` / `password` 字样零命中扫描（必须扫产物，不能只扫代码）。—— **「四档范围」的代码缺陷已于 2026-10-21 修复（P1）**：审计详情此前只判 `selfOnly`，`org` / `org_below` 档可凭 ID 直读列表外的记录；现与列表共用 `resolveDataScopeActors`，范围外统一 404。该修复已随 `2f710d6` 提交并推送，run 104 四腿全绿（A 级），其单测证据为上列 13 例（现可由 CI 复核）。
 - [x] AC-15-08（代码 已实现 / 证据 已完成 · A）三库迁移与适配一致：三库集成用例证明新列存在、往返保真、归档保留新列。—— **独立核实**：run `100`（[39447355932](https://github.com/donttemos/TY/actions/runs/39447355932)，commit `8fe98a0`）`completed / success`，四腿（构建单测静态检查 + sqlite/postgres/mysql 集成）均 success；三份迁移 `20261020120000_add_audit_business_snapshot` 在各自方言下部署成功，集成用例覆盖新列读写。核实方式见 §7.2。
 - [ ] AC-15-09（代码 已实现 / 证据 待补 · C）租户维度可用：写入 `tenant_id` 正确；按租户筛选与 `dataScope` 交集正确；存量 0 值标注「未知/存量」。**代码**：写入取请求上下文 `tenantId`（修复恒 0）；`/audit-logs`、`/audit-archives` 及两处导出支持 `tenant_id` 过滤（非法值 400），与 `dataScope` 取交集不放大。**已有（B 级）**：`audit-events.test.ts` 覆盖「租户取自上下文 / 显式优先 / 无上下文落 0」与「`result`+`tenantId` 精确过滤（可组合）」。**缺**：真实库端到端三条——① 触发一次带租户的写入后 `select tenant_id` 断言；② 同一查询在「有 `tenant_id` 过滤」与「无过滤」下的行集差 = 该租户行；③ 前端对存量 `0` 行的「未知/存量」标注截图。
 - [x] AC-15-10（代码 已实现 / 证据 已完成 · B）前端对注册表的缓存与失效生效；未知事件不阻塞渲染；注册表不可用时页面降级可用。—— `useAuditEvents` 模块级缓存 + inflight 合并 + `version` 指纹；`use-audit-events.test.ts` 3 例（并发只发一次请求、按风险取码排除 deprecated、注册表失败降级且下次重试）。
@@ -353,6 +355,7 @@ v0.7.5 之后，审计的**机制层**已经齐备：统一 `AuditService.record
 
 | 日期 | 变更点 | 影响 |
 |---|---|---|
+| 2026-10-21 | **验收记录与最新提交对齐**：`2f710d6`（M15 P1/P2 收口）已推送 `origin/main`，run 104（[39463134812](https://github.com/donttemos/TY/actions/runs/39463134812)）四腿全绿；§7.1 / §7.2 / §7.3 与本节此前的「P1 修复仍在工作区未提交、不在 run 103 内」表述更新为「已提交 + A 级 CI 证据」，CHANGELOG [Unreleased] 同句同步 | 验收记录与代码 / CI 事实一致；零 AC 状态变化（AC-15-07 仍不勾选，真机取证仍缺） |
 | 2026-10-21 | **P1：SaaS 审计事件 `target_label` 名称快照收口（FR-15-10）**：`saas-ops.controller.ts` 六处写入点（套餐发布 / 订阅开通 / 订阅取消 / 配额超限 4029 / 生命周期迁移成功 / 非法迁移 4030）不再把 `tenantId` / `planId` / 订阅 ID 写进 `target_label`，改为**写入时解析名称**——新增端口 `SaasStore.findTenantName`（Fake/Prisma 双实现；Prisma 侧 `tenant` 投影扩 `name` 列），套餐名经既有 `findPlanById`（与订阅列表 `enrichSubscriptions` 同口径，软删套餐不暴露名称）；订阅类事件落「租户名 · 套餐名」，任一侧缺失只标记该侧。解析不到（租户不存在 / 脏引用 / 套餐软删）时写 `snapshotMissingLabel(id)`（`@fw/auth` 新增，与展示侧 `ACTOR_SNAPSHOT_MISSING` 同文案）：「名称快照缺失（ID: …）」——绝不让 ID 冒充名称，也不静默留空让展示层回退成 `targetType:targetId`；存量裸 ID 行不回填（R8）。测试：`saas-ops.controller.spec.ts` 33 例（+9 双侧断言 + 共享 AUDIT 桩用例隔离）、`@fw/saas` 37/37、saas 集成 spec 20/20（真实库 `findTenantName`：seed `t1`→「租户一」/ 不存在→null）、`@fw/auth` 278/278、`check:audit-events` 32 事件 / 42 写入点 / 矩阵三方一致、example-api `tsc --noEmit` 零错。无新增错误码 / 迁移 / API 契约变更 | AC-15-02 的「对象名称快照」代码缺口关闭（真实库 SQL 断言仍缺，保持未勾）；运营在对象列不再看到裸租户 ID |
 | 2026-10-21 | **限流丢弃观测闭环（评审 P2 交付）**：`AuditEventThrottle` 新增 `onDrop` 回调并区分 `rate_limited`（窗口超限）/ `capacity`（容量拒建桶）两种丢弃原因；登录失败（`AuthService.recordLoginFailure`）与越权拒绝（`RbacGuard`）两条真实调用路径接线到 `fw_auth_audit_dropped_total{path,reason}`（四条固定序列恒输出，含 0）与周期性汇总结构化日志（每路径每 60s 最多一条，ctx 仅低基数计数、不含维度键原文）。此前丢弃在登录路径是「直接 return、无审计行也无日志」，限流器注释声称的「结构化日志兜底」并未落实。测试：`audit-throttle-observability.test.ts` 3 例（登录限流/登录容量/越权限流三条真实路径计数可观测 + 审计样本数不变 + 汇总日志内容与基数护栏）、`auth-metrics.test.ts` +2、`audit-events.test.ts` +2；auth 包 278/278、`audit-throttle.ts` 覆盖率 100%。文档：docs/45 §4、ADR-0032 R6 与待定 #4、本节 | 运维侧首次可回答「审计样本是否正在大量丢失」；业务拒绝行为零变化 |
 | 2026-10-20 | **三条 AC 延后取证登记（15-07/12/13）**：数据范围回归（15-07）、性能容量（15-12）、覆盖矩阵运行期抽样（15-13）的证据分别依赖真机多租户数据 / 真实负载 / 运行期触发，沙箱环境无法可信取证；用户决定改在下一个迭代或真机部署窗口补齐，三条保持未勾选，具体验收动作已内联到 §7 对应条目。代码与门禁状态不受影响（CI 四腿全绿，`check:audit-events` 32 条事件 CI 常驻） | 验收排期明确，杜绝「假绿」；真机窗口前不再反复本地试探 |
@@ -373,5 +376,5 @@ v0.7.5 之后，审计的**机制层**已经齐备：统一 `AuditService.record
 | 2026-10-20 | **B5 门禁已交付**：新增 `scripts/check-audit-events.mjs`（Node `--experimental-strip-types` 直读 TS 注册表，不生成第二份码表）：① `verifyAuditRegistry` 自检；② 生产代码 `event:` / `recordEvent('literal')` 出现未登记码即失败；③ 注册表每个未废弃条目必须有写入点（字面量出现，兼容动作→码映射表）；④ `docs/45` §7 矩阵必须逐条列出。接入 CI base 作业与 `docs/70` §1.6.8 门禁清单。覆盖矩阵生命周期行展开为完整码（原 `.freeze` 简写无法被机器校验）。反向验证：注入未登记码 → `RC=1` 且定位到文件行号；移除探针后恢复 | AC-15-04 关闭；OQ-15-9 定案 strict |
 | 2026-10-20 | **安全加固（评审 P1/P2 四项）**：① CSV 单元格编码统一走 `@fw/auth` 的 `escapeCsvCell`，新增 `= + - @`/制表符前缀中和（引号转义挡不住 Excel 求值，UI 校验也挡不住导入与历史数据），mock 抽同源实现并由 triway 轴 H + 三处同组向量单测锁定；② `check:audit-events` 写入点判定收紧为「排除注册表定义文件 + 真实调用 + 服务端 `event:` + 显式 `@audit-event-map` 映射表」，逻辑抽到 `scripts/lib/audit-gate.mjs` 并新增反向测试（node:test）与 CI 步骤；③ `AuditEventThrottle` 容量成为硬上限（满则拒建桶 + 丢弃计数 + 扫描节流），新增数千不同账号容量测试；④ `AuditService.persist` 写入时刻集中补 `actorLabel` 快照，展示侧缺快照时标注「名称快照缺失（ID: …）」，不再用当前用户名回填 | AC-15-02 / G15-2 补齐（改名后历史不变）；AC-15-12 防洪内存有界；AC-15-04 门禁强度可被反向证伪 |
 
-| 2026-10-21 | **验收状态口径拆分（代码 ≠ 证据）+ CI 独立核实**：§7 改为「代码状态 / 证据状态 / 等级」三元记账（A = 外部可核实的 CI 或入库产物；B = 实现方本机自报；C = 缺失），新增 §7.1 总览表与 §7.2 证据来源；7 条未勾选项（15-02/03/06/09/07/12/13）逐条写明「已有哪一级证据、还缺什么、怎么补」。**独立核实（A 级）**：`dac84ca` → run 103（[39455559488](https://github.com/donttemos/TY/actions/runs/39455559488)）`completed / success`，四作业均 success；`8fe98a0` → run 100（[39447355932](https://github.com/donttemos/TY/actions/runs/39447355932)）success。取数方式为 `check-runs` 与 `actions/runs?head_sha=`；**`/commits/{sha}/status` 对本仓库恒空**（legacy commit status，本仓库只产 check run），据此判「无状态检查」属端点用错。**同批的 P1 修复未提交**：审计详情 `dataScope` 越权 + 归档范围同源仍在工作区（B 级证据 13 例，含两次反向变异），不在 run 103 内；因此 AC-15-07 由「延后取证」改记为「证据部分（单测级）」，**仍不勾选** | 验收记录不再把「代码已实现」当「已验收」；实现方报告与评审方核实的边界明确；本次零 AC 关闭 |
+| 2026-10-21 | **验收状态口径拆分（代码 ≠ 证据）+ CI 独立核实**：§7 改为「代码状态 / 证据状态 / 等级」三元记账（A = 外部可核实的 CI 或入库产物；B = 实现方本机自报；C = 缺失），新增 §7.1 总览表与 §7.2 证据来源；7 条未勾选项（15-02/03/06/09/07/12/13）逐条写明「已有哪一级证据、还缺什么、怎么补」。**独立核实（A 级）**：`dac84ca` → run 103（[39455559488](https://github.com/donttemos/TY/actions/runs/39455559488)）`completed / success`，四作业均 success；`8fe98a0` → run 100（[39447355932](https://github.com/donttemos/TY/actions/runs/39447355932)）success。取数方式为 `check-runs` 与 `actions/runs?head_sha=`；**`/commits/{sha}/status` 对本仓库恒空**（legacy commit status，本仓库只产 check run），据此判「无状态检查」属端点用错。**同批的 P1 修复已提交**：审计详情 `dataScope` 越权 + 归档范围同源随 `2f710d6` 提交并推送，run 104（[39463134812](https://github.com/donttemos/TY/actions/runs/39463134812)）四腿全绿，B 级证据 13 例（含两次反向变异）升格为 CI 可核实（A 级）；因此 AC-15-07 由「延后取证」改记为「证据部分（单测级）」，**仍不勾选**（真机四档取证仍缺） | 验收记录不再把「代码已实现」当「已验收」；实现方报告与评审方核实的边界明确；本次零 AC 关闭 |
 
