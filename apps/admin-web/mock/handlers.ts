@@ -3037,6 +3037,10 @@ async function handleSaasRoutes(
         return { handled: true };
       }
       const quotaKey = query.get('quotaKey') ?? '';
+      if (!quotaKey) {
+        send(res, 1001, 'quotaKey 必填', null, traceId);
+        return { handled: true };
+      }
       const override = saas.tenantQuotas.find((o) => o.tenantId === tenantId && o.quotaKey === quotaKey);
       const def = saas.quotaDefinitions.find((d) => d.key === quotaKey);
       const windowStart = new Date().toISOString().slice(0, 10);

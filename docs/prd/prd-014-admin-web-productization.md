@@ -186,4 +186,4 @@ M13 交付后：后端已具备套餐/订阅/配额/用量/生命周期完整领
 | 2026-10-20 | **OQ-14-3 定案：查询时聚合**（复用 listEvents/listWindows 端口，零迁移；事件明细内存分页 + 窗口 ≤30 天上限；升级路径=事件量规模化后立 ADR） | FR-14-12 实现口径确定，无需 ADR-0032 |
 | 2026-10-20 | B4 交付：FR-14-12 三端点（usage/trend、usage/events、usage/overview）+ FR-14-13 用量页看板化（纯 CSS 柱状图零新依赖）+ FR-14-14 工作台 SaaS 运营卡区（权限门控取数） | AC-14-08 本机自动化验证通过；真机 E2E 留部署窗口 |
 | 2026-10-20 | B4 端口扩展：`listWindows` / `countTenantsByStatus` / `listRecentLifecycleLogs`（Fake + Prisma 双实现） | SaasStore 接口面 +3；三库矩阵由 CI 集成用例覆盖 |
-| 2026-10-20 | **错误通道修正**：B2/B4 新端点 12 处入参校验从「信封直返」（会被拦截器包双层、前端误判成功）改为 `throw BizError`（400/1001 单层信封）；M13 既有三处（usage GET / usage/events POST / lifecycle POST）保持不动，登记遗留小修 | 控制器单测同步改 rejects 断言；smoke S15 断言恢复 400/1001 |
+| 2026-10-20 | **错误通道修正**：B2/B4 新端点 12 处 + M13 遗留三处入参校验从「信封直返」（会被拦截器包双层、前端误判成功）改为 `throw BizError`（400/1001 单层信封） | 控制器单测同步改 rejects 断言；smoke S15/S15.0 断言；mock usage GET 同步 |

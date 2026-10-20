@@ -31,6 +31,9 @@
  * @modified 2026-10-20 M14/PRD-014 B4（FR-14-12/13/14）：用量趋势（hours 白名单 + UTC 桶聚合填零）、
  *   事件明细分页（内存分页，OQ-14-3 定案查询时聚合零迁移）、平台总览 overview
  *   （风险 TOP20 + 7 天到期订阅 + 五态计数 + 最近迁移）；端口扩展 listWindows/countTenantsByStatus/listRecentLifecycleLogs。
+ * @modified 2026-10-20 M14 收口：全部入参校验（含 M13 遗留三处）统一 throw BizError——
+ *   信封直返会被全局响应拦截器包双层（{code:0,data:{code:1001}}），前端按顶层 code 误判成功；
+ *   禁新增信封直返校验（冒烟 S15.0 断言锁定）。
  * @module example-api/saas
  */
 
@@ -295,7 +298,7 @@ export class SaasOpsController {
   @Permissions(PERM.OPS_SAAS_READ)
   async getUsage(@Param('id') tenantId: string, @Query('quotaKey') quotaKey: string, @Query('at') at?: string): Promise<unknown> {
     if (!quotaKey) {
-      return { code: 1001 as const, message: 'quotaKey 必填', data: null, traceId: '' };
+      throw new BizError(ErrorCode.BAD_REQUEST, 'quotaKey 必填');
     }
     const occurredAt = at ? new Date(at) : new Date();
     const { windowType, windowStart } = await this.quotas.resolveWindowStart(tenantId, quotaKey, occurredAt);
@@ -323,7 +326,7 @@ export class SaasOpsController {
     @Req() request?: Request,
   ): Promise<unknown> {
     if (!body?.quotaKey || !Number.isFinite(body.quantity) || (body.quantity as number) <= 0 || !body?.idempotencyKey) {
-      return { code: 1001 as const, message: 'quotaKey / quantity(正数) / idempotencyKey 必填', data: null, traceId: '' };
+      throw new BizError(ErrorCode.BAD_REQUEST, 'quotaKey / quantity(正数) / idempotencyKey 必填');
     }
     try {
       const outcome = await this.usage.record({
@@ -481,7 +484,7 @@ export class SaasOpsController {
   @Permissions(PERM.OPS_SAAS_WRITE)
   async transition(@Param('id') tenantId: string, @Body() body: LifecycleBody, @CurrentUser() operator?: RequestUser, @Req() request?: Request): Promise<unknown> {
     if (!body?.action || !LIFECYCLE_ACTIONS.includes(body.action)) {
-      return { code: 1001 as const, message: `非法动作：${body?.action ?? '(empty)'}`, data: null, traceId: '' };
+      throw new BizError(ErrorCode.BAD_REQUEST, `非法动作：${body?.action ?? '(empty)'}`);
     }
     const result = await this.lifecycle.transition(tenantId, body.action, {
       actorType: 'user',

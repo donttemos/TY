@@ -227,6 +227,20 @@ describe('SaasOpsController GET usage/events（M14 FR-14-12）', () => {
   });
 });
 
+describe('SaasOpsController M13 端点入参校验（信封直返修正，HTTP 400/1001）', () => {
+  it('usage GET 缺 quotaKey → BAD_REQUEST', async () => {
+    await expect(makeController(makeStore(), makePlans()).getUsage('t1', undefined as never)).rejects.toMatchObject({ code: ErrorCode.BAD_REQUEST });
+  });
+
+  it('usage/events POST 缺必填字段 → BAD_REQUEST', async () => {
+    await expect(makeController(makeStore(), makePlans()).recordUsageEvent('t1', { action: undefined } as never, undefined as never)).rejects.toMatchObject({ code: ErrorCode.BAD_REQUEST });
+  });
+
+  it('lifecycle POST 非法动作 → BAD_REQUEST', async () => {
+    await expect(makeController(makeStore(), makePlans()).transition('t1', { action: 'bogus' } as never, undefined as never)).rejects.toMatchObject({ code: ErrorCode.BAD_REQUEST });
+  });
+});
+
 describe('SaasOpsController GET /saas/usage/overview（M14 FR-14-14）', () => {
   it('风险 ≥80% TOP20 + 五态计数 + 最近迁移 + 到期过滤', async () => {
     const now = new Date();

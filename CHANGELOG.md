@@ -45,7 +45,7 @@
 
 ### Fixed（M14 B2/B4：运营端点入参校验错误通道修正，2026-10-20）
 
-- **B2/B4 新增端点的入参校验从「信封直返」改为 `throw BizError`（BAD_REQUEST）**：此前 return `{code:1001,...}` 会被全局响应拦截器再包一层信封（`{code:0, data:{code:1001}}`），前端按顶层 code 判定会误判为成功——B4 端到端冒烟实测暴露。现 12 处校验统一走异常过滤器：HTTP 400 + 单层信封 + 1001。M13 既有端点（usage GET / usage/events POST / lifecycle POST 的同形态校验）本次不改动以稳定契约，登记遗留小修。控制器单测 8 处断言同步改 rejects 形态。
+- **B2/B4 新增端点 + M13 遗留共 15 处入参校验从「信封直返」改为 `throw BizError`（BAD_REQUEST）**：此前 return `{code:1001,...}` 会被全局响应拦截器再包一层信封（`{code:0, data:{code:1001}}`），前端按顶层 code 判定会误判为成功——B4 端到端冒烟实测暴露。B2/B4 新端点 12 处随 B4 提交修正；**本批补齐 M13 遗留三处**（usage GET 缺 quotaKey、usage/events POST 缺必填字段、lifecycle POST 非法动作），至此 SaaS 运营端点入参校验全部走异常过滤器：HTTP 400 + 单层信封 + 1001。mock usage GET 同步补 quotaKey 校验；控制器单测 +3 rejects 用例；smoke S15.0 断言（34/34）。
 
 ## [0.7.5] - 2026-10-20
 

@@ -258,6 +258,8 @@ async function main() {
       `http=${statusNow.status} data=${JSON.stringify(statusNow.body.data)}`);
 
     // S15 M14 B4：趋势 / 明细 / 平台总览
+    const usageBad = await call(`/api/v1/saas/tenants/${tenantId}/usage`, {}, auth.admin);
+    check('S15.0 usage GET 缺 quotaKey → 400/1001（M13 信封直返修正）', usageBad.status === 400 && usageBad.body.code === 1001, `http=${usageBad.status} code=${usageBad.body.code}`);
     const trend = await call(`/api/v1/saas/tenants/${tenantId}/usage/trend?quotaKey=${METRIC_KEY}&hours=24`, {}, auth.admin);
     check('S15.1 用量趋势：小时桶 + 填零序列',
       isOk(trend.status) && trend.body.data?.bucketType === 'hour' && Array.isArray(trend.body.data?.points) && trend.body.data.points.length === 25,
