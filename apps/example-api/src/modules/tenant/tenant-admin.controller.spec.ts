@@ -14,12 +14,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { BizError } from '@fw/core';
 import { AuditService } from '@fw/auth';
 import { TenantService } from '@fw/tenant';
+import { TenantLifecycleService } from '@fw/saas';
+import type { LifecycleStatus, LifecycleStore } from '@fw/saas';
 import { JobCenterService } from '../jobs/job-center.service.js';
 import { JobRunnerRegistry } from '../jobs/job-runner.registry.js';
 import { TenantAdminController } from './tenant-admin.controller.js';
 import { LEGACY_TENANT_ID } from './tenant-admin.store.js';
-import type { TenantAdminStore, TenantView } from './tenant-admin.store.js';
+import type { TenantAdminStore, TenantStatus, TenantView } from './tenant-admin.store.js';
 import type { Request } from 'express';
+
+/** 五态编值 ↔ 领域态（与 PrismaSaasStore 同口径：0 读作 frozen；见 ADR-0029 §2.4） */
+const INT_TO_STATUS: Record<number, LifecycleStatus> = { 0: 'frozen', 1: 'active', 2: 'grace', 3: 'frozen', 4: 'terminated', 5: 'pending' };
+const STATUS_TO_INT: Record<LifecycleStatus, number> = { pending: 5, active: 1, grace: 2, frozen: 3, terminated: 4 };
 
 /** 构造一个租户视图 */
 function makeView(overrides: Partial<TenantView> = {}): TenantView {
@@ -50,10 +56,13 @@ function createFakeStore(initial: TenantView[] = [makeView()]) {
       return { items, total: items.length, page: query.page, pageSize: query.pageSize, hasMore: false };
     },
     async findTenantViewById(id) {
-      return rows.find((t) => t.id === id) ?? null;
+      // 与真实 Prisma 同语义：每次返回新对象（就地 update 不污染调用方 before 快照）
+      const row = rows.find((t) => t.id === id);
+      return row ? { ...row } : null;
     },
     async findTenantByCode(code) {
-      return rows.find((t) => t.code === code) ?? null;
+      const row = rows.find((t) => t.code === code);
+      return row ? { ...row } : null;
     },
     async createTenant(input) {
       const view = makeView({ id: '99', code: input.code, name: input.name, isolation: input.isolation, plan: input.plan ?? null, status: 1 });
@@ -63,13 +72,8 @@ function createFakeStore(initial: TenantView[] = [makeView()]) {
     async updateTenant(id, patch) {
       const row = rows.find((t) => t.id === id);
       if (!row) throw new BizError(1002, '租户不存在');
-      return { ...row, ...patch };
-    },
-    async disableTenant(id) {
-      if (id === LEGACY_TENANT_ID) throw new BizError(1004, '存量单租户（legacy）不可停用：所有历史数据归属该租户，停用即全站不可访问');
-      const row = rows.find((t) => t.id === id);
-      if (!row) throw new BizError(1002, '租户不存在');
-      row.status = 0;
+      // 与真实存储同语义：本假件没有 status 写分支（状态写权在状态机，见下方 createLifecycle）
+      Object.assign(row, patch);
       return { ...row };
     },
     async setTenantIsolation(id, isolation, dbUrl) {
@@ -87,18 +91,56 @@ function createFakeStore(initial: TenantView[] = [makeView()]) {
   return { store, rows };
 }
 
-/** 组装被测控制器（依赖全部用假件；任务中心用真实实现以覆盖派发契约） */
+/**
+ * 真实状态机 + 内存 LifecycleStore（与控制器共享同一 rows）：
+ * 用**真的** TenantLifecycleService 校验「停用=freeze / 启用=resume|activate」的路由与非法迁移的 4030，
+ * 而不是在假件里重写一遍迁移表。
+ */
+function createLifecycle(rows: TenantView[]): TenantLifecycleService {
+  const currentStatus = (id: string): LifecycleStatus | null => {
+    const row = rows.find((t) => t.id === id);
+    return row ? (INT_TO_STATUS[row.status] ?? 'frozen') : null;
+  };
+  const store: LifecycleStore = {
+    async findTenantStatus(id) {
+      return currentStatus(id);
+    },
+    async conditionalUpdateStatus(id, from, to) {
+      const row = rows.find((t) => t.id === id);
+      if (!row) return false;
+      if (currentStatus(id) !== from) return false;
+      row.status = STATUS_TO_INT[to] as TenantStatus;
+      return true;
+    },
+    async appendLifecycleLog() {
+      /* 日志面不在本套用例断言范围（由 prisma-saas-store.integration.spec.ts 覆盖） */
+    },
+    async listLifecycleLogs() {
+      return [];
+    },
+    async countTenantsByStatus() {
+      return 0;
+    },
+    async listRecentLifecycleLogs() {
+      return [];
+    },
+  };
+  return new TenantLifecycleService(store);
+}
+
+/** 组装被测控制器（依赖全部用假件；任务中心与状态机用真实实现以覆盖派发与迁移契约） */
 function createController(initial?: TenantView[]) {
   const { store, rows } = createFakeStore(initial);
+  const lifecycle = createLifecycle(rows);
   const tenants = { invalidate: vi.fn() } as unknown as TenantService;
   const audit = { record: vi.fn() } as unknown as AuditService;
   const jobs = new JobCenterService();
   // M10 E-01：执行体注册表为真实实现（构造期登记 tenant.migrate 工厂）
   const jobRegistry = new JobRunnerRegistry();
   // 手动构造：构造器参数装饰器不参与直接实例化，按位置传假件即可
-  const controller = new TenantAdminController(store, tenants, jobs, audit, jobRegistry);
+  const controller = new TenantAdminController(store, tenants, jobs, audit, jobRegistry, lifecycle);
   const request = { headers: { 'x-forwarded-for': '10.0.0.9, 10.0.0.1' }, ip: '127.0.0.1' } as unknown as Request;
-  return { controller, store, rows, tenants, audit, jobs, request };
+  return { controller, store, rows, tenants, audit, jobs, lifecycle, request };
 }
 
 describe('TenantAdminController', () => {
@@ -154,29 +196,67 @@ describe('TenantAdminController', () => {
       await expect(controller.update('0', { status: 0 }, 'u-1', { headers: {} } as unknown as Request)).rejects.toMatchObject({ code: 1004 });
     });
 
-    it('成功时审计带 before / after 快照', async () => {
+    it('status=0 走 freeze：落库为规范码 3（不再直写存量码 0）', async () => {
+      const { controller, rows } = createController();
+      const updated = await controller.update('1', { name: '新名', status: 0 }, 'u-1', { headers: {} } as unknown as Request);
+      expect(updated.status).toBe(3);
+      expect(updated.name).toBe('新名');
+      expect(rows.find((t) => t.id === '1')?.status).toBe(3);
+    });
+
+    it('成功时审计带 before / after 快照（after 为迁移后的真实编值）', async () => {
       const { controller, audit, request } = createController();
       await controller.update('1', { name: '新名', status: 0 }, 'u-1', request);
       expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
         action: 'update',
         before: expect.objectContaining({ name: 'ACME 公司', status: 1 }),
-        after: expect.objectContaining({ name: '新名', status: 0 }),
+        after: expect.objectContaining({ name: '新名', status: 3 }),
       }));
+    });
+
+    it('已终止（4）不可被「启用」复活：resume 非法 → 4030，终止态原地不动', async () => {
+      const { controller, rows } = createController([makeView({ id: '2', code: 'gone', status: 4 })]);
+      await expect(controller.update('2', { status: 1 }, 'u-1', { headers: {} } as unknown as Request)).rejects.toMatchObject({ code: 4030 });
+      expect(rows.find((t) => t.id === '2')?.status).toBe(4);
+    });
+
+    it('待开通（5）点「启用」走 activate（pending 无 resume 入口）', async () => {
+      const { controller, rows } = createController([makeView({ id: '5', code: 'pnd', status: 5 })]);
+      const enabled = await controller.update('5', { status: 1 }, 'u-1', { headers: {} } as unknown as Request);
+      expect(enabled.status).toBe(1);
+      expect(rows.find((t) => t.id === '5')?.status).toBe(1);
     });
   });
 
   describe('DELETE /tenants/:id 停用', () => {
-    it('不存在 → 1002；legacy → 1004；正常停用写审计并带 affectedUsers', async () => {
-      const { controller, audit, request } = createController([makeView(), makeView({ id: '0', code: 'legacy', name: '存量单租户' })]);
+    it('不存在 → 1002；legacy → 1004（控制器层拦截）', async () => {
+      const { controller } = createController([makeView(), makeView({ id: '0', code: 'legacy', name: '存量单租户' })]);
       await expect(controller.disable('404', 'u-1', { headers: {} } as unknown as Request)).rejects.toMatchObject({ code: 1002 });
       await expect(controller.disable('0', 'u-1', { headers: {} } as unknown as Request)).rejects.toMatchObject({ code: 1004 });
+    });
 
+    it('正常停用 = freeze：落库 3，写审计并带 affectedUsers', async () => {
+      const { controller, audit, rows, request } = createController();
       const disabled = await controller.disable('1', 'u-1', request);
-      expect(disabled.status).toBe(0);
+      expect(disabled.status).toBe(3);
+      expect(rows.find((t) => t.id === '1')?.status).toBe(3);
       expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
         action: 'delete',
-        after: expect.objectContaining({ status: 0, affectedUsers: 3 }),
+        after: expect.objectContaining({ status: 3, affectedUsers: 3 }),
       }));
+    });
+
+    it('重复停用幂等（已是冻结 → alreadyApplied，不报错）', async () => {
+      const { controller, rows } = createController([makeView({ status: 3 })]);
+      const disabled = await controller.disable('1', 'u-1', { headers: {} } as unknown as Request);
+      expect(disabled.status).toBe(3);
+      expect(rows.find((t) => t.id === '1')?.status).toBe(3);
+    });
+
+    it('已终止（4）不可停用：freeze 非法 → 4030（旧实现会把终止态覆盖成 0）', async () => {
+      const { controller, rows } = createController([makeView({ status: 4 })]);
+      await expect(controller.disable('1', 'u-1', { headers: {} } as unknown as Request)).rejects.toMatchObject({ code: 4030 });
+      expect(rows.find((t) => t.id === '1')?.status).toBe(4);
     });
   });
 

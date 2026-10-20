@@ -13,9 +13,13 @@
  *
  *   迁移是控制面切换（isolation 元数据 + 连接串落库 + 缓存失效），数据的物理搬迁由运维按手册执行；
  *   该语义在接口与前端文案中明确标注，避免「点一下就搬完数据」的错误预期。
+ *   **状态写权**（2026-10-21 收口）：`PUT /tenants/:id` 的 status 与 `DELETE /tenants/:id` 一律经
+ *   TenantLifecycleService.transition 落地（0→freeze / 1→resume，pending→activate），不再直写列——
+ *   既符合 ADR-0031 §2.3「写权唯一归属」，也使「启用」无法绕过终止态（terminated -resume-> 非法，4030）。
  * @author donttemo
  * @created 2026-10-15
  * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
+ * @modified 2026-10-21 donttemo P0 收口：状态变更改走生命周期状态机（停用=freeze / 启用=resume|activate）
  * @module example-api/tenant
  */
 
@@ -25,6 +29,8 @@ import { parseSortQuery, type PageResult } from '@fw/db';
 import { AuditService, CurrentUser, IgnoreTenant, PERM, Permissions } from '@fw/auth';
 import { TenantService } from '@fw/tenant';
 import type { TenantIsolation } from '@fw/tenant';
+import { TenantLifecycleService } from '@fw/saas';
+import type { LifecycleAction } from '@fw/saas';
 import { JobCenterService } from '../jobs/job-center.service.js';
 import { JobRunnerRegistry } from '../jobs/job-runner.registry.js';
 import type { JobReporter } from '../jobs/job-center.port.js';
@@ -87,6 +93,8 @@ export class TenantAdminController {
     private readonly jobs: JobCenterService,
     private readonly audit: AuditService,
     private readonly jobRegistry: JobRunnerRegistry,
+    /** 状态写权唯一归属（ADR-0031 §2.3）：本控制器不直写 tenants.status */
+    private readonly lifecycle: TenantLifecycleService,
   ) {
     // M10 E-01：登记迁移任务的执行体工厂——db/bullmq 驱动下跨实例重跑按 params 重建上下文
     // （连接串以密文进 params，与 tenants 表存储语义一致；memory 驱动下派发仍走闭包）
@@ -108,8 +116,8 @@ export class TenantAdminController {
     if (isolation !== undefined && isolation !== '' && isolation !== 'shared' && isolation !== 'dedicated') {
       throw new BizError(ErrorCode.BAD_REQUEST, 'isolation 仅支持 shared / dedicated');
     }
-    if (status !== undefined && status !== '' && status !== '0' && status !== '1') {
-      throw new BizError(ErrorCode.BAD_REQUEST, 'status 仅支持 0（停用）/ 1（启用）');
+    if (status !== undefined && status !== '' && !['0', '1', '2', '3', '4', '5'].includes(status)) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'status 仅支持 0~5（ADR-0029 §2.4 五态编码：0 存量停用 / 1 启用 / 2 宽限期 / 3 冻结 / 4 终止 / 5 待开通）');
     }
     return this.store.pageTenants({
       page: Math.max(1, Number(page) || 1),
@@ -154,7 +162,7 @@ export class TenantAdminController {
     return created;
   }
 
-  /** 改名称 / 套餐 / 状态 / 到期时间（隔离级别不走这里，走 migrate） */
+  /** 改名称 / 套餐 / 到期时间；status 作为生命周期命令处理（隔离级别不走这里，走 migrate） */
   @Permissions(PERM.TENANT_UPDATE)
   @Put(':id')
   async update(
@@ -165,16 +173,25 @@ export class TenantAdminController {
   ): Promise<TenantView> {
     const before = await this.store.findTenantViewById(id);
     if (!before) throw new BizError(ErrorCode.NOT_FOUND, '租户不存在');
+    // 管理端状态面仍是 0/1 两档命令（五态迁移走 /saas/tenants/:id/lifecycle）
     if (body?.status !== undefined && body.status !== 0 && body.status !== 1) {
-      throw new BizError(ErrorCode.BAD_REQUEST, 'status 只能为 0（停用）或 1（启用）');
+      throw new BizError(ErrorCode.BAD_REQUEST, 'status 只能为 0（停用→冻结）或 1（启用→恢复）；五态迁移请走生命周期接口');
     }
     if (before.id === LEGACY_TENANT_ID && body?.status === 0) {
       throw new BizError(ErrorCode.STATE_NOT_ALLOWED, '存量单租户（legacy）不可停用');
     }
+    // 名称是唯一的字段级 4xx 来源，先校验，避免「状态已迁移、字段却写失败」的半成品
+    if (body?.name !== undefined && !body.name.trim()) {
+      throw new BizError(ErrorCode.BAD_REQUEST, '租户名称不能为空');
+    }
+
+    // 状态先过状态机（非法迁移在这里 4030 且未产生任何写入），再落其余字段
+    if (body?.status !== undefined) {
+      await this.applyStatusCommand(id, before.status, body.status, operator, request);
+    }
     const updated = await this.store.updateTenant(id, {
       ...(body?.name !== undefined ? { name: body.name } : {}),
       ...(body?.plan !== undefined ? { plan: body.plan } : {}),
-      ...(body?.status !== undefined ? { status: body.status as 0 | 1 } : {}),
       ...(body?.expireAt !== undefined ? { expireAt: body.expireAt } : {}),
     });
     this.tenants.invalidate();
@@ -195,6 +212,7 @@ export class TenantAdminController {
    * 停用租户（DELETE = 停用，不物理删）
    * 不写 deletedAt：租户解析必须仍能按 code 命中该行并给出 4001「租户已停用」，
    * 若软删会让共用 DTO 的解析路径变成「不存在」，前端提示与排障方向都会跑偏。
+   * 落库经 `freeze` 写规范码 3（存量 0 亦按冻结被匹配），不再直写 0。
    */
   @Permissions(PERM.TENANT_DELETE)
   @Delete(':id')
@@ -205,8 +223,13 @@ export class TenantAdminController {
   ): Promise<TenantView> {
     const before = await this.store.findTenantViewById(id);
     if (!before) throw new BizError(ErrorCode.NOT_FOUND, '租户不存在');
+    if (before.id === LEGACY_TENANT_ID) {
+      throw new BizError(ErrorCode.STATE_NOT_ALLOWED, '存量单租户（legacy）不可停用：所有历史数据归属该租户，停用即全站不可访问');
+    }
     const affected = await this.store.countTenantUsers(id);
-    const disabled = await this.store.disableTenant(id);
+    await this.applyStatusCommand(id, before.status, 0, operator, request);
+    const disabled = await this.store.findTenantViewById(id);
+    if (!disabled) throw new BizError(ErrorCode.NOT_FOUND, '租户不存在');
     this.tenants.invalidate();
     this.audit.record({
       userId: operator,
@@ -219,6 +242,29 @@ export class TenantAdminController {
       ip: clientIp(request),
     });
     return disabled;
+  }
+
+  /**
+   * 管理端状态命令 → 生命周期动作（ADR-0031 §2.3：status 写权唯一归属 TenantLifecycleService）。
+   * - 0 停用 → `freeze`（active/grace → frozen，写规范码 3；已是冻结则幂等 alreadyApplied）
+   * - 1 启用 → `resume`；当前为 pending 时改走 `activate`（pending 无 resume 入口）
+   * 非法迁移由服务抛 4030：例如已终止（terminated）的租户既不能 freeze 也不能 resume，
+   * 「启用」再也无法把终止态复活（旧实现直写 status=1 会静默覆盖终止态与其保留期处置）。
+   */
+  private async applyStatusCommand(
+    id: string,
+    current: number,
+    status: number,
+    operator: string,
+    request?: Request,
+  ): Promise<void> {
+    const action: LifecycleAction = status === 0 ? 'freeze' : current === 5 ? 'activate' : 'resume';
+    await this.lifecycle.transition(id, action, {
+      actorType: 'user',
+      actorId: operator,
+      reason: status === 0 ? '租户管理端停用（freeze）' : '租户管理端启用/恢复（resume）',
+      ip: request ? clientIp(request) : null,
+    });
   }
 
   /**

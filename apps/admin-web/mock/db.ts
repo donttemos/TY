@@ -183,7 +183,8 @@ export interface MockTenant {
   name: string;
   isolation: 'shared' | 'dedicated';
   plan: string | null;
-  status: 0 | 1;
+  /** ADR-0029 §2.4 五态：0 存量停用（读作 frozen）/ 1 active / 2 grace / 3 frozen / 4 terminated / 5 pending */
+  status: 0 | 1 | 2 | 3 | 4 | 5;
   expireAt: string | null;
   /** 独立库连接串明文（mock 专用；真实后端只存密文） */
   dbUrl: string | null;
@@ -430,7 +431,7 @@ const DICT_CATEGORIES: MockDictCategory[] = [
   { id: 'dc-data-scope', code: 'data_scope', name: '数据范围', remark: '与 roles.data_scope 同源' },
   { id: 'dc-order-channel', code: 'order_channel', name: '订单渠道', remark: null },
   { id: 'dc-tenant-isolation', code: 'tenant_isolation', name: '租户隔离级别', remark: 'N-01 租户管理页：shared=共享库+tenant_id / dedicated=独立库' },
-  { id: 'dc-tenant-status', code: 'tenant_status', name: '租户状态', remark: 'N-01 租户管理页：停用租户在租户解析上 fail-closed（4001）' },
+  { id: 'dc-tenant-status', code: 'tenant_status', name: '租户状态', remark: 'N-01 租户管理页：ADR-0029 §2.4 五态如实展示（0 存量停用读作 frozen / 1 active / 2 grace / 3 frozen / 4 terminated / 5 pending）；停用租户在租户解析上 fail-closed（4001）' },
 ];
 
 const DICT_ITEMS: MockDictItem[] = [
@@ -460,8 +461,12 @@ const DICT_ITEMS: MockDictItem[] = [
   { id: 'di-oc-mini', categoryId: 'dc-order-channel', label: '小程序', value: 'mini', color: 'warning', sort: 3 },
   { id: 'di-ti-shared', categoryId: 'dc-tenant-isolation', label: '共享库', value: 'shared', color: 'primary', sort: 1 },
   { id: 'di-ti-dedicated', categoryId: 'dc-tenant-isolation', label: '独立库', value: 'dedicated', color: 'warning', sort: 2 },
-  { id: 'di-ts-1', categoryId: 'dc-tenant-status', label: '启用', value: '1', color: 'success', sort: 1 },
-  { id: 'di-ts-0', categoryId: 'dc-tenant-status', label: '停用', value: '0', color: 'danger', sort: 2 },
+  { id: 'di-ts-5', categoryId: 'dc-tenant-status', label: '待开通', value: '5', color: 'info', sort: 1 },
+  { id: 'di-ts-1', categoryId: 'dc-tenant-status', label: '启用', value: '1', color: 'success', sort: 2 },
+  { id: 'di-ts-2', categoryId: 'dc-tenant-status', label: '宽限期', value: '2', color: 'warning', sort: 3 },
+  { id: 'di-ts-3', categoryId: 'dc-tenant-status', label: '冻结', value: '3', color: 'danger', sort: 4 },
+  { id: 'di-ts-0', categoryId: 'dc-tenant-status', label: '停用（存量）', value: '0', color: 'info', sort: 5 },
+  { id: 'di-ts-4', categoryId: 'dc-tenant-status', label: '已终止', value: '4', color: 'info', sort: 6 },
 ];
 
 /** 演示订单（30 条，覆盖分页与筛选） */
@@ -528,6 +533,10 @@ function seedTenants(): MockTenant[] {
     { id: '1', code: 'acme', name: 'ACME 公司', isolation: 'shared', plan: 'pro', status: 1, expireAt: '2027-01-01T00:00:00.000Z', dbUrl: null, createdAt: new Date(base + 3_600_000).toISOString(), updatedAt: new Date(base + 3_600_000).toISOString() },
     { id: '2', code: 'off', name: '已停用租户', isolation: 'shared', plan: 'basic', status: 0, expireAt: null, dbUrl: null, createdAt: new Date(base + 7_200_000).toISOString(), updatedAt: new Date(base + 7_200_000).toISOString() },
     { id: '3', code: 'dedicated', name: '独立库租户', isolation: 'dedicated', plan: 'enterprise', status: 1, expireAt: null, dbUrl: 'file:./tenant-dedicated.db', createdAt: new Date(base + 10_800_000).toISOString(), updatedAt: new Date(base + 10_800_000).toISOString() },
+    { id: '4', code: 'grace-demo', name: '宽限期演示租户', isolation: 'shared', plan: 'basic', status: 2, expireAt: '2026-10-18T00:00:00.000Z', dbUrl: null, createdAt: new Date(base + 12_600_000).toISOString(), updatedAt: new Date(base + 12_600_000).toISOString() },
+    { id: '5', code: 'frozen-demo', name: '已冻结演示租户', isolation: 'shared', plan: 'pro', status: 3, expireAt: null, dbUrl: null, createdAt: new Date(base + 14_400_000).toISOString(), updatedAt: new Date(base + 14_400_000).toISOString() },
+    { id: '6', code: 'term-demo', name: '已终止演示租户', isolation: 'shared', plan: 'basic', status: 4, expireAt: null, dbUrl: null, createdAt: new Date(base + 16_200_000).toISOString(), updatedAt: new Date(base + 16_200_000).toISOString() },
+    { id: '7', code: 'pending-demo', name: '待开通演示租户', isolation: 'shared', plan: null, status: 5, expireAt: null, dbUrl: null, createdAt: new Date(base + 18_000_000).toISOString(), updatedAt: new Date(base + 18_000_000).toISOString() },
   ];
 }
 

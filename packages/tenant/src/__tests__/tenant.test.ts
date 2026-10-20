@@ -141,6 +141,15 @@ describe('TenantService（fail-closed 校验与缓存）', () => {
     await expect(s.verify('old')).rejects.toBeInstanceOf(BizError);
   });
 
+  it('待开通（pending，Int 5）租户：解析层同样 fail-closed 抛 4001（ADR-0029 §2.4）', async () => {
+    const s = new TenantService(store({ pnd: tenant({ code: 'pnd', status: 5 }) }), {
+      resolution: DEFAULT_OPTIONS,
+      enabled: true,
+      cacheTtlMs: 60_000,
+    });
+    await expect(s.verify('pnd')).rejects.toMatchObject({ code: ErrorCode.TENANT_INVALID });
+  });
+
   it('dedicated 租户缺独立库连接串：抛 4001（T-M8-02 前置校验）', async () => {
     const s = new TenantService(
       store({ big: tenant({ code: 'big', isolation: 'dedicated', dbUrl: null }) }),

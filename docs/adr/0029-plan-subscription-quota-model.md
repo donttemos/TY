@@ -40,7 +40,7 @@ plan_quotas（版本默认）→ tenant_quotas（租户覆盖）→ 生效值 = 
 | 字段 | 处置 |
 |---|---|
 | `tenants.plan` | 保留为派生只读列：SubscriptionService 写路径回写当前生效套餐 code；读路径（含既有 TenantGuard/多租户解析）继续可读但不再作为权益依据 |
-| `tenants.status` | 保留为派生只读列：TenantLifecycleService 迁移时回写 Int 映射（pending=0/active=1/grace=2/frozen=3/terminated=4），既有消费方（如 4001 判定）逐步切到生命周期服务 |
+| `tenants.status` | 保留为派生只读列：TenantLifecycleService 迁移时回写 Int **规范码**（pending=5/active=1/grace=2/frozen=3/terminated=4；0 为存量停用只读兼容，见 §2.4），既有消费方（如 4001 判定）逐步切到生命周期服务 |
 | `tenants.expireAt` | 派生只读列：随生效订阅的 `expire_at` 回写 |
 
 - **回填策略**（OQ-13-3 定案）：一次性脚本将存量 `plan` 字符串映射到 `default` 套餐的 v1 版本（无匹配值一律 `default`）；`status=1` → `active`；`expireAt` 为空 → active 无期限。回填幂等（按 tenant id 逐条 upsert 订阅，重复执行无副作用）。
@@ -50,6 +50,53 @@ plan_quotas（版本默认）→ tenant_quotas（租户覆盖）→ 生效值 = 
 
 - 不做套餐 A/B、灰度、按用户级配额（超出 M13 范围，FR 边界见 PRD-013 §1.4）。
 - 不引入 `plan` 枚举硬编码——套餐是数据不是代码，新增套餐零发布。
+
+### 2.4 `tenants.status` 五态编码定案与「存量停用 / pending」兼容（2026-10-21 修正）
+
+初稿 §2.2 曾写「pending=0」，与 `tenants.status` 自 M8 起的既有语义直接冲突：**0 一直是「停用」**，
+且被三处强依赖——`@fw/tenant.assertUsable` 仅拒 0（4001 fail-closed）、租户管理端 `disableTenant`
+写 0、本 ADR §2.2 回填脚本把 0 读作 frozen 并落 cancelled 订阅。驱动侧「写 pending=0 / 读 0=frozen」
+因此是一张**非双射**的映射表，后果分两类：
+
+**A. 已可达（当前代码即可复现，P0）**
+
+1. `frozen -resume-> active` 与 `frozen -terminate-> terminated` 的条件更新按 `status = 3` 匹配，
+   而存量停用行是 0 → affected=0，重读仍是 frozen（≠ 目标态）→ 4030。**经生命周期服务对存量停用
+   租户做 resume/terminate 恒 4030**；唯一绕道是租户管理端直写 `status`，而那正是 ADR-0031 §2.3
+   明令禁止的写路径。错误码还指向「迁移非法」，把排障引向迁移表而非编码映射。
+2. `countTenantsByStatus('pending')` 按 0 计数 → 全部存量停用租户被报成「待开通」；
+   `countTenantsByStatus('frozen')` 按 3 计数 → 全部存量停用被漏计。运营总览 `tenantCounts` 双口径失真。
+3. 同一行状态被 `findTenantStatus` 读作 frozen、却被 `countTenantsByStatus('pending')` 计作 pending
+   —— 读路径与统计路径互相矛盾。
+
+**B. 契约地雷（当前无写入方，一旦按该表落地必然爆炸）**
+
+4. `STATUS_TO_INT.pending = 0` 让「待开通」与「停用」共用同一编值：未来任何开通流程若按该表写
+   pending，租户落库即停用——4001 与 4031 双重拒绝，且读回 frozen 使 `activate` 非法（4030），
+   **永久无法开通**。本次修正即拆除该地雷（pending 独占 5）。
+
+**定案（编值表）**：
+
+| 编值 | 领域态 | 可写 | 说明 |
+|---|---|---|---|
+| 0 | `frozen` | ✗ 只读兼容 | 存量停用 / 租户管理端停用（M8 语义，保持不变） |
+| 1 | `active` | ✓ | |
+| 2 | `grace` | ✓ | |
+| 3 | `frozen` | ✓ | frozen 的规范写码 |
+| 4 | `terminated` | ✓ | |
+| 5 | `pending` | ✓ | 新增；0 在既有消费方已表示停用，不能复用 |
+
+- **读写双射**：写路径只产生 {1,2,3,4,5}，**永不写 0**；读路径 0 与 3 同读作 frozen。
+- **frozen 的条件匹配与计数取「非冻结码的补集」**（`status NOT IN (1,2,4,5)`）：一次覆盖存量 0、
+  规范 3 与未知脏值，使 `findTenantStatus` / `countTenantsByStatus` / `conditionalUpdateStatus`
+  三者口径一致；脏值租户可经 resume/terminate 归一到规范码，不会有无法迁移的死态。
+- **未知编码 fail-closed**：未登记值按 frozen 处理（未知状态绝不放行为可用），
+  不再被误报为「租户不存在」（404）——`null` 唯一含义是租户不存在。
+- **零迁移、可回滚**：5 是 Int 列上从未使用的空闲值，存量 0 语义不变，旧库升级零破坏。
+- **pending 的鉴权面**：`@fw/tenant.assertUsable` 同拒 0 与 5（未开通租户不可用），保持 fail-closed。
+- **已知遗留（不在本次范围）**：① 租户管理端 `toView` 把非 1 状态一律折叠为「停用」视图，
+  grace/frozen/terminated 在管理端均显示停用；② `disableTenant` 直写 0 而非走生命周期服务，
+  与 ADR-0031 §2.3「状态写权唯一归属」仍有偏差。两项均为 M14 之后待收口项。
 
 ## 3. 影响与约束
 

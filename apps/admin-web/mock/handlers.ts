@@ -2101,18 +2101,25 @@ export async function handleMockRequest(
       send(res, CODE.NOT_FOUND, '租户不存在', null, traceId);
       return { handled: true };
     }
+    // 状态命令（ADR-0031 §2.3：控制器转生命周期动作，mock 同语义）
     const status = body.status;
     if (status !== undefined && status !== 0 && status !== 1) {
-      send(res, CODE.BAD_REQUEST, 'status 只能为 0（停用）或 1（启用）', null, traceId);
+      send(res, CODE.BAD_REQUEST, 'status 只能为 0（停用→freeze）或 1（启用→resume/activate）', null, traceId);
       return { handled: true };
     }
     if (tenant.id === '0' && status === 0) {
       send(res, CODE.STATE_NOT_ALLOWED, '存量单租户（legacy）不可停用', null, traceId);
       return { handled: true };
     }
+    if (status === 1 && (tenant.status === 4 || tenant.status === 5)) {
+      // terminated 不可复活（4030）；pending 无 resume 入口
+      send(res, CODE.STATE_NOT_ALLOWED, '生命周期状态不允许该操作', null, traceId);
+      return { handled: true };
+    }
     if (typeof body.name === 'string' && body.name.trim()) tenant.name = body.name.trim();
     if (body.plan !== undefined) tenant.plan = typeof body.plan === 'string' ? body.plan.trim() || null : null;
-    if (status !== undefined) tenant.status = status;
+    if (status === 0) tenant.status = 3; // 停用 = freeze：落规范码 3（存量 0 由读侧按 frozen 匹配）
+    else if (status === 1) tenant.status = 1; // 启用 = resume/activate
     if (body.expireAt !== undefined) tenant.expireAt = typeof body.expireAt === 'string' && body.expireAt ? body.expireAt : null;
     tenant.updatedAt = new Date().toISOString();
     send(res, CODE.OK, 'ok', tenantView(tenant), traceId);
@@ -2134,7 +2141,15 @@ export async function handleMockRequest(
       send(res, CODE.STATE_NOT_ALLOWED, '存量单租户（legacy）不可停用：所有历史数据归属该租户，停用即全站不可访问', null, traceId);
       return { handled: true };
     }
-    tenant.status = 0;
+    if (tenant.status === 3) {
+      send(res, CODE.OK, 'ok', { id: tenant.id, cancelled: true, alreadyApplied: true }, traceId); // 已是冻结 → 幂等
+      return { handled: true };
+    }
+    if (tenant.status === 4 || tenant.status === 5) {
+      send(res, CODE.STATE_NOT_ALLOWED, '生命周期状态不允许该操作', null, traceId); // terminated/pending 无 freeze 入口
+      return { handled: true };
+    }
+    tenant.status = 3; // 停用 = freeze：规范码 3（不再直写存量码 0）
     tenant.updatedAt = new Date().toISOString();
     send(res, CODE.OK, 'ok', tenantView(tenant), traceId);
     return { handled: true };

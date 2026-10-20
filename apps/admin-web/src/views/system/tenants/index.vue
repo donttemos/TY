@@ -67,23 +67,13 @@ const formFields: FormField[] = [
     hiddenOnEdit: true,
     placeholder: '仅 dedicated 必填，如 postgresql://…（明文提交，服务端加密落库）；shared 留空',
   },
-  {
-    prop: 'status',
-    label: '状态',
-    type: 'select',
-    hiddenOnCreate: true,
-    options: [
-      { label: '启用', value: 1 },
-      { label: '停用', value: 0 },
-    ],
-  },
 ];
 
-/** ---------- 停用（DELETE = 停用，不物理删；确认文案必须与删除语义区分） ---------- */
+/** ---------- 停用（DELETE = freeze，不物理删；确认文案必须与删除语义区分） ---------- */
 async function handleDisable(row: TenantView): Promise<void> {
   try {
     await ElMessageBox.confirm(
-      `确认停用租户「${row.name}（${row.code}）」？停用后该租户下所有账号登录将被拒绝（4001），数据保留、可随时重新启用。`,
+      `确认停用租户「${row.name}（${row.code}）」？停用 = 冻结（freeze）：该租户业务访问将被拒绝（4031），登录白名单面仍可达，数据保留、可随时重新启用。`,
       '停用租户',
       { type: 'warning', confirmButtonText: '确认停用', cancelButtonText: '取消' },
     );
@@ -97,6 +87,26 @@ async function handleDisable(row: TenantView): Promise<void> {
   } catch (err) {
     // legacy 租户（存量单租户）停用会被服务端 3003 拒绝，原因会直接展示
     ElMessage.error(err instanceof BizError ? describeBizError(err) : '停用失败，请重试');
+  }
+}
+
+/** ---------- 启用（PUT status=1 → 控制器转 resume；frozen 唯一出口） ---------- */
+async function handleEnable(row: TenantView): Promise<void> {
+  try {
+    await ElMessageBox.confirm(`确认启用租户「${row.name}（${row.code}）」？恢复后该租户业务访问即时放行。`, '启用租户', {
+      type: 'warning',
+      confirmButtonText: '确认启用',
+      cancelButtonText: '取消',
+    });
+  } catch {
+    return;
+  }
+  try {
+    await tenantApi.updateTenant(row.id, { status: 1 });
+    ElMessage.success('租户已启用');
+    crudRef.value?.refresh();
+  } catch (err) {
+    ElMessage.error(err instanceof BizError ? describeBizError(err) : '启用失败，请重试');
   }
 }
 
@@ -192,8 +202,13 @@ function formatTime(value: string | null): string {
         {{ formatTime(row.createdAt) }}
       </template>
       <template #actions-extra="{ row }">
-        <el-button v-if="row.status === 1" v-permission="'tenant:delete'" link type="danger" @click="handleDisable(row as TenantView)">
+        <!-- 停用 = freeze：仅 active(1)/grace(2) 为合法源；frozen/terminated/pending 不给入口（4030 无意义点击） -->
+        <el-button v-if="row.status === 1 || row.status === 2" v-permission="'tenant:delete'" link type="danger" @click="handleDisable(row as TenantView)">
           停用
+        </el-button>
+        <!-- 启用 = resume：仅 frozen(3) 有出口（terminated 不可复活、pending 走开通激活） -->
+        <el-button v-if="row.status === 3" v-permission="'tenant:update'" link type="success" @click="handleEnable(row as TenantView)">
+          启用
         </el-button>
         <el-button v-permission="'tenant:manage'" link type="warning" @click="openMigrate(row as TenantView)">迁移</el-button>
       </template>

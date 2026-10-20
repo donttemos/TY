@@ -453,7 +453,8 @@ async function main() {
     check('DELETE /tenants/0（legacy）→ 400/1004', legacyDisable.status === 400 && legacyDisable.body?.code === 1004, `code=${legacyDisable.body?.code}`);
 
     const disabledTenant = await api('DELETE', `/tenants/${probeId}`, { token: newAccess });
-    check('DELETE /tenants/:id 停用（status=0，行保留）', disabledTenant.body?.code === 0 && disabledTenant.body?.data?.status === 0);
+    // 停用 = freeze：落规范码 3（ADR-0031 §2.3，不再直写存量码 0）；行保留（不物理删）
+    check('DELETE /tenants/:id 停用（=freeze 落 status=3，行保留）', disabledTenant.body?.code === 0 && disabledTenant.body?.data?.status === 3);
 
     // 迁移长任务 → 任务面轮询 → 控制面切换
     const migrateJob = await api('POST', `/tenants/${probeId}/migrate`, { token: newAccess, body: { isolation: 'dedicated', dbUrl: 'postgresql://probe:pw@127.0.0.1:5432/probe' } });

@@ -347,10 +347,14 @@ const DICT_SEED: DictSeed[] = [
   {
     code: 'tenant_status',
     name: '租户状态',
-    remark: 'N-01 租户管理页：停用租户在租户解析上 fail-closed（4001）',
+    remark: 'N-01 租户管理页：ADR-0029 §2.4 五态如实展示（0 存量停用读作 frozen / 1 active / 2 grace / 3 frozen / 4 terminated / 5 pending）；停用租户在租户解析上 fail-closed（4001）',
     items: [
+      { label: '待开通', value: '5', color: 'info' },
       { label: '启用', value: '1', color: 'success' },
-      { label: '停用', value: '0', color: 'danger' },
+      { label: '宽限期', value: '2', color: 'warning' },
+      { label: '冻结', value: '3', color: 'danger' },
+      { label: '停用（存量）', value: '0', color: 'info' },
+      { label: '已终止', value: '4', color: 'info' },
     ],
   },
 ];

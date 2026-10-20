@@ -276,6 +276,8 @@
 
 ### 3.9 租户（PRD-008，M8 + N-01 收口）
 
+> **TenantView.status 五态编值（ADR-0029 §2.4，与 @fw/saas 读写口径一致）**：`0` 存量停用（读作 frozen）/ `1` active / `2` grace / `3` frozen / `4` terminated / `5` pending；后端**如实透出**真实编值（历史版本曾把非 1 折叠成 0，导致 grace/frozen/terminated 在管理端全显示「停用」，已修复）；未知脏值 fail-closed 归 `3`。状态**写权唯一归属 TenantLifecycleService**（ADR-0031 §2.3）：管理端「停用」= DELETE/PUT status=0 → `freeze`，「启用」= PUT status=1 → `resume`（pending 走 `activate`），存储端口不提供任何 status 直写点。租户管理页按迁移表渲染按钮（停用仅 active/grace、启用仅 frozen），编辑弹窗不含状态字段（状态是命令而非可编辑属性）。
+
 > **跨租户维护面**：平台管理员视角的五个端点整类标 `@IgnoreTenant()`（否则 `TENANT_ENABLED=true` 时调用方自身先 4001）。
 > 框架要求调用方**同时**持有 `system:tenant:ignore`（守卫额外校验并写豁免审计），与各端点自身的 `tenant:*` 权限码是「与」关系。
 > **语义守卫**：legacy 存量单租户（id `0`）停用 / 迁移一律 `1004`；`DELETE` 是停用（不写 `deletedAt`，解析路径仍按 code 命中并给 `4001`「租户已停用」）。
@@ -284,8 +286,8 @@
 |---|---|---|---|
 | GET | `/tenants` | `tenant:read` | 租户列表（平台管理员）：分页 + 关键字 / 隔离级别 / 状态过滤，`sort` 白名单同 §1.5（`id` / `code` / `name` / `isolation` / `status` / `created_at` / `updated_at` / `expire_at`） |
 | POST | `/tenants` | `tenant:create` | 开租户，指定 `isolation`；`dedicated` 必须带 `dbUrl`（落库前加密） |
-| PUT | `/tenants/:id` | `tenant:update` | 更新（名称、套餐、状态、到期时间；隔离级别不走这里，走 migrate） |
-| DELETE | `/tenants/:id` | `tenant:delete` | 停用（不物理删），审计记录含 `affectedUsers` |
+| PUT | `/tenants/:id` | `tenant:update` | 更新（名称、套餐、到期时间 + **状态命令** `status`：0=停用→`freeze` / 1=启用→`resume|activate`；隔离级别与状态明细迁移不走这里） |
+| DELETE | `/tenants/:id` | `tenant:delete` | 停用（= `freeze`，不物理删；落规范码 3，重复停用幂等），审计记录含 `affectedUsers` |
 | POST | `/tenants/:id/migrate` | `tenant:manage` | shared ↔ dedicated 隔离级别迁移：**长任务**，返回 `jobId`，进度走 §3.11。迁移内容 = 控制面切换（isolation 元数据 + 连接串密文 + 缓存失效），**数据物理搬迁由运维按手册执行**，接口与前端文案均已明示 |
 
 ### 3.10 业务模块标准 CRUD（PRD-006 生成器产出）

@@ -7,6 +7,7 @@
  * @created 2026-10-13
  * @modified 2026-10-15 donttemo M9/PRD-009 FR-09：新增 updateRuntimeOptions——tenant.cacheTtl 经配置中心订阅热更（对新缓存条目生效）
  * @modified 2026-10-19 donttemo M13（ADR-0031 §3）：assertUsable 仅拒存量停用（0）——grace/frozen/terminated 放行至业务面由 SaasLifecycleGuard 4031 拦截（冻结租户登录/导出白名单面必须可达）
+ * @modified 2026-10-21 donttemo P0（ADR-0029 §2.4）：pending 改占编码 5，assertUsable 一并拒绝（未开通租户 fail-closed）
  * @module @fw/tenant
  */
 import { BizError, ErrorCode } from '@fw/core';
@@ -101,6 +102,11 @@ export class TenantService {
     //（ADR-0031 §3.2 白名单），在此 4001 会把白名单面一并挡掉。
     if (tenant.status === 0) {
       throw new BizError(ErrorCode.TENANT_INVALID, `租户已停用：${tenant.code}`);
+    }
+    // pending（5，ADR-0029 §2.4 新增编码）为「已创建未开通」，同样不可用：解析层即 fail-closed，
+    // 避免未开通租户穿过 4001/4031 直达业务面。当前无生产写入路径，此判定为防御性前置。
+    if (tenant.status === 5) {
+      throw new BizError(ErrorCode.TENANT_INVALID, `租户尚未开通：${tenant.code}`);
     }
     if (tenant.expireAt && new Date(tenant.expireAt).getTime() <= this.now()) {
       throw new BizError(ErrorCode.TENANT_INVALID, `租户已过期：${tenant.code}`);

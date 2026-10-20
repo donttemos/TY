@@ -37,7 +37,8 @@ function toInfo(row: TenantRow): TenantInfo {
     isolation: row.isolation === 'dedicated' ? 'dedicated' : 'shared',
     // dedicated 租户解密独立库连接串；shared 租户无密文（dbUrl=null）
     dbUrl: row.dbUrlEnc ? decryptDbUrl(row.dbUrlEnc) : null,
-    status: row.status as 0 | 1 | 2 | 3 | 4,
+    // 五态编码原样透传（0 存量停用 / 1 / 2 / 3 / 5 pending，ADR-0029 §2.4）；语义判定留给 TenantService
+    status: row.status as TenantInfo['status'],
     expireAt: row.expireAt ? row.expireAt.toISOString() : null,
   };
 }

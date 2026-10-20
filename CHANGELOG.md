@@ -36,6 +36,15 @@
 
 ## [Unreleased]
 
+### Fixed（租户管理面五态链路：状态码语义 + 写权唯一归属，2026-10-20）
+
+- **`toView` 五态如实透出**（`tenant-admin.store.ts`）：此前把非 1 状态一律折叠成「停用」（0），grace/frozen/terminated/pending 在管理端全部显示停用；改为透出真实编值（0 存量停用 / 1 active / 2 grace / 3 frozen / 4 terminated / 5 pending，与 @fw/saas 读写口径一致），未知脏值 fail-closed 归 3。
+- **状态写权唯一归属 TenantLifecycleService**（ADR-0031 §2.3）：移除 `disableTenant` 直写 `status: 0` 与 `update.status` 直写；管理端「停用」（DELETE / PUT status=0）经控制器转 `freeze`（落规范码 3，已是冻结幂等），「启用」（PUT status=1）转 `resume`（pending 走 `activate`，terminated 启用 4030 不可复活）；存储端口不再提供任何 status 写点，`updateTenant` 忽略 status 入参。
+- **前端契约与交互同步**：`TenantView.status` / `TenantQuery.status` / `TenantUpsertInput.status` 升五态；租户页操作列按迁移表渲染（停用仅 active/grace、启用仅 frozen、terminated/pending 无入口）并补「启用」按钮（→ `updateTenant(id,{status:1})`）；**编辑弹窗移除状态字段**（状态是生命周期命令而非可编辑属性）；停用确认文案对齐 freeze 语义（4031 + 可恢复）。
+- **字典与 mock 同步**：seed `tenant_status` 字典由两项扩为六项五态（**seed 语义变更——存量环境需 reseed 并重登**，见 docs/90 部署说明）；mock 字典/租户样例（grace/frozen/terminated/pending 各一）/DELETE/PUT 命令语义（停用落 3、非法迁移 4030）同步。
+- **契约文档**：api-spec §3.9 补 TenantView.status 五态编值与写权归属说明；数据字典 `tenants.status` 列补五态语义。
+- **测试**：example-api tenant 模块 27/27（store spec 两用例按新契约重写：端口无 status 写点 + 五态透出 + update 忽略 status；controller spec 修复 fake 存储引用共享导致的 before 快照污染——find 返回克隆，对齐真实 Prisma）；admin-web 新增租户页回归 3 例（按钮按迁移表 / 停用=DELETE、启用=PUT status=1 / 编辑弹窗无状态字段）。
+
 ### Added（M14/PRD-014 B4：用量看板 + 运营首页，2026-10-20）
 
 - **用量趋势 / 明细 / 平台总览端点（FR-14-12/14，OQ-14-3 定案：查询时聚合零迁移）**：`GET /saas/tenants/:id/usage/trend`（hours ∈ 24/48/72/168/720，UTC 小时（≤48h）/天（>48h）桶聚合并填零序列）；`GET /saas/tenants/:id/usage/events`（明细分页，hours ∈ 24/72/168/720 ≤30 天，occurredAt desc，内存分页 pageSize ≤200，事件量级可控大量化后立 ADR 升级）；`GET /saas/usage/overview`（配额风险 day+month 窗口 ≥80% TOP20 + 7 天内到期订阅 + 五态计数 + 最近迁移 10 条）。存储端口扩展 `listWindows` / `countTenantsByStatus` / `listRecentLifecycleLogs`（Fake + Prisma 双实现，三库矩阵 CI 覆盖）。

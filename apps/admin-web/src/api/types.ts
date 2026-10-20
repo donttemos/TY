@@ -402,6 +402,13 @@ export interface DeadLetterRequeueResult {
 /** 租户隔离级别 */
 export type TenantIsolation = 'shared' | 'dedicated';
 
+/**
+ * 租户状态 Int（ADR-0029 §2.4 五态编码，与后端 TenantStatus 完全一致）：
+ * 0 存量停用（读作 frozen）/ 1 active / 2 grace / 3 frozen / 4 terminated / 5 pending。
+ * 后端如实透出真实编值（不再把非 1 折叠成 0）；未知脏值 fail-closed 归 3。
+ */
+export type TenantStatus = 0 | 1 | 2 | 3 | 4 | 5;
+
 /** 租户视图（不包含任何连接串信息；独立库只用布尔位表达「是否已配置」） */
 export interface TenantView {
   id: ID;
@@ -409,7 +416,7 @@ export interface TenantView {
   name: string;
   isolation: TenantIsolation;
   plan: string | null;
-  status: 0 | 1;
+  status: TenantStatus;
   expireAt: string | null;
   dedicatedDbConfigured: boolean;
   createdAt: string;
@@ -422,7 +429,7 @@ export interface TenantQuery {
   pageSize?: number;
   keyword?: string;
   isolation?: TenantIsolation;
-  status?: 0 | 1;
+  status?: TenantStatus;
   sort?: string;
 }
 
@@ -433,7 +440,8 @@ export interface TenantUpsertInput {
   isolation?: TenantIsolation;
   plan?: string | null;
   expireAt?: string | null;
-  status?: 0 | 1;
+  /** 管理端状态命令（0=停用→freeze / 1=启用→resume|activate；控制器转生命周期动作，不直写） */
+  status?: TenantStatus;
   /** 迁移到 dedicated 时必填：独立库连接串（明文，服务端加密落库） */
   dbUrl?: string;
 }

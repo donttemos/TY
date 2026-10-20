@@ -2,11 +2,12 @@
  * @file 单测：租户管理存储（N-01）
  * @description 以内存假 PrismaClient 驱动**真实**的 PrismaTenantAdminStore，验证存储端口契约：
  *   编码格式 / dedicated 必填连接串 / shared 拒收连接串 / 编码唯一（1003 而非 500）、
- *   legacy 停用与迁移一律拒绝、停用不写 deletedAt（解析仍能命中给 4001）、
+ *   legacy 迁移拒绝、视图如实透出五态编值、**本端口不提供 status 迁移写点**（写权在状态机）、
  *   主键取「现有最大数字 ID + 1」（与 users.tenant_id 的 bigint 语义对齐）。
- *   控制器层语义（端点权限 / 审计 / 派发）见 tenant-admin.controller.spec.ts。
+ *   控制器层语义（端点权限 / 审计 / 派发 / freeze-resume 路由）见 tenant-admin.controller.spec.ts。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-21 donttemo P0 收口：移除 disableTenant，改为断言「视图透出五态 + 端口无 status 写点」
  * @module example-api/tenant
  */
 
@@ -14,6 +15,7 @@ import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
 import { BizError } from '@fw/core';
 import { PrismaTenantAdminStore, LEGACY_TENANT_ID } from './tenant-admin.store.js';
+import type { TenantUpdateInput } from './tenant-admin.store.js';
 import { decryptDbUrl } from './db-url-crypto.js';
 
 /** 内存中的租户行（Prisma 生成类型的本地投影） */
@@ -194,17 +196,40 @@ describe('PrismaTenantAdminStore', () => {
     await expect(store.createTenant({ ...base, code: 'acme' })).rejects.toMatchObject({ code: 1003 });
   });
 
-  it('停用：不写 deletedAt（解析仍能按 code 命中并给 4001），legacy 一律拒绝', async () => {
+  it('状态写权唯一归属（ADR-0031 §2.3）：端口无 status 写点 + update 不碰状态与 deletedAt', async () => {
     const { client, rows } = createFakeClient(seedRows());
     const store = new PrismaTenantAdminStore(client);
 
-    const disabled = await store.disableTenant('1');
-    expect(disabled.status).toBe(0);
-    expect(rows.find((row) => row.id === '1')?.deletedAt).toBeNull();
-    expect(rows.find((row) => row.id === '1')?.status).toBe(0);
+    // 端口不暴露任何 status 写方法（停用/启用/直写一律没有——管理端命令经控制器转生命周期动作）
+    expect((store as unknown as Record<string, unknown>).disableTenant).toBeUndefined();
+    expect((store as unknown as Record<string, unknown>).setTenantStatus).toBeUndefined();
 
-    await expect(store.disableTenant(LEGACY_TENANT_ID)).rejects.toMatchObject({ code: 1004 });
-    await expect(store.disableTenant('999')).rejects.toMatchObject({ code: 1002 });
+    // update 不写 status、不软删（deletedAt 恒 null：解析路径按 code 命中后给 4001）
+    const updated = await store.updateTenant('1', { name: 'ACME 新名', plan: null });
+    expect(updated.name).toBe('ACME 新名');
+    expect(updated.status).toBe(1);
+    expect(rows.find((row) => row.id === '1')?.deletedAt).toBeNull();
+  });
+
+  it('五态如实透出：grace/frozen/terminated/pending 不再折叠为停用（存量 0 保持原值，脏值 fail-closed）', async () => {
+    const { client } = createFakeClient([
+      ...seedRows(),
+      makeRow({ id: '4', code: 'grace', name: '宽限期租户', status: 2 }),
+      makeRow({ id: '5', code: 'frozen', name: '已冻结租户', status: 3 }),
+      makeRow({ id: '6', code: 'term', name: '已终止租户', status: 4 }),
+      makeRow({ id: '7', code: 'pending', name: '待开通租户', status: 5 }),
+      makeRow({ id: '8', code: 'dirty', name: '脏值租户', status: 99 }),
+    ]);
+    const store = new PrismaTenantAdminStore(client);
+    // 2=grace / 3=frozen / 4=terminated / 5=pending 全部原样透出（此前非 1 一律折叠成 0=停用）
+    expect((await store.findTenantViewById('4'))?.status).toBe(2);
+    expect((await store.findTenantViewById('5'))?.status).toBe(3);
+    expect((await store.findTenantViewById('6'))?.status).toBe(4);
+    expect((await store.findTenantViewById('7'))?.status).toBe(5);
+    // 存量停用 0 保持 0（读侧按 frozen 语义匹配，见 toTenantStatus 注释）
+    expect((await store.findTenantViewById('2'))?.status).toBe(0);
+    // 未知脏值 fail-closed 归 3（frozen），不静默变 0
+    expect((await store.findTenantViewById('8'))?.status).toBe(3);
   });
 
   it('迁移：legacy 拒绝、同级别拒绝、dedicated 必须带连接串', async () => {
@@ -220,14 +245,16 @@ describe('PrismaTenantAdminStore', () => {
     expect(migrated.dedicatedDbConfigured).toBe(true);
   });
 
-  it('更新：非法 status 400；legacy 停用由控制器层拦截（存储层只守不删）', async () => {
+  it('更新：忽略 status 入参（状态迁移唯一走生命周期服务，存储层不接 status）', async () => {
     const { client } = createFakeClient(seedRows());
     const store = new PrismaTenantAdminStore(client);
-    await expect(store.updateTenant('1', { status: 2 as 0 | 1 })).rejects.toMatchObject({ code: 1001 });
-    const updated = await store.updateTenant('1', { name: 'ACME 新名', plan: null, status: 0 });
+    // 传入 status 不报错也不落库（DTO 不含 status；非法编值更无入口）
+    const ignored = await store.updateTenant('1', { name: 'X', plan: null, status: 2 as 0 | 1 });
+    expect(ignored.status).toBe(1);
+    const updated = await store.updateTenant('1', { name: 'ACME 新名', plan: null });
     expect(updated.name).toBe('ACME 新名');
     expect(updated.plan).toBeNull();
-    expect(updated.status).toBe(0);
+    expect(updated.status).toBe(1);
   });
 
   it('账号规模统计走 user.count（停用 / 迁移前的提示数据源）', async () => {

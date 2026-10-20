@@ -179,6 +179,9 @@ active/grace/frozen ──terminate──▶ terminated ──(保留期满,任�
 ```
 
 - 合法迁移表入 ADR-0031；迁移实现为 `UPDATE tenants SET status=:to WHERE id=:id AND status=:from`（条件更新即幂等）。
+- **Int 编码见 ADR-0029 §2.4**：写码 `pending=5 / active=1 / grace=2 / frozen=3 / terminated=4`；0 为存量停用
+  只读兼容码（读作 frozen），领域写路径永不写 0。`from=frozen` 的条件更新须同时匹配 0 与 3，否则存量停用
+  租户的 resume/terminate 恒 4030。
 - 冻结作用点：全局 Guard 在 RbacGuard 后校验租户状态，`frozen/terminated` 拒绝业务请求（4031）；放行白名单 = 管理端登录、数据导出、生命周期查询。
 
 ### 4.4 并发与幂等机制

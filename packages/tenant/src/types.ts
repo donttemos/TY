@@ -22,10 +22,11 @@ export interface TenantInfo {
   isolation: TenantIsolation;
   /** 独立库连接串（仅 dedicated；加密存储字段的运行时解密结果由实现方负责） */
   dbUrl: string | null;
-  /** 状态 Int（ADR-0029 §2.2 五态映射）：0 存量停用 / 1 active / 2 grace / 3 frozen / 4 terminated。
-   *  停用（0）在解析层拒绝（4001，M8 既有语义）；grace/frozen/terminated 放行至业务面，
-   *  由 M13 SaasLifecycleGuard 以 4031 拦截（冻结租户管理端登录/导出仍可用，ADR-0031 §3.2）。 */
-  status: 0 | 1 | 2 | 3 | 4;
+  /** 状态 Int（ADR-0029 §2.4 五态编码）：0 存量停用 / 1 active / 2 grace / 3 frozen / 4 terminated / 5 pending。
+   *  停用（0）与未开通（5）在解析层拒绝（4001，fail-closed）；grace/frozen/terminated 放行至业务面，
+   *  由 M13 SaasLifecycleGuard 以 4031 拦截（冻结租户管理端登录/导出仍可用，ADR-0031 §3.2）。
+   *  注：0 与 3 同义（frozen），0 为存量只读兼容码，领域写路径永不写 0（ADR-0029 §2.4）。 */
+  status: 0 | 1 | 2 | 3 | 4 | 5;
   /** 到期时间（ISO 字符串；未设置为 null） */
   expireAt: string | null;
 }

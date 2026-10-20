@@ -168,7 +168,7 @@ erDiagram
         varchar isolation "shared 或 dedicated"
         varchar db_url_enc "独立库连接串 加密"
         varchar plan "套餐"
-        tinyint status
+        tinyint status "ADR-0029 §2.4 五态：0 存量停用（读作 frozen）/ 1 active / 2 grace / 3 frozen / 4 terminated / 5 pending；写权唯一归属 TenantLifecycleService（条件更新），未知脏值读侧 fail-closed 归 3"
         datetime expire_at
     }
     dict_categories {
@@ -351,7 +351,7 @@ erDiagram
 | `isolation` | varchar(16) | 是 | `shared` | `shared`（共享库 + tenant_id）/`dedicated`（独立库） | — |
 | `db_url_enc` | varchar(512) | 否 | NULL | 独立库连接串（加密存储，仅 dedicated 使用） | — |
 | `plan` | varchar(32) | 否 | NULL | 套餐 | — |
-| `status` | tinyint | 是 | 1 | 0 停用 / 1 启用 | — |
+| `status` | tinyint | 是 | 1 | 五态 Int 编码（ADR-0029 §2.4）：0 存量停用（读作 frozen，只读兼容）/ 1 active / 2 grace / 3 frozen / 4 terminated / 5 pending | — |
 | `expire_at` | datetime(3) | 否 | NULL | 到期时间 | — |
 | 通用字段 | — | — | — | 同上 | — |
 
