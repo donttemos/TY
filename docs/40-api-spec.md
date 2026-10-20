@@ -42,6 +42,12 @@
 > 只判 `self`，`org` / `org_below` 档的部门管理者可凭列表里看不见的记录 ID 直读详情）；记录操作人不在授权
 > 归属人集合内时与「记录不存在」统一返回 `404/1002`，不泄露存在性。详情与列表共用同一份范围计算。
 >
+> 变更记录：2026-10-21 donttemo P1 租户隔离分维：§3.7 在线 / 归档四出口（列表、导出）在 `dataScope` 归属人范围
+> 之外**独立强制租户范围**——普通请求使用服务端当前租户，客户端 `tenant_id` 只能同值（指定他租户 `4001`）；
+> 详情同时校验记录 `tenantId`。`dataScope=all` 只解除归属人限制，不再隐含跨租户能力。新增跨租户维护入口
+> `/audit-logs/platform*` 与 `/audit-archives/platform*`（`@IgnoreTenant()` + `system:tenant:ignore` 双重要求，
+> 守卫写豁免审计），全局访问行为只在该入口成立。
+>
 > 约定：接口由代码装饰器自动生成 OpenAPI 3.1 文档（`GET /docs`），本文件定义**规范与清单**，实现必须与本文件一致（CI 校验 spec 与路由一致）。
 
 ## 1. 通用约定
@@ -242,13 +248,26 @@
 
 | 方法 | 路径 | 权限点 | 说明 |
 |---|---|---|---|
-| GET | `/audit-logs` | `audit:read` | 分页查询，支持 `user_id / module / action / target / 时间区间`、M12 W2 契约字段 `trace_id / request_id / family_id / category / event`，以及 M15 新增 `result`（四态，非法值 400）/ `tenant_id`（十进制串，`0`=未知/存量，与 dataScope 取交集）/ `event` 多值（逗号分隔，≤20，用于「按风险筛选」由注册表展开）（精确过滤、可组合）；**过滤参数白名单外字段一律 400**（不静默忽略，OBS-14）。响应新增业务快照字段 `tenantId / summary / targetLabel / actorLabel / reason / auditSource`（additive）。排序见 §1.5 |
+| GET | `/audit-logs` | `audit:read` | 分页查询，支持 `user_id / module / action / target / 时间区间`、M12 W2 契约字段 `trace_id / request_id / family_id / category / event`，以及 M15 新增 `result`（四态，非法值 400）/ `tenant_id`（十进制串，`0`=未知/存量；**服务端强制当前租户**——客户端只能传与当前租户相同的值，指定他租户 `4001` 拒绝，不能靠该参数扩大范围）/ `event` 多值（逗号分隔，≤20，用于「按风险筛选」由注册表展开）（精确过滤、可组合）；**过滤参数白名单外字段一律 400**（不静默忽略，OBS-14）。`dataScope` 归属人范围与租户范围是两个维度、同时施加。响应新增业务快照字段 `tenantId / summary / targetLabel / actorLabel / reason / auditSource`（additive）。排序见 §1.5 |
 | GET | `/audit-logs/events` | `audit:read` | **事件注册表**（M15/ADR-0032 R1）：返回 `{ version, items }`，`items[]` 含 `code / name / description / category / risk / reviewRequired / guidance / targetType / summaryTemplate / changeFields / deprecated`；`version` 为注册表指纹供前端缓存失效。只读、服务端单源，前端不得另建翻译表。**路由声明必须在 `/audit-logs/:id` 之前**（否则 `events` 会被当作 id） |
-| GET | `/audit-logs/:id` | `audit:read` | 详情，含变更前后值（脱敏）。**`dataScope` 与列表同源收敛**（P1 修复）：`self` 仅本人记录、`org` / `org_below` 要求记录操作人属于可见部门成员集合、`all` 不限；范围外记录与「不存在」统一 **404/1002**（同 code 同 message，不泄露存在性，fail-closed）。系统任务记录（`userId` 为 `null`）不属于任何按人收敛的集合，只有 `all` 档可见 |
-| GET | `/audit-logs/export` | `audit:export` | 异步导出：派发到任务中心并**立即返回 `jobId`**（不等导出完成），进度 / 下载 / 重跑走 §3.11 的 `/jobs/:id/*`；同样受 `dataScope` 收敛（`self` 范围只导自己的记录）；过滤面与列表同源（含 `trace_id / request_id / family_id / category / event`）。CSV 产物与 mock 逐字节同构（UTF-8 BOM + CRLF + 引号转义 + 公式注入防护：`= + - @` / 制表符开头的单元格加单引号前缀，由 `@fw/auth` 的 `escapeCsvCell` 统一编码）；列序为 **M12 十五列位置不变 + M15 八个业务列追加在末尾**：`id,createdAt,userId,module,action,targetType,targetId,ip,traceId,requestId,familyId,category,event,before,after,eventName,summary,targetLabel,actorLabel,reason,result,auditSource,risk`（`eventName` / `risk` 由注册表现算，未登记事件留空，不猜） |
-| GET | `/audit-archives` | `audit:read` | 归档审计分页查询（M10 E-10）：参数与 `/audit-logs` 同形（`user_id / module / action / target / 时间区间 / sort` 白名单同源，M12 契约字段与 M15 `result / tenant_id` 一并对齐——此前仅支持前四类，与「同形」声明不符，M15 修正）；数据范围同样收敛——归档不是越权后门。范围计算自 P1 修复起与在线列表**共用同一份**（`@fw/auth` 的 `resolveDataScopeActors`，此前是手写的第二份，两处漂移会让「在线看不见、归档看得见」成为可能） |
-| GET | `/audit-archives/export` | `audit:export` | 归档审计异步导出（M10 E-10）：与 `/audit-logs/export` 同机制（任务中心类型 `audit.archive.export`，返回 `jobId`），CSV 产物形态逐字节同构；数据范围在派发时收敛固化进 params（与归档列表同源，导出不得比列表看到更多） |
+| GET | `/audit-logs/:id` | `audit:read` | 详情，含变更前后值（脱敏）。**`dataScope` 与列表同源收敛**（P1 修复）：`self` 仅本人记录、`org` / `org_below` 要求记录操作人属于可见部门成员集合、`all` 不限（仅归属人维度）；**另校验记录租户归属**（P1 租户分维）：记录 `tenantId` 必须是服务端当前租户，`dataScope=all` 不解除租户边界。归属人或租户任一不通过，与「不存在」统一 **404/1002**（同 code 同 message，不泄露存在性，fail-closed）。系统任务记录（`userId` 为 `null`）不属于任何按人收敛的集合，只有 `all` 档可见；其 `tenant_id=0` 的存量行仅维护入口可读 |
+| GET | `/audit-logs/export` | `audit:export` | 异步导出：派发到任务中心并**立即返回 `jobId`**（不等导出完成），进度 / 下载 / 重跑走 §3.11 的 `/jobs/:id/*`；同样受 `dataScope` 收敛（`self` 范围只导自己的记录）**与租户范围收敛**（服务端当前租户，`tenant_id` 只能同值，在派发时固化进 params）；过滤面与列表同源（含 `trace_id / request_id / family_id / category / event`）。CSV 产物与 mock 逐字节同构（UTF-8 BOM + CRLF + 引号转义 + 公式注入防护：`= + - @` / 制表符开头的单元格加单引号前缀，由 `@fw/auth` 的 `escapeCsvCell` 统一编码）；列序为 **M12 十五列位置不变 + M15 八个业务列追加在末尾**：`id,createdAt,userId,module,action,targetType,targetId,ip,traceId,requestId,familyId,category,event,before,after,eventName,summary,targetLabel,actorLabel,reason,result,auditSource,risk`（`eventName` / `risk` 由注册表现算，未登记事件留空，不猜） |
+| GET | `/audit-archives` | `audit:read` | 归档审计分页查询（M10 E-10）：参数与 `/audit-logs` 同形（`user_id / module / action / target / 时间区间 / sort` 白名单同源，M12 契约字段与 M15 `result / tenant_id` 一并对齐——此前仅支持前四类，与「同形」声明不符，M15 修正）；数据范围与租户范围同样收敛——归档不是越权后门。范围计算自 P1 修复起与在线列表**共用同一份**（`@fw/auth` 的 `resolveDataScopeActors` + `resolveTenantScope`，此前是手写的第二份，两处漂移会让「在线看不见、归档看得见」成为可能） |
+| GET | `/audit-archives/export` | `audit:export` | 归档审计异步导出（M10 E-10）：与 `/audit-logs/export` 同机制（任务中心类型 `audit.archive.export`，返回 `jobId`），CSV 产物形态逐字节同构；归属人与租户范围在派发时收敛固化进 params（与归档列表同源，导出不得比列表看到更多） |
+| GET | `/audit-logs/platform` | `audit:read` + `system:tenant:ignore` | **跨租户维护入口**（P1 租户分维）：平台级审计全局检索，整组 `@IgnoreTenant()`——守卫额外要求 `system:tenant:ignore`（缺失 `3002`）并写 `tenant_bypass` 豁免审计。租户维度放开（`tenant_id` 可选，缺省 = 全部租户），归属人（`dataScope`）维度照旧收敛；普通 `/audit-logs` 不走此路径 |
+| GET | `/audit-logs/platform/export` | `audit:export` + `system:tenant:ignore` | 跨租户维护入口：平台级审计导出（同 `audit.export` 任务中心，params 固化过滤条件；路由声明在 `platform/:id` 之前） |
+| GET | `/audit-logs/platform/:id` | `audit:read` + `system:tenant:ignore` | 跨租户维护入口：平台级审计详情（可读任意租户记录；归属人范围仍按 `dataScope` 校验）。**只有该入口（以及 `platform*` 其他端点）允许跨租户读取** |
+| GET | `/audit-archives/platform` | `audit:read` + `system:tenant:ignore` | 跨租户维护入口：归档冷数据全局检索（`tenant_id` 可选；归属人范围照旧收敛） |
+| GET | `/audit-archives/platform/export` | `audit:export` + `system:tenant:ignore` | 跨租户维护入口：归档导出（与维护列表同一份租户豁免语义） |
 
+> **两个正交维度**（P1 租户分维，2026-10-21）：`dataScope` 回答「能看谁的数据」（self / org /
+> org_below / all），租户范围回答「能看哪个租户的数据」，**分别收敛、同时施加**。普通请求的租户条件
+> 由服务端判定（请求上下文租户 → 用户档案租户），客户端 `tenant_id` 只能同值；`dataScope=all` 只解除
+> 归属人限制，不等价于平台级跨租户权限。详情在归属人判定之外**另校验记录 `tenant` 归属**，任一不通过
+> 统一 `404/1002`。跨租户读取只允许经 `platform*` 维护入口（`@IgnoreTenant()` + `system:tenant:ignore`，
+> 守卫写 `tenant_bypass` 豁免审计）；该入口只放开租户维度，归属人范围仍按 `dataScope` 收敛。
+> 全局 / 按任意租户检索的行为只在这些 `platform*` 端点上成立，与普通审计端点分开验收。
+>
 > M15（PRD-015，ADR-0032）起审计记录追加**业务快照**（`summary` / `targetLabel` / `actorLabel` / `reason` /
 > `auditSource` / `tenantId`），并由 `GET /audit-logs/events` 下发事件语义。分层约定：快照落库冻结、
 > 解释元数据（名称/风险/指引/字段中文名）不进库；`result` 新增第四态 `unknown`；`auditSource=interceptor`
@@ -294,6 +313,7 @@
 
 > **跨租户维护面**：平台管理员视角的五个端点整类标 `@IgnoreTenant()`（否则 `TENANT_ENABLED=true` 时调用方自身先 4001）。
 > 框架要求调用方**同时**持有 `system:tenant:ignore`（守卫额外校验并写豁免审计），与各端点自身的 `tenant:*` 权限码是「与」关系。
+> 同一机制用于 §3.7 的审计维护入口 `/audit-logs/platform*` 与 `/audit-archives/platform*`（跨租户审计检索，闸门相同）。
 > **语义守卫**：legacy 存量单租户（id `0`）停用 / 迁移一律 `1004`；`DELETE` 是停用（不写 `deletedAt`，解析路径仍按 code 命中并给 `4001`「租户已停用」）。
 
 | 方法 | 路径 | 权限点 | 说明 |

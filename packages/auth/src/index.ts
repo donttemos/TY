@@ -5,6 +5,8 @@
  * @created 2026-10-13
  * @modified 2026-10-17 donttemo M12 W2（PRD-012 OBS-12）：导出 auth/security 指标段 API
  * @modified 2026-10-21 donttemo M15 P2 观测闭环：导出审计限流丢弃计数 API（recordAuditThrottleDrop 等）
+ * @modified 2026-10-21 donttemo P1 租户隔离分维：导出 tenant-scope（resolveTenantScope / resolveTenantFilter /
+ *   isTenantWithinScope）——租户维度与 dataScope 归属人维度分开收敛
  * @module @fw/auth
  */
 
@@ -63,6 +65,9 @@ export {
   assertWithinDataScope,
 } from './data-scope.js';
 export type { DataScopeActorSet, DataScopeFilter, DataScopeOrgPort } from './data-scope.js';
+// 租户维度（与 dataScope 正交）：服务端强制当前租户，客户端 tenant_id 只能收窄不能放大
+export { isTenantWithinScope, resolveTenantFilter, resolveTenantScope } from './tenant-scope.js';
+export type { TenantScope, TenantScopeContext } from './tenant-scope.js';
 export { collectDescendantIds } from './org-tree.js';
 export type { OrgTreeNode } from './org-tree.js';
 export { AuditService, sanitizeForAudit } from './audit.service.js';

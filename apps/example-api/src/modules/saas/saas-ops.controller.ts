@@ -34,6 +34,11 @@
  * @modified 2026-10-21 donttemo P1（PRD-015 FR-15-10 收口）：审计事件 target_label 停止落裸 ID——
  *   套餐发布/订阅开通/订阅取消/配额超限/生命周期迁移（含非法）六处改为写入时解析
  *   租户名/套餐名快照；解析不到时写「名称快照缺失（ID: …）」显式声明，不让 ID 冒充名称。
+ * @modified 2026-10-21 donttemo P1 加固（FR-15-10 评审）：名称解析改为**尽力而为**——
+ *   tenantLabelOf/planLabelOf 对名称查询异常统一 try/catch 降级为缺失标记，
+ *   cancelSubscription 的 findSubscriptionById 回查同口径防护。名称快照是审计辅助
+ *   信息，不得反向决定业务成败：调用点在业务写入成功之后，查询失败若透出就会把
+ *   已提交的操作变成失败响应（客户端重试撞订阅冲突/重复操作）。故障注入测试锁定。
  * @modified 2026-10-20 M14 收口：全部入参校验（含 M13 遗留三处）统一 throw BizError——
  *   信封直返会被全局响应拦截器包双层（{code:0,data:{code:1001}}），前端按顶层 code 误判成功；
  *   禁新增信封直返校验（冒烟 S15.0 断言锁定）。
@@ -121,27 +126,42 @@ export class SaasOpsController {
   ) {}
 
   /**
-   * 租户名称快照（PRD-015 FR-15-10 / AC-15-02）
+   * 租户名称快照（PRD-015 FR-15-10 / AC-15-02 + P1 加固）：**尽力而为，绝不反向决定业务成败**。
    *
-   * 审计 `target_label` 必须是**可读名称**而不是 ID：运营在对象列看到 `t1` 会误以为是
-   * 租户名。取不到（租户不存在 / 脏引用）时写「名称快照缺失（ID: …）」显式声明——
-   * 缺失是可核验的事实，不是需要美化成 ID 的空白。
+   * 审计 `target_label` 必须是可读名称而不是 ID：运营在对象列看到 `t1` 会误以为是
+   * 租户名。三类结果全部收敛为返回值，不向外抛：
+   * - 查询成功且有名称 → 真实名称快照；
+   * - 对象不存在 / 名称为空白（脏引用）→ 「名称快照缺失（ID: …）」显式声明；
+   * - 查询抛异常（库抖动 / 连接池耗尽 / 驱动缺陷）→ 同样降级为缺失标记。
+   *
+   * 为什么不放异常出去：名称解析发生在业务写入成功**之后**（套餐已发布、订阅已取消、
+   * 迁移已生效）。查询失败一旦透出，就会把已提交的业务变成失败响应——客户端重试会撞
+   * `active_marker` 唯一冲突（订阅开通）、重复取消、重复迁移。名称快照是审计辅助信息，
+   * 没有资格覆盖业务结果，与 AuditService 对审计写入失败的降级同向（旁路不伤主链路）。
    */
   private async tenantLabelOf(tenantId: string): Promise<string> {
-    const name = await this.store.findTenantName(tenantId);
-    return name?.trim() ? name : snapshotMissingLabel(tenantId);
+    try {
+      const name = await this.store.findTenantName(tenantId);
+      return name?.trim() ? name : snapshotMissingLabel(tenantId);
+    } catch {
+      return snapshotMissingLabel(tenantId);
+    }
   }
 
   /**
-   * 套餐名称快照（同上）。与订阅列表 `enrichSubscriptions` 同口径：软删套餐不暴露名称，
-   * 落缺失标记——两侧看到的事实必须一致，不能列表说「没有」、审计却编一个名字。
+   * 套餐名称快照（同上，异常同口径降级）。与订阅列表 `enrichSubscriptions` 同口径：软删套餐
+   * 不暴露名称，落缺失标记——两侧看到的事实必须一致，不能列表说「没有」、审计却编一个名字。
    */
   private async planLabelOf(planId: string): Promise<string> {
-    const plan = await this.store.findPlanById(planId);
-    return plan?.name?.trim() ? plan.name : snapshotMissingLabel(planId);
+    try {
+      const plan = await this.store.findPlanById(planId);
+      return plan?.name?.trim() ? plan.name : snapshotMissingLabel(planId);
+    } catch {
+      return snapshotMissingLabel(planId);
+    }
   }
 
-  /** 订阅对象标签：`租户名 · 套餐名`（任一侧缺失只标记该侧，不牵连另一侧） */
+  /** 订阅对象标签：`租户名 · 套餐名`（任一侧缺失只标记该侧，不牵连另一侧；两侧解析均已防抛） */
   private async subscriptionLabelOf(subscription: { tenantId: string; planId: string }): Promise<string> {
     const [tenant, plan] = await Promise.all([this.tenantLabelOf(subscription.tenantId), this.planLabelOf(subscription.planId)]);
     return `${tenant} · ${plan}`;
@@ -243,8 +263,15 @@ export class SaasOpsController {
   @Permissions(PERM.OPS_SAAS_WRITE)
   async cancelSubscription(@Param('id') id: string, @Body() body: { reason?: string }, @CurrentUser() operator?: RequestUser, @Req() request?: Request): Promise<unknown> {
     await this.subscriptions.cancel(id, { reason: body?.reason ?? null });
-    // 标签取「取消后」的订阅行：cancel 已保证行存在（否则先抛 1002），此处仅防御并发硬删
-    const cancelled = await this.store.findSubscriptionById(id);
+    // 标签取「取消后」的订阅行：cancel 已保证行存在（否则先抛 1002），此处仅防御并发硬删。
+    // 回查同属业务成功后的旁路查询：抛异常（库抖动等）按缺失标记降级——
+    // 订阅已取消是事实，不能因为一次名称查询失败就把取消变成失败响应（客户端重试会重复取消）。
+    let cancelled: SubscriptionView | null = null;
+    try {
+      cancelled = await this.store.findSubscriptionById(id);
+    } catch {
+      cancelled = null;
+    }
     this.audit.recordEvent('saas.subscription.cancel', {
       userId: operator?.id,
       targetId: id,

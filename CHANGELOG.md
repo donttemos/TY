@@ -1,4 +1,4 @@
-# 变更日志
+﻿# 变更日志
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
@@ -17,6 +17,16 @@
 - **频率**：每个发布版本一条记录；`Unreleased` 区间持续累积，发布时转为版本条目并清空。
 
 ## [Unreleased]
+
+### Security（P1：审计租户隔离与 dataScope 分维，2026-10-21）
+
+- **问题**：`dataScope` 只回答「能看**谁**的数据」，租户边界回答「能看**哪个租户**的数据」，二者是正交维度。此前四个审计出口（`/audit-logs`、`/audit-logs/export`、`/audit-archives`、`/audit-archives/export`）把 `tenant_id` 当普通可选过滤参数，详情只校验操作人范围、不校验记录 `tenantId`。共享库下，**某租户内 `dataScope=all` 的用户并非平台级身份**，却可显式指定 `tenant_id=<其他租户>` 或直接猜记录 ID 越过租户边界——`all` 解除了归属人限制，被误当成跨租户平台权限。
+- **修复（服务端强制租户条件）**：新增 `@fw/auth` 的 `tenant-scope.ts`（`resolveTenantScope` / `resolveTenantFilter` / `isTenantWithinScope`），与 `data-scope.ts` 分开、可组合。普通请求的租户取「请求上下文租户（解析中间件 + 守卫比对过）→ 用户档案租户」的服务端值（legacy `'0'` 不被 falsy 吞掉）；客户端 `tenant_id` **只能与当前租户相同**，指定他租户一律 `4001`（`TENANT_INVALID`）拒绝（不静默改写、不退化成空结果）。在线列表 / 在线导出 / 归档列表 / 归档导出**四出口统一**注入该值，导出 params 在派发时固化（跨实例重跑沿用）。**详情**同时校验 `isActorWithinDataScope` 与 `isTenantWithinScope`，任一不通过与「记录不存在」统一 `404/1002`（不泄露存在性）。
+- **跨租户维护入口（显式授权，全局访问单独测试）**：新增 `GET /audit-logs/platform`、`/audit-logs/platform/export`、`/audit-logs/platform/:id`、`/audit-archives/platform`、`/audit-archives/platform/export`，整组标 `@IgnoreTenant()`——守卫额外要求 `system:tenant:ignore`（缺失 `3002`）并把豁免写审计（`tenant_bypass`）。只有该入口的请求上下文带 `ignoreTenant` 标志时才放开租户维度（可再按 `tenant_id` 收窄）；归属人（`dataScope`）维度照旧收敛。普通端点即使调用方持有 `system:tenant:ignore` + `dataScope=all` 也不会跨租户（守卫不会在普通路由写豁免标志）。
+- **一致性**：`templates/admin/server` 同名控制器同步租户分维逻辑（模板为裁剪子集，不含维护入口，注释指向 example-api 范式）。
+- **测试**：新增 `packages/auth/src/__tests__/tenant-scope.test.ts`（15 例：来源优先级 / legacy `'0'` / 维护入口 / 收窄 4001 / 详情判定）；新增 `apps/example-api/src/modules/auth/audit-tenant-scope.spec.ts`（9 例：四出口强制与 4001、详情双维度、legacy 无边界、维护入口全局访问，以及「维护入口只放开租户维度、归属人照旧收敛」）；更新 `audit-detail-scope.spec.ts`（`all` 改为「本租户内不限归属人」，跨租户与 `tenant_id=0` 存量行 404；列表桩补租户收敛）与 `audit-archive-scope.spec.ts`（四出口 `tenantId` 同源断言）。
+- **前端/接入注意**：平台级审计页应在调用方持有 `system:tenant:ignore` 时改用 `platform*` 端点；本次只交付后端入口（admin-web 仍走普通端点，单租户 / mock 行为不变，共享库多租户下的页面接入为后续项）。
+- **验证**：`@fw/auth` 293/293；example-api 全仓 231/231（`vitest run --no-file-parallelism`，24 套件；默认并行下两个 SQLite 集成套件在 Windows 上偶发 hook 超时，串行全绿，属环境问题）；`tsc --noEmit` 零错（auth / example-api）；门禁八项全绿（headers 710 文件 / api-parity / triway 八轴 / audit-events 32 事件 42 写入点 / no-raw-throw / helm 65 / config / template 语法校验）。无新增错误码、无迁移、无破坏性契约变更（维护入口为 additive 路由）。
 
 ### Security（M15 P2：审计限流丢弃观测闭环，2026-10-21）
 
@@ -40,6 +50,12 @@
 - **租户 ID 不再冒充对象名称**：`saas-ops.controller.ts` 六处写入点（套餐发布 / 订阅开通 / 订阅取消 / 配额超限 4029 / 生命周期迁移成功 / 非法迁移 4030）此前把 `tenantId` / `planId` / 订阅 ID 直接写进 `target_label`——运营在对象列看到的是 `t1` 而不是租户名，违背 PRD-015 FR-15-10「`target_label` 必须是套餐名/租户名而非 ID」。现改为**写入时解析名称快照**：租户名经新增端口 `SaasStore.findTenantName`（Fake/Prisma 双实现），套餐名经既有 `findPlanById`（与订阅列表 `enrichSubscriptions` 同口径——软删套餐不暴露名称，两侧看到的事实一致）；订阅类事件落「租户名 · 套餐名」，任一侧缺失只标记该侧。
 - **取不到名称时显式声明缺失，不把 ID 当名称**：新增 `@fw/auth` 的 `SNAPSHOT_MISSING_LABEL` / `snapshotMissingLabel(id)`，解析不到（租户不存在 / 脏引用 / 套餐软删）时写「名称快照缺失（ID: …）」——与展示侧 `ACTOR_SNAPSHOT_MISSING`（admin-web）同文案，「缺失是可核验的事实」；也不静默留空让展示层回退成 `targetType:targetId`。存量裸 ID 行不回填（ADR-0032 R8），按历史数据处理。
 - **验证**：`saas-ops.controller.spec.ts` 33 例（+9：六处写入点的名称解析与缺失标记双侧断言，含「只标记缺失一侧」与共享 AUDIT 桩的用例隔离）；`@fw/saas` 37/37（Fake 驱动 `findTenantName` 命中/未登记）；saas 集成 spec 20/20（真实库租户名断言，seed `t1`→「租户一」、不存在→null）；`@fw/auth` 278/278；`check:audit-events` 32 事件 / 42 写入点 / 覆盖矩阵三方一致；example-api `tsc --noEmit` 零错。无新增错误码、无迁移、无 API 契约变更（`target_label` 列语义收口，值域仍是字符串）。
+
+### Fixed（M15 P1 加固：名称快照查询异常降级，审计旁路不得反向决定业务成败，2026-10-21）
+
+- **问题**：`saas-ops.controller.ts` 的 `tenantLabelOf` / `planLabelOf` / `subscriptionLabelOf` 为生成可读 `target_label` 查询名称，但**没有异常降级**，且调用点在业务写入成功之后——套餐已发布、订阅已取消、生命周期已迁移后，一次名称查询的库异常就会把整个 HTTP 请求变成失败响应（「业务已提交、客户端收到失败」），客户端重试会撞 `active_marker` 唯一冲突（订阅开通）、重复取消、重复迁移；4030 / 4029 的 denial 审计路径同理会覆盖原始业务错误。这与 AuditService「审计写入失败降级」的设计目标相反：名称快照是审计辅助信息，不该反向决定主要业务是否成功。
+- **修复**：名称解析改为**尽力而为**，三类结果全部收敛为返回值、不向外抛——查询成功写真实名称快照；对象不存在 / 名称为空白（软删、脏引用）写「名称快照缺失（ID: …）」；**查询抛异常（库抖动 / 连接池耗尽 / 驱动缺陷）统一 try/catch 降级为缺失标记**。`cancelSubscription` 中业务成功后的 `findSubscriptionById` 回查同口径防护：订阅已取消是事实，不能因为一次名称查询失败就把取消变成失败响应。
+- **验证**：`saas-ops.controller.spec.ts` 41 例（+8 故障注入：`findPlanById` / `findTenantName` / `findSubscriptionById` 恒抛时，发布 / 开通 / 取消 / 迁移照常成功，4030 / 4029 原始业务错误原样抛出，审计一律落缺失标记）。反向验证：临时回退控制器 try/catch → 8 例全红、33 个旧例不受影响，恢复后全绿。saas 模块 69/69（41 控制器 + 8 守卫 + 20 集成）、example-api `tsc --noEmit` 零错；`check:headers`（709 文件）/ `check:audit-events`（32 事件 / 42 写入点）/ `check:no-raw-throw` 全绿。无新增错误码、无迁移、无 API 契约变更。
 
 ### Changed（M15：三条 AC 延后取证登记，2026-10-20）
 

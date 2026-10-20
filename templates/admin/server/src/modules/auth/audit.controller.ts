@@ -13,6 +13,10 @@
  * @modified 2026-10-20 donttemo M15 安全加固：补导出侧 CSV 编码指引（统一用 @fw/auth escapeCsvCell，防公式注入）
  * @modified 2026-10-21 donttemo P1 越权修复：detail() 原先只判 selfOnly，org / org_below 档可凭 ID 直读
  *   列表里看不见的记录；改为与 list 共用 resolveDataScopeActors 的归属人集合，范围外与不存在统一 404
+ * @modified 2026-10-21 donttemo P1 租户隔离分维：list / detail 在归属人范围之外另加租户范围——
+ *   普通请求强制服务端当前租户（客户端 tenant_id 只能收窄、与他租户不一致即 4001），详情校验记录 tenantId；
+ *   dataScope=all 只解除归属人限制。跨租户检索应新增 `@IgnoreTenant()` + system:tenant:ignore 的维护入口
+ *   （示例见 example-api 的 /audit-logs/platform*），不得把跨租户能力挂到普通端点
  * @module __APP_NAME__/auth
  */
 import { Controller, Get, Inject, Param, Query, Req } from '@nestjs/common';
@@ -27,8 +31,11 @@ import {
   Permissions,
   auditRegistryVersion,
   isActorWithinDataScope,
+  isTenantWithinScope,
   listAuditEvents,
   resolveDataScopeActors,
+  resolveTenantFilter,
+  resolveTenantScope,
   type AuditAction,
   type AuditEventDefinition,
   type AuditEventResult,
@@ -172,6 +179,9 @@ export class AuditController {
     // org / org_below 展开为部门成员集合（与传入 user_id 取交集）；all 不约束。
     // 与详情接口共用 resolveDataScopeActors——列表看不见的记录，详情也必须拿不到（P1）。
     const actors = await resolveDataScopeActors(user, this.org);
+    // 租户维度（与 dataScope 正交，P1）：普通请求强制服务端当前租户，客户端 tenant_id 只能收窄
+    const tenantScope = resolveTenantScope(user);
+    const tenantFilter = resolveTenantFilter(tenantScope, parseTenantId(tenantId));
     // 排序解析放在数据范围解析之后、查询之前：非法 sort（未知字段 / 非法方向 / 超上限）直接 400
     const parsedSort = parseSortQuery<AuditLogRecord>(sort, AUDIT_SORT_FIELDS);
     const selfOnly = actors.scope === 'self';
@@ -193,9 +203,9 @@ export class AuditController {
       familyId,
       category,
       events: parseAuditEvents(event),
-      // PRD-015：结果与租户过滤（与 dataScope 取交集，不放大可见范围）
+      // PRD-015：结果与租户过滤（归属人集合与租户条件是两个维度，同时施加、互不放大）
       result: parseAuditResult(result),
-      tenantId: parseTenantId(tenantId),
+      tenantId: tenantFilter,
     });
   }
 
@@ -214,17 +224,22 @@ export class AuditController {
    * 审计详情（字段级变更前后值）
    *
    * 授权范围与列表同源（`resolveDataScopeActors`）：self → 仅本人；org / org_below → 记录操作人
-   * 必须属于可见部门成员集合；all → 不限。范围外与不存在返回**同一个 404**（不泄露存在性，fail-closed）。
+   * 必须属于可见部门成员集合；all → 不限（仅归属人维度）。范围外与不存在返回**同一个 404**
+   * （不泄露存在性，fail-closed）。
    *
    * 修复记录（P1）：此前只判 `scope.selfOnly`，org / org_below 档可凭 ID 直读列表里看不到的记录。
+   *
+   * 租户维度（P1 分维）：详情还要校验记录 `tenantId` 属于当前租户——dataScope=all 只解除归属人
+   * 限制，不解除租户边界（共享库下本租户 all 用户不能凭 ID 读他租户记录）。
    */
   @Permissions(PERM.AUDIT_READ)
   @Get(':id')
   async detail(@CurrentUser() user: RequestUser, @Param('id') id: string): Promise<AuditLogRecord> {
     const actors = await resolveDataScopeActors(user, this.org);
+    const tenantScope = resolveTenantScope(user);
     const record = await this.admin.findAuditLogById(id);
-    // 注意：系统任务记录 userId 为 null，按人收敛的档位一律不可见（isActorWithinDataScope 内判定）
-    if (!record || !isActorWithinDataScope(actors, record.userId)) {
+    // 归属人（dataScope）与租户归属两个维度必须同时通过；系统任务记录（userId=null）按人收敛档不可见
+    if (!record || !isActorWithinDataScope(actors, record.userId) || !isTenantWithinScope(tenantScope, record.tenantId)) {
       throw new BizError(ErrorCode.NOT_FOUND, '审计日志不存在');
     }
     return record;

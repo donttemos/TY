@@ -7,9 +7,12 @@
  *   （self / org / org_below / all 四档，含客户端传 `user_id` 的放大尝试）。
  *
  *   归档侧此前无任何控制器级用例，这条断言是其范围语义的兜底。
+ *   租户维度（P1 分维）：四个出口除归属人集合外，还必须注入同一份服务端强制租户条件——
+ *   在线 / 归档、列表 / 导出任一处漏加，都会成为跨租户读取的后门（此处一并锁定）。
  * @author donttemo
  * @created 2026-10-21
  * @modified 2026-10-21 donttemo 补「在线导出 ⇔ 在线列表」同源断言（原仅覆盖归档侧导出）
+ * @modified 2026-10-21 donttemo P1 租户隔离分维：四出口同时断言 tenantId 同源（dataScope=all 亦然）
  * @module example-api/auth
  */
 import { describe, expect, it } from 'vitest';
@@ -158,10 +161,21 @@ describe('P1 · 归档审计与在线审计的授权范围同源', () => {
       await listOnline(online, requester);
       await listArchive(archive, requester);
 
-      // 只比对授权相关字段（列表其余过滤面各自演进，不属本用例的契约）
-      const onlineActors = { userId: captures.onlineList?.userId, userIds: captures.onlineList?.userIds };
-      const archiveActors = { userId: captures.archiveList?.userId, userIds: captures.archiveList?.userIds };
+      // 只比对授权相关字段（列表其余过滤面各自演进，不属本用例的契约）：
+      // 归属人集合（dataScope）与租户条件（tenant scope）是两个维度，四出口必须同时同源
+      const onlineActors = {
+        userId: captures.onlineList?.userId,
+        userIds: captures.onlineList?.userIds,
+        tenantId: captures.onlineList?.tenantId,
+      };
+      const archiveActors = {
+        userId: captures.archiveList?.userId,
+        userIds: captures.archiveList?.userIds,
+        tenantId: captures.archiveList?.tenantId,
+      };
       expect(archiveActors, `${entry.scope} / ${entry.userId}`).toEqual(onlineActors);
+      // 服务端强制当前租户（fixture tenantId=17）——dataScope=all 也不得省略
+      expect(onlineActors.tenantId, `${entry.scope} / ${entry.userId}`).toBe('17');
     }
   });
 
@@ -181,6 +195,7 @@ describe('P1 · 归档审计与在线审计的授权范围同源', () => {
 
       expect(captures.archiveExportParams?.userId, `${entry.scope} / ${entry.userId}`).toBe(listed?.userId);
       expect(captures.archiveExportParams?.userIds).toEqual(listed?.userIds);
+      expect(captures.archiveExportParams?.tenantId).toBe(listed?.tenantId);
     }
   });
 
@@ -201,6 +216,7 @@ describe('P1 · 归档审计与在线审计的授权范围同源', () => {
 
       expect(captures.onlineExportParams?.userId, `${entry.scope} / ${entry.userId}`).toBe(listed?.userId);
       expect(captures.onlineExportParams?.userIds).toEqual(listed?.userIds);
+      expect(captures.onlineExportParams?.tenantId).toBe(listed?.tenantId);
     }
   });
 
@@ -214,6 +230,8 @@ describe('P1 · 归档审计与在线审计的授权范围同源', () => {
     expect(captures.onlineList?.userId).toBe('u-alice');
     expect(captures.archiveList?.userId).toBe('u-alice');
     expect(captures.archiveList?.userIds).toBeUndefined();
+    expect(captures.onlineList?.tenantId).toBe('17');
+    expect(captures.archiveList?.tenantId).toBe('17');
   });
 
   it('org / org_below 档把客户端 user_id 交给存储层与部门集合取交集（不放宽为并集）', async () => {
@@ -222,5 +240,6 @@ describe('P1 · 归档审计与在线审计的授权范围同源', () => {
     // 集合仍是 bob 的部门闭包成员；客户端传入的 u-zed 只作为交集条件，永远无法被并进来
     expect([...(captures.archiveList?.userIds ?? [])].sort()).toEqual(['u-alice', 'u-bob', 'u-erin']);
     expect(captures.archiveList?.userId).toBe('u-zed');
+    expect(captures.archiveList?.tenantId).toBe('17');
   });
 });

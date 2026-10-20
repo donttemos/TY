@@ -11,6 +11,9 @@
  *   权限装饰器、领域服务内部语义（状态机/发布不可变/唯一冲突）由 @fw/saas 包内测试与守卫测试覆盖。
  * @modified 2026-10-21 donttemo P1（PRD-015 FR-15-10 收口）：补 target_label 名称快照断言——
  *   套餐发布/订阅开通/订阅取消/配额超限/生命周期迁移解析租户名·套餐名；取不到写缺失标记。
+ * @modified 2026-10-21 donttemo P1 加固（FR-15-10 评审）：补名称快照**故障注入**降级断言——
+ *   名称查询抛异常时，已提交的业务操作（发布/开通/取消/迁移）照常成功，原始业务错误
+ *   （4030/4029）原样抛出，审计一律落缺失标记：旁路查询不得反向决定业务成败。
  * @author donttemo
  * @created 2026-10-20
  * @module example-api/saas
@@ -482,6 +485,141 @@ describe('SaasOpsController 审计 target_label 名称快照（P1 / PRD-015 FR-1
     expect(AUDIT.recordEvent).toHaveBeenCalledWith(
       'saas.lifecycle.activate',
       expect.objectContaining({ targetId: 't-ghost', targetLabel: '名称快照缺失（ID: t-ghost）' }),
+    );
+  });
+});
+
+describe('SaasOpsController 名称快照故障注入降级（P1 加固：旁路查询不得反向决定业务成败）', () => {
+  /** 订阅领域服务 create 桩（返回带 tenantId/planId 的订阅行，与上层 describe 同型） */
+  function makeSubscriptionsCreate(subId: string, tenantId: string, planId: string) {
+    return {
+      create: vi.fn(async () => ({ id: subId, tenantId, planId, planVersionId: 'pv-1', status: 'active', effectiveAt: new Date(), expireAt: null, closedAt: null, reason: null })),
+    };
+  }
+
+  /**
+   * 恒抛的 store 查询桩：模拟库抖动 / 连接池耗尽 / 驱动缺陷。
+   * 与「查不到返回 null」是两回事——null 走缺失标记，抛异常必须被捕获降级，
+   * 否则业务写入成功后的名称解析会把已提交操作变成失败响应。
+   */
+  const boom = () =>
+    vi.fn(async () => {
+      throw new Error('injected: db unavailable');
+    });
+
+  it('套餐发布：findPlanById 抛异常 → 发布照常成功，审计落缺失标记（已发布不变失败响应）', async () => {
+    const plans = makePlans();
+    const store = makeStore({ findPlanById: boom() });
+    const r = (await makeController(store, plans).publishPlanVersion('plan-1', { quotas: [{ quotaKey: 'api_calls', limitValue: 500 }] })) as { version: number };
+    expect(r.version).toBe(3); // 业务成功不被名称查询失败覆盖
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.plan.publish',
+      expect.objectContaining({ targetId: 'plan-1', targetLabel: '名称快照缺失（ID: plan-1）' }),
+    );
+  });
+
+  it('订阅开通：findTenantName 抛异常 → 开通照常成功，仅租户侧缺失标记', async () => {
+    const subscriptions = makeSubscriptionsCreate('sub-1', 't1', 'plan-1');
+    const store = makeStore({
+      findTenantName: boom(),
+      findPlanById: vi.fn(async () => ({ id: 'plan-1', code: 'pro', name: '专业版' })),
+    });
+    const controller = new SaasOpsController(store, makePlans() as never, subscriptions as never, {} as never, {} as never, {} as never, AUDIT as never);
+    const r = (await controller.createSubscription({ tenantId: 't1', planCode: 'pro' } as never, undefined as never)) as { id: string };
+    expect(r.id).toBe('sub-1');
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.subscription.create',
+      expect.objectContaining({ targetId: 'sub-1', targetLabel: '名称快照缺失（ID: t1） · 专业版' }),
+    );
+  });
+
+  it('订阅开通：findPlanById 抛异常 → 开通照常成功，仅套餐侧缺失标记', async () => {
+    const subscriptions = makeSubscriptionsCreate('sub-2', 't1', 'plan-1');
+    const store = makeStore({
+      findTenantName: vi.fn(async () => '示例企业'),
+      findPlanById: boom(),
+    });
+    const controller = new SaasOpsController(store, makePlans() as never, subscriptions as never, {} as never, {} as never, {} as never, AUDIT as never);
+    const r = (await controller.createSubscription({ tenantId: 't1', planCode: 'pro' } as never, undefined as never)) as { id: string };
+    expect(r.id).toBe('sub-2');
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.subscription.create',
+      expect.objectContaining({ targetId: 'sub-2', targetLabel: '示例企业 · 名称快照缺失（ID: plan-1）' }),
+    );
+  });
+
+  it('订阅取消：findSubscriptionById 抛异常 → 取消照常成功，落缺失标记', async () => {
+    const subscriptions = { cancel: vi.fn(async () => undefined) };
+    const store = makeStore({ findSubscriptionById: boom() });
+    const controller = new SaasOpsController(store, makePlans() as never, subscriptions as never, {} as never, {} as never, {} as never, AUDIT as never);
+    const r = (await controller.cancelSubscription('sub-9', { reason: '客户降级' } as never, undefined as never)) as { cancelled: boolean };
+    expect(r).toEqual({ id: 'sub-9', cancelled: true }); // 已取消是事实，重试只会重复取消
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.subscription.cancel',
+      expect.objectContaining({ targetId: 'sub-9', targetLabel: '名称快照缺失（ID: sub-9）' }),
+    );
+  });
+
+  it('订阅取消：两侧名称解析均抛异常 → 取消照常成功，落双侧缺失标记', async () => {
+    const subscriptions = { cancel: vi.fn(async () => undefined) };
+    const store = makeStore({
+      findSubscriptionById: vi.fn(async () => ({ id: 'sub-9', tenantId: 't1', planId: 'plan-1' })),
+      findTenantName: boom(),
+      findPlanById: boom(),
+    });
+    const controller = new SaasOpsController(store, makePlans() as never, subscriptions as never, {} as never, {} as never, {} as never, AUDIT as never);
+    const r = (await controller.cancelSubscription('sub-9', { reason: '客户降级' } as never, undefined as never)) as { cancelled: boolean };
+    expect(r.cancelled).toBe(true);
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.subscription.cancel',
+      expect.objectContaining({ targetLabel: '名称快照缺失（ID: t1） · 名称快照缺失（ID: plan-1）' }),
+    );
+  });
+
+  it('生命周期迁移成功：findTenantName 抛异常 → 迁移照常成功，落缺失标记', async () => {
+    const lifecycle = { transition: vi.fn(async () => ({ from: 'active', to: 'frozen', alreadyApplied: false })) };
+    const store = makeStore({ findTenantName: boom() });
+    const controller = new SaasOpsController(store, makePlans() as never, {} as never, {} as never, {} as never, lifecycle as never, AUDIT as never);
+    const r = (await controller.transition('t1', { action: 'freeze', reason: '欠费' } as never, undefined as never)) as { to: string };
+    expect(r.to).toBe('frozen');
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.lifecycle.freeze',
+      expect.objectContaining({ targetId: 't1', targetLabel: '名称快照缺失（ID: t1）' }),
+    );
+  });
+
+  it('非法迁移 4030：findTenantName 抛异常 → 原始 4030 原样抛出（旁路不覆盖业务错误），denial 落缺失标记', async () => {
+    const lifecycle = {
+      transition: vi.fn(async () => {
+        throw new BizError(ErrorCode.LIFECYCLE_TRANSITION_INVALID, '非法迁移：active -> resume');
+      }),
+    };
+    const store = makeStore({ findTenantName: boom() });
+    const controller = new SaasOpsController(store, makePlans() as never, {} as never, {} as never, {} as never, lifecycle as never, AUDIT as never);
+    await expect(controller.transition('t1', { action: 'resume' } as never, undefined as never)).rejects.toMatchObject({
+      code: ErrorCode.LIFECYCLE_TRANSITION_INVALID,
+      message: '非法迁移：active -> resume',
+    });
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.lifecycle.invalid',
+      expect.objectContaining({ targetId: 't1', targetLabel: '名称快照缺失（ID: t1）', result: 'denied' }),
+    );
+  });
+
+  it('配额超限 4029：findTenantName 抛异常 → 原始 4029 原样抛出，审计落缺失标记', async () => {
+    const usage = {
+      record: vi.fn(async () => {
+        throw new BizError(ErrorCode.QUOTA_EXCEEDED, '配额已达上限（api_calls）');
+      }),
+    };
+    const store = makeStore({ findTenantName: boom() });
+    const controller = new SaasOpsController(store, makePlans() as never, {} as never, {} as never, usage as never, {} as never, AUDIT as never);
+    await expect(
+      controller.recordUsageEvent('t1', { quotaKey: 'api_calls', quantity: 1, idempotencyKey: 'k3' } as never, undefined as never),
+    ).rejects.toMatchObject({ code: ErrorCode.QUOTA_EXCEEDED, message: '配额已达上限（api_calls）' });
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.quota.exceeded',
+      expect.objectContaining({ targetId: 't1', targetLabel: '名称快照缺失（ID: t1）', result: 'denied' }),
     );
   });
 });

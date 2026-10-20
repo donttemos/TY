@@ -12,11 +12,14 @@
  * @modified 2026-10-21 donttemo P1 越权修复配套：列表 / 导出的范围计算改走 @fw/auth 的
  *   resolveDataScopeActors，与在线审计列表共用同一份归属人集合（原为手写的第二份实现，
  *   两处漂移会让「在线看不见、归档看得见」成为可能）
+ * @modified 2026-10-21 donttemo P1 租户隔离分维：在线/归档四出口统一施加**第二维度**租户范围——
+ *   普通请求强制服务端当前租户（客户端 tenant_id 只能收窄、他租户即 4001）；跨租户冷数据追溯只走
+ *   `@IgnoreTenant()` + system:tenant:ignore 的维护入口（/audit-archives/platform*）
  * @module example-api/auth
  */
 
 import { Controller, Get, Inject, Query, Req } from '@nestjs/common';
-import { PERM, Permissions, CurrentUser, resolveDataScopeActors, DATA_SCOPE_ORG, AuditArchiveService, AuditService, type AuditAction, type AuditEventResult, type AuditLogRecord, type DataScopeOrgPort, type RequestUser } from '@fw/auth';
+import { PERM, Permissions, CurrentUser, IgnoreTenant, resolveDataScopeActors, resolveTenantFilter, resolveTenantScope, DATA_SCOPE_ORG, AuditArchiveService, AuditService, type AuditAction, type AuditEventResult, type AuditLogRecord, type DataScopeOrgPort, type RequestUser } from '@fw/auth';
 import { parseSortQuery, type PageResult, type Sort } from '@fw/db';
 import { AUDIT_SORT_FIELDS, assertKnownFilterParams, buildAuditCsv, describeExportFilters, parseAuditEvents, parseAuditResult, parseTenantId } from './audit.controller.js';
 import { JobRunnerRegistry } from '../jobs/job-runner.registry.js';
@@ -100,6 +103,9 @@ export class AuditArchiveController {
     // 数据范围与在线列表共用同一份计算（resolveDataScopeActors）：归档不是越权后门。
     // 之前这里手写了一遍 scopeUserIds，两处一旦漂移就会出现「在线看不见、归档看得见」的错位。
     const actors = await resolveDataScopeActors(user, this.org);
+    // 租户维度（与 dataScope 正交，P1）：归档同样强制服务端当前租户，客户端 tenant_id 只能收窄
+    const tenantScope = resolveTenantScope(user);
+    const tenantFilter = resolveTenantFilter(tenantScope, parseTenantId(tenantId));
     const parsedSort = parseSortQuery<AuditLogRecord>(sort, AUDIT_SORT_FIELDS);
     const selfOnly = actors.scope === 'self';
 
@@ -115,15 +121,77 @@ export class AuditArchiveController {
       from: from ? new Date(from) : undefined,
       to: to ? new Date(to) : undefined,
       sort: parsedSort,
-      // 归档不是越权后门：过滤只做收窄，归属人集合仍按 dataScope 收敛
+      // 归档不是越权后门：过滤只做收窄，归属人集合与租户条件同时施加
       traceId,
       requestId,
       familyId,
       category,
       event,
       result: parseAuditResult(result),
-      tenantId: parseTenantId(tenantId),
+      tenantId: tenantFilter,
     });
+  }
+
+  /**
+   * 跨租户维护入口：归档冷数据全局检索（PRD-008 FR-02 跨租户维护面）
+   *
+   * `@IgnoreTenant()` 让守卫额外要求 `system:tenant:ignore` 并写豁免审计；仅此入口放开租户维度，
+   * 归属人范围（dataScope）照旧收敛（直接复用 list）。普通 `/audit-archives` 不因 dataScope=all 跨租户。
+   */
+  @IgnoreTenant()
+  @Permissions(PERM.AUDIT_READ)
+  @Get('platform')
+  platformList(
+    @CurrentUser() user: RequestUser,
+    @Req() request: Request,
+    @Query('page') page = '1',
+    @Query('pageSize') pageSize = '20',
+    @Query('user_id') userId?: string,
+    @Query('module') module?: string,
+    @Query('action') action?: string,
+    @Query('target_type') targetType?: string,
+    @Query('target_id') targetId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('sort') sort?: string,
+    @Query('trace_id') traceId?: string,
+    @Query('request_id') requestId?: string,
+    @Query('family_id') familyId?: string,
+    @Query('category') category?: string,
+    @Query('event') event?: string,
+    @Query('result') result?: string,
+    @Query('tenant_id') tenantId?: string,
+  ): Promise<PageResult<AuditLogRecord>> {
+    return this.list(user, request, page, pageSize, userId, module, action, targetType, targetId, from, to, sort, traceId, requestId, familyId, category, event, result, tenantId);
+  }
+
+  /**
+   * 跨租户维护入口：归档导出（与维护列表同一份租户豁免语义；params 固化派发时的过滤条件）
+   */
+  @IgnoreTenant()
+  @Permissions(PERM.AUDIT_EXPORT)
+  @Get('platform/export')
+  platformExport(
+    @CurrentUser() user: RequestUser,
+    @CurrentUser('id') operator: string,
+    @Req() request: Request,
+    @Query('user_id') userId?: string,
+    @Query('module') module?: string,
+    @Query('action') action?: string,
+    @Query('target_type') targetType?: string,
+    @Query('target_id') targetId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('sort') sort?: string,
+    @Query('trace_id') traceId?: string,
+    @Query('request_id') requestId?: string,
+    @Query('family_id') familyId?: string,
+    @Query('category') category?: string,
+    @Query('event') event?: string,
+    @Query('result') result?: string,
+    @Query('tenant_id') tenantId?: string,
+  ): Promise<JobView> {
+    return this.export(user, operator, request, userId, module, action, targetType, targetId, from, to, sort, traceId, requestId, familyId, category, event, result, tenantId);
   }
 
   /**
@@ -154,8 +222,11 @@ export class AuditArchiveController {
   ): Promise<JobView> {
     // 与列表同一条白名单（此前归档导出未校验，未知参数会被静默忽略）
     assertKnownFilterParams(request.query as Record<string, unknown>);
-    // 与列表 / 在线导出同一份范围计算（导出不得比列表看到更多）
+    // 与列表同源的授权范围计算（导出不得比列表看到更多）
     const actors = await resolveDataScopeActors(user, this.org);
+    // 租户维度（P1）：与列表同一份服务端强制值；维护入口才允许按任意 tenant_id 检索
+    const tenantScope = resolveTenantScope(user);
+    const tenantFilter = resolveTenantFilter(tenantScope, parseTenantId(tenantId));
     const parsedSort = parseSortQuery<AuditLogRecord>(sort, AUDIT_SORT_FIELDS);
     const selfOnly = actors.scope === 'self';
 
@@ -175,7 +246,7 @@ export class AuditArchiveController {
       category: category ?? null,
       events: parseAuditEvents(event) ?? null,
       result: parseAuditResult(result) ?? null,
-      tenantId: parseTenantId(tenantId) ?? null,
+      tenantId: tenantFilter ?? null,
       maxRows: EXPORT_MAX_ROWS,
     };
 

@@ -16,6 +16,8 @@
  * @modified 2026-10-21 donttemo P1 越权修复：新增 resolveDataScopeActors / isActorWithinDataScope——
  *   审计详情原先只判 selfOnly，org / org_below 档可凭 ID 直读范围外记录；改为与列表共用同一份
  *   归属人集合计算（assertWithinDataScope 同步复用，语义不变）
+ * @modified 2026-10-21 donttemo P1 租户隔离分维：本文件只解析「归属人」维度（dataScope）；
+ *   租户维度由 tenant-scope.ts 单独控制（shared 库下 all 只解除归属人限制，不解除租户边界）
  * @module @fw/auth
  */
 

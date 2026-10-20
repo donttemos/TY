@@ -134,6 +134,7 @@
 | TC-TNT-002 | 上下文缺失 | 无 `X-Tenant-Id` 且 token 无租户声明 | fail-closed：拒绝查询，不返回全量 | P0 |
 | TC-TNT-003 | 隔离级别 | shared 写入后查库 | 自动带 `tenant_id`；dedicated 走独立库 | P0 |
 | TC-TNT-004 | 数据权限四档 | 四种 `dataScope` 各查列表 | 返回范围正确 | P0 |
+| TC-TNT-008 | 审计租户分维（P1，2026-10-21） | 共享库下 A 租户 `dataScope=all` 用户：① 传 `tenant_id=<B>` 查审计列表 / 导出；② 直接请求 B 租户审计记录 ID；③ 同一请求改走 `/audit-logs/platform*` 维护入口 | ①② 一律拒绝（列表 / 导出 `4001`，详情 `404/1002`，不返回 B 租户数据）；③ 仅当守卫校验 `system:tenant:ignore` 并写 `tenant_bypass` 审计后放行，且归属人范围仍按 `dataScope` 收敛 | P0 |
 | TC-TNT-005 | transport 切换 | `in-process` → `redis` | 调用方代码不改，调用成功 | P0 |
 | TC-TNT-006 | 链路贯通 | 跨 2 个服务的请求 | 同一 traceId 在追踪系统可见完整链路 | P1 |
 | TC-TNT-007 | Helm 部署 | 部署后滚动更新 | 探针通过，无中断，HPA 生效 | P1 |

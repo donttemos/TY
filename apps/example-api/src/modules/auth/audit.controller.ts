@@ -17,6 +17,10 @@
  * @modified 2026-10-21 donttemo P1 越权修复：detail() 原先只判 selfOnly，org / org_below 档可凭 ID
  *   直读列表里看不见的记录；改为与 list / export 共用 resolveDataScopeActors 的归属人集合，
  *   范围外与不存在统一 404（不泄露存在性）
+ * @modified 2026-10-21 donttemo P1 租户隔离分维：list / export / detail 在归属人范围之外**另加租户范围**——
+ *   普通请求强制使用服务端解析出的当前租户（客户端 tenant_id 只能收窄、与他租户不一致即 4001），
+ *   详情同时校验记录 tenantId。dataScope=all 只解除归属人限制，不再隐含跨租户能力；跨租户检索只走
+ *   `@IgnoreTenant()` + system:tenant:ignore 的维护入口（/audit-logs/platform*）
  * @module example-api/auth
  */
 
@@ -28,14 +32,18 @@ import {
   AuthService,
   CurrentUser,
   DATA_SCOPE_ORG,
+  IgnoreTenant,
   PERM,
   Permissions,
   auditRegistryVersion,
   escapeCsvCell,
   findAuditEvent,
   isActorWithinDataScope,
+  isTenantWithinScope,
   listAuditEvents,
   resolveDataScopeActors,
+  resolveTenantFilter,
+  resolveTenantScope,
   type AuditAction,
   type AuditEventDefinition,
   type AuditEventResult,
@@ -200,6 +208,10 @@ export class AuditController {
     // org / org_below 展开为部门成员集合（与传入 user_id 取交集）；all 不约束。
     // 与详情接口共用 resolveDataScopeActors——列表看不见的记录，详情也必须拿不到（P1）。
     const actors = await resolveDataScopeActors(user, this.org);
+    // 租户维度（与 dataScope 正交，P1）：普通请求强制使用服务端解析出的当前租户；
+    // 客户端 tenant_id 只能与之相同（收窄），指定其他租户直接 4001 —— 不能靠 query 越过租户边界。
+    const tenantScope = resolveTenantScope(user);
+    const tenantFilter = resolveTenantFilter(tenantScope, parseTenantId(tenantId));
     // 排序解析放在数据范围解析之后、查询之前：非法 sort（未知字段 / 非法方向 / 超上限）直接 400（BUG-15）
     const parsedSort = parseSortQuery<AuditLogRecord>(sort, AUDIT_SORT_FIELDS);
     const selfOnly = actors.scope === 'self';
@@ -221,10 +233,10 @@ export class AuditController {
       familyId,
       category,
       events: parseAuditEvents(event),
-      // PRD-015 FR-15-05/06：结果与租户过滤（tenant_id 与 dataScope 取交集——
-      // 归属人集合仍在上面收敛，租户过滤只做进一步收窄，不放大可见范围）
+      // PRD-015 FR-15-05/06：结果与租户过滤。租户过滤值由服务端解析（见上）——
+      // 归属人集合与租户条件是两个维度，同时施加（交集），任一维度都不放大可见范围
       result: parseAuditResult(result),
-      tenantId: parseTenantId(tenantId),
+      tenantId: tenantFilter,
     });
   }
 
@@ -265,11 +277,15 @@ export class AuditController {
     assertKnownFilterParams(request.query as Record<string, unknown>);
     // 与列表同源的授权范围计算（导出不得比列表看到更多）
     const actors = await resolveDataScopeActors(user, this.org);
+    // 租户维度（P1）：与列表同一份服务端强制值，导出同样不能靠 tenant_id 越过租户边界
+    const tenantScope = resolveTenantScope(user);
+    const tenantFilter = resolveTenantFilter(tenantScope, parseTenantId(tenantId));
     const parsedSort = parseSortQuery<AuditLogRecord>(sort, AUDIT_SORT_FIELDS);
     const selfOnly = actors.scope === 'self';
 
     // M10 E-01：完整查询条件固化进 params（JSON 可序列化）——跨实例重跑按它重建同一查询。
-    // dataScope 已在此刻收敛为具体 ID（self → userId；org/org_below → userIds），重跑沿用派发时范围。
+    // dataScope 已在此刻收敛为具体 ID（self → userId；org/org_below → userIds），重跑沿用派发时范围；
+    // tenantFilter 同理固化：普通请求是服务端当前租户，维护入口为 null（全局）或调用方指定的租户。
     const params: Record<string, unknown> = {
       userId: selfOnly ? user.id : userId,
       userIds: selfOnly ? undefined : (actors.allowedUserIds ?? undefined),
@@ -286,7 +302,7 @@ export class AuditController {
       category: category ?? null,
       events: parseAuditEvents(event) ?? null,
       result: parseAuditResult(result) ?? null,
-      tenantId: parseTenantId(tenantId) ?? null,
+      tenantId: tenantFilter ?? null,
       maxRows: EXPORT_MAX_ROWS,
     };
 
@@ -362,21 +378,110 @@ export class AuditController {
   }
 
   /**
+   * 跨租户维护入口：平台级审计检索（PRD-008 FR-02「跨租户维护面」）
+   *
+   * 只有本族端点允许跨租户读取：整类/本组标 `@IgnoreTenant()`，框架守卫额外要求
+   * `system:tenant:ignore`（缺失即 3002）并把豁免行为写入审计（`tenant_bypass`）。
+   * 请求上下文出现 `ignoreTenant` 后，`resolveTenantScope` 才返回 `crossTenant`——
+   * 普通 `/audit-logs` 端点即使调用方 dataScope=all 也不会走到这里，租户边界不因 dataScope 放宽。
+   *
+   * 维护入口只是**放开租户维度**：归属人（dataScope）维度照旧收敛（与普通列表同一份实现，
+   * 本方法直接复用 list）。路由声明必须在 `:id` 之前，否则 `platform` 会被当作记录 ID。
+   */
+  @IgnoreTenant()
+  @Permissions(PERM.AUDIT_READ)
+  @Get('platform')
+  platformList(
+    @CurrentUser() user: RequestUser,
+    @Req() request: Request,
+    @Query('page') page = '1',
+    @Query('pageSize') pageSize = '20',
+    @Query('user_id') userId?: string,
+    @Query('module') module?: string,
+    @Query('action') action?: string,
+    @Query('target_type') targetType?: string,
+    @Query('target_id') targetId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('sort') sort?: string,
+    @Query('trace_id') traceId?: string,
+    @Query('request_id') requestId?: string,
+    @Query('family_id') familyId?: string,
+    @Query('category') category?: string,
+    @Query('event') event?: string,
+    @Query('result') result?: string,
+    @Query('tenant_id') tenantId?: string,
+  ): Promise<PageResult<AuditLogRecord>> {
+    return this.list(user, request, page, pageSize, userId, module, action, targetType, targetId, from, to, sort, traceId, requestId, familyId, category, event, result, tenantId);
+  }
+
+  /**
+   * 跨租户维护入口：平台级审计导出（与维护列表同一份租户豁免语义）
+   *
+   * 路由顺序：`platform/export` 必须声明在 `platform/:id` 之前，否则 `export` 会被当作记录 ID。
+   */
+  @IgnoreTenant()
+  @Permissions(PERM.AUDIT_EXPORT)
+  @Get('platform/export')
+  platformExport(
+    @CurrentUser() user: RequestUser,
+    @CurrentUser('id') operator: string,
+    @Req() request: Request,
+    @Query('user_id') userId?: string,
+    @Query('module') module?: string,
+    @Query('action') action?: string,
+    @Query('target_type') targetType?: string,
+    @Query('target_id') targetId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('sort') sort?: string,
+    @Query('trace_id') traceId?: string,
+    @Query('request_id') requestId?: string,
+    @Query('family_id') familyId?: string,
+    @Query('category') category?: string,
+    @Query('event') event?: string,
+    @Query('result') result?: string,
+    @Query('tenant_id') tenantId?: string,
+  ): Promise<JobView> {
+    return this.export(user, operator, request, userId, module, action, targetType, targetId, from, to, sort, traceId, requestId, familyId, category, event, result, tenantId);
+  }
+
+  /**
+   * 跨租户维护入口：平台级审计详情
+   *
+   * 维护入口只放开租户维度：归属人范围仍按 dataScope 收敛（与普通详情共用实现）。
+   * 普通详情在租户维度不匹配时同样 404（不泄露存在性）；维护入口才可读到任意租户记录。
+   */
+  @IgnoreTenant()
+  @Permissions(PERM.AUDIT_READ)
+  @Get('platform/:id')
+  platformDetail(@CurrentUser() user: RequestUser, @Param('id') id: string): Promise<AuditLogRecord> {
+    return this.detail(user, id);
+  }
+
+  /**
    * 审计详情（字段级变更前后值）
    *
    * 授权范围与列表同源（`resolveDataScopeActors`）：self → 仅本人；org / org_below → 记录操作人
-   * 必须属于可见部门成员集合；all → 不限。范围外与不存在返回**同一个 404**（不泄露存在性，fail-closed）。
+   * 必须属于可见部门成员集合；all → 不限（仅归属人维度）。范围外与不存在返回**同一个 404**
+   * （不泄露存在性，fail-closed）。
    *
    * 修复记录（P1）：此前只判 `scope.selfOnly`，org / org_below 档可凭 ID 直读列表里看不到的记录——
    * 详情接口的服务端权限边界必须与列表一致，不能只靠前端过滤。
+   *
+   * 租户维度（P1 分维）：详情还要校验记录 `tenantId` 属于当前租户。dataScope=all 只解除归属人
+   * 限制，不解除租户边界——否则共享库里「本租户 all 用户」可凭 ID 直读他租户记录。
+   * 跨租户读取只允许经 `platform/:id` 维护入口（@IgnoreTenant + system:tenant:ignore）。
    */
   @Permissions(PERM.AUDIT_READ)
   @Get(':id')
   async detail(@CurrentUser() user: RequestUser, @Param('id') id: string): Promise<AuditLogRecord> {
     const actors = await resolveDataScopeActors(user, this.org);
+    const tenantScope = resolveTenantScope(user);
     const record = await this.admin.findAuditLogById(id);
-    // 注意：系统任务记录 userId 为 null，按人收敛的档位一律不可见（isActorWithinDataScope 内判定）
-    if (!record || !isActorWithinDataScope(actors, record.userId)) {
+    // 注意：系统任务记录 userId 为 null，按人收敛的档位一律不可见（isActorWithinDataScope 内判定）；
+    // 两个维度都必须通过：归属人集合（dataScope）+ 记录租户归属（tenant scope）
+    if (!record || !isActorWithinDataScope(actors, record.userId) || !isTenantWithinScope(tenantScope, record.tenantId)) {
       throw new BizError(ErrorCode.NOT_FOUND, '审计日志不存在');
     }
     return record;
