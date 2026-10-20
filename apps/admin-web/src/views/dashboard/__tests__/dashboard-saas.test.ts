@@ -1,13 +1,16 @@
 /*
  * @file 工作台 SaaS 运营卡区回归（M14/PRD-014 FR-14-14）
  * @description 钉住：① 无 ops:saas:read → 不发请求、卡区不渲染（不刷 403 范式）；② 有权限 →
- *   五态计数/即将到期/配额风险/最近迁移四块渲染且可点跳转；③ 取数失败 → 降级文案而非 0。
+ *   五态计数/即将到期/配额风险/最近迁移四块渲染且可点跳转；③ 取数失败 → 降级文案而非 0；
+ *   ④ 租户级卡片跳转必须带 `?tenantId=`（与目标页 useTenantQuery 契约同源，防跨页上下文断链）。
  * @author donttemo
  * @created 2026-10-20
+ * @modified 2026-10-20 M14 跨页闭环：补跳转 query 断言（原用例只断言文案，未锁跳转契约）。
  * @module admin-web/views
  */
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/api/user', () => ({ fetchUsers: vi.fn() }));
@@ -61,6 +64,27 @@ describe('工作台 SaaS 运营卡区（FR-14-14）', () => {
     expect(text).toContain('t9'); // 到期租户
     expect(text).toContain('3 天'); // 剩余天数
     expect(text).toContain('api_calls'); // 风险指标
+  });
+
+  it('租户级卡片跳转携带 ?tenantId=（与目标页 useTenantQuery 契约同源）', async () => {
+    setPermissions(['ops:saas:read']);
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/:pathMatch(.*)*', component: { template: '<div />' } }],
+    });
+    await router.push('/dashboard');
+    await router.isReady();
+    const push = vi.spyOn(router, 'push').mockResolvedValue(undefined as never);
+    const wrapper = mount(Dashboard, { global: { plugins: [ElementPlus, router] } });
+    await flushPromises();
+
+    const items = wrapper.findAll('.fw-saas-item');
+    await items[0]!.trigger('click'); // 即将到期订阅（t9）
+    await items[1]!.trigger('click'); // 配额风险（t1）
+    await flushPromises();
+
+    expect(push).toHaveBeenCalledWith({ path: '/saas/subscriptions', query: { tenantId: 't9' } });
+    expect(push).toHaveBeenCalledWith({ path: '/saas/usage', query: { tenantId: 't1' } });
   });
 
   it('取数失败：降级文案，不用 0 冒充状态', async () => {

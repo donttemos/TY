@@ -9,16 +9,19 @@
  * @modified 2026-10-20 M14/PRD-014 B1 正确性修复：原因透传、真实状态驱动、权限渲染（U-14-1/2/3）。
  * @modified 2026-10-20 M14/PRD-014 B3：租户输入换 TenantPicker；原因收集统一走 confirmWithReason
  *   （危险动作必填，普通动作选填，FR-14-08）。
+ * @modified 2026-10-20 M14 跨页闭环：租户上下文取 useTenantQuery —— `/saas/lifecycle?tenantId=` 直达即
+ *   自动加载状态与迁移历史（工作台「已冻结/已终止」跳转不再要求二次选择）；无参只复位不发请求。
  * @module admin-web/views
 -->
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import * as saasApi from '@/api/saas';
 import type { LifecycleLog } from '@/api/types';
 import TenantPicker from '@/components/TenantPicker/index.vue';
 import { confirmWithReason } from '@/components/ConfirmWithReason';
+import { useTenantQuery } from '@/composables/useTenantQuery';
 import { BizError, describeBizError } from '@/utils/biz-error';
 
 const ACTIONS: Array<{ action: string; label: string; danger?: boolean }> = [
@@ -31,10 +34,26 @@ const ACTIONS: Array<{ action: string; label: string; danger?: boolean }> = [
 ];
 
 const loading = ref(false);
-const tenantId = ref('');
 const logs = ref<LifecycleLog[]>([]);
 /** 真实状态（store 直读，非日志推导）+ 合法动作集（后端迁移表派生） */
 const statusInfo = ref<{ status: string | null; allowedActions: string[] } | null>(null);
+
+/** 当前租户：由路由 `?tenantId=` 初始化（缺失 = 无租户态，不发起任何查询） */
+const { tenantId } = useTenantQuery({
+  onTenant: () => load(),
+  onEmpty: () => resetTenantData(),
+});
+
+/** 清空当前租户的状态与迁移历史（不发请求：切换租户复位 / 路由参数缺失复位） */
+function resetTenantData(): void {
+  statusInfo.value = null;
+  logs.value = [];
+}
+
+// 选择器清空（用户主动 / 路由撤参）：立即复位，避免空租户态下仍展示上一租户状态
+watch(tenantId, (value) => {
+  if (!value) resetTenantData();
+});
 
 function actionLabel(action: string): string {
   return ACTIONS.find((a) => a.action === action)?.label ?? action;
@@ -46,7 +65,7 @@ function isAllowed(action: string): boolean {
 
 /** 禁用提示（title 属性；空串 = 不禁用） */
 function disabledHint(action: string): string {
-  if (!tenantId.value) return '请先输入租户 ID';
+  if (!tenantId.value) return '请先选择租户';
   if (!statusInfo.value) return '请先加载租户状态';
   if (statusInfo.value.status === null) return '未查询到租户状态，不可操作';
   if (!isAllowed(action)) return `当前状态「${statusInfo.value.status}」不允许该动作`;
@@ -55,7 +74,7 @@ function disabledHint(action: string): string {
 
 async function load(): Promise<void> {
   if (!tenantId.value) {
-    ElMessage.warning('请输入租户 ID');
+    ElMessage.warning('请先选择租户');
     return;
   }
   loading.value = true;

@@ -9,14 +9,17 @@
  * @modified 2026-10-20 M14/PRD-014 B3：租户输入换 TenantPicker（FR-14-08/10 租户上下文）。
  * @modified 2026-10-20 M14/PRD-014 B4（FR-14-13）：新增用量趋势图（hours 白名单 + 纯 CSS 柱状，零新依赖）
  *   与事件明细分页表。
+ * @modified 2026-10-20 M14 跨页闭环：租户上下文取 useTenantQuery —— `/saas/usage?tenantId=` 直达即自动
+ *   拉配额/用量/趋势/明细（工作台「配额风险」跳转不再要求二次选择）；无参只复位不发请求。
  * @module admin-web/views
 -->
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import * as saasApi from '@/api/saas';
 import TenantPicker from '@/components/TenantPicker/index.vue';
+import { useTenantQuery } from '@/composables/useTenantQuery';
 import { BizError, describeBizError } from '@/utils/biz-error';
 
 interface QuotaRow {
@@ -36,13 +39,33 @@ interface UsageRow {
 }
 
 const loading = ref(false);
-const tenantId = ref('');
+/** 当前租户：由路由 `?tenantId=` 初始化（缺失 = 无租户态，不发起任何查询） */
+const { tenantId } = useTenantQuery({
+  onTenant: () => loadQuotas(),
+  onEmpty: () => resetTenantData(),
+});
 /** 已加载租户（FR-14-04：切换租户即重置，防上一租户数据残留） */
 const loadedTenant = ref('');
 const quotas = ref<QuotaRow[]>([]);
 const usage = ref<UsageRow | null>(null);
 const usageKey = ref('');
 const reportForm = reactive({ quotaKey: 'api_calls', quantity: 1, idempotencyKey: '' });
+
+/** 清空当前租户的全部看板数据（不发请求：切换租户复位 / 路由参数缺失复位） */
+function resetTenantData(): void {
+  quotas.value = [];
+  usage.value = null;
+  usageKey.value = '';
+  trend.value = [];
+  events.value = [];
+  eventTotal.value = 0;
+  loadedTenant.value = '';
+}
+
+// 选择器清空（用户主动 / 路由撤参）：立即复位，避免空租户态下仍展示上一租户数据
+watch(tenantId, (value) => {
+  if (!value) resetTenantData();
+});
 
 function percent(used: string, limit: string): number {
   const l = Number(limit);
@@ -52,18 +75,13 @@ function percent(used: string, limit: string): number {
 
 async function loadQuotas(): Promise<void> {
   if (!tenantId.value) {
-    ElMessage.warning('请输入租户 ID');
+    ElMessage.warning('请先选择租户');
     return;
   }
   loading.value = true;
   try {
     if (loadedTenant.value !== tenantId.value) {
-      quotas.value = [];
-      usage.value = null;
-      usageKey.value = '';
-      trend.value = [];
-      events.value = [];
-      eventTotal.value = 0;
+      resetTenantData();
       loadedTenant.value = tenantId.value;
     }
     quotas.value = await saasApi.fetchTenantQuotas(tenantId.value);
@@ -148,7 +166,7 @@ async function switchMetric(key: string): Promise<void> {
 
 async function onReport(): Promise<void> {
   if (!tenantId.value || !reportForm.quotaKey || !reportForm.quantity || reportForm.quantity <= 0) {
-    ElMessage.warning('租户 ID / 指标键 / 正数量必填');
+    ElMessage.warning('租户 / 指标键 / 正数量必填');
     return;
   }
   const key = reportForm.idempotencyKey || `ops:${Date.now()}`;

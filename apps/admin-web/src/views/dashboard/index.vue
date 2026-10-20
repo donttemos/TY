@@ -20,6 +20,8 @@
  *   才请求 /saas/usage/overview（无权限不发请求，沿 R4-05 范式不刷 403、不用 0 冒充）：五态计数 +
  *   7 天内到期订阅 + 配额风险（≥80% TOP）+ 最近迁移；每项可点击跳转对应运营页。常用入口补套餐/
  *   订阅/生命周期三项（按权限过滤）。
+ * @modified 2026-10-20 donttemo M14 跨页闭环：三处租户级跳转收敛到 goTenantPage(对象式 push + query)，
+ *   与目标页 useTenantQuery 的 `?tenantId=` 契约同源（避免字符串拼接漏 encode）。
 -->
 
 <script setup lang="ts">
@@ -99,6 +101,14 @@ function daysLeft(expireAt: string | null): string {
   if (!expireAt) return '无期限';
   const d = Math.ceil((new Date(expireAt).getTime() - Date.now()) / 86_400_000);
   return d >= 0 ? `${d} 天` : `已逾期 ${-d} 天`;
+}
+
+/**
+ * 带租户上下文跳转运营页（M14 跨页闭环）：租户以 query 承载（OQ-14-4 定案），
+ * 目标页用 useTenantQuery 初始化选择器并自动取数，运营人员无需二次选择。
+ */
+function goTenantPage(path: string, tenantId: string): void {
+  void router.push({ path, query: { tenantId } });
 }
 
 const quickLinks = computed(() => QUICK_LINKS.filter((link) => user.hasPermission(link.permission)));
@@ -190,7 +200,7 @@ onMounted(async () => {
             <div>
               <h4 class="fw-saas-sub-title">即将到期订阅（7 天）</h4>
               <div v-if="saasOverview.expiringSubscriptions.length" class="fw-saas-list">
-                <div v-for="s in saasOverview.expiringSubscriptions" :key="s.subscriptionId" class="fw-saas-item" @click="router.push(`/saas/subscriptions?tenantId=${s.tenantId}`)">
+                <div v-for="s in saasOverview.expiringSubscriptions" :key="s.subscriptionId" class="fw-saas-item" @click="goTenantPage('/saas/subscriptions', s.tenantId)">
                   <span class="fw-saas-item-main">{{ s.tenantId }}</span>
                   <span class="fw-text-weak">{{ daysLeft(s.expireAt) }}</span>
                 </div>
@@ -200,7 +210,7 @@ onMounted(async () => {
             <div>
               <h4 class="fw-saas-sub-title">配额风险（≥80%）</h4>
               <div v-if="saasOverview.quotaRisks.length" class="fw-saas-list">
-                <div v-for="(r, i) in saasOverview.quotaRisks.slice(0, 5)" :key="`${r.tenantId}-${r.quotaKey}-${r.windowType}-${i}`" class="fw-saas-item" @click="router.push(`/saas/usage?tenantId=${r.tenantId}`)">
+                <div v-for="(r, i) in saasOverview.quotaRisks.slice(0, 5)" :key="`${r.tenantId}-${r.quotaKey}-${r.windowType}-${i}`" class="fw-saas-item" @click="goTenantPage('/saas/usage', r.tenantId)">
                   <span class="fw-saas-item-main">{{ r.quotaKey }}</span>
                   <el-progress :percentage="Math.min(100, Math.round(r.ratio))" :stroke-width="10" :status="r.ratio >= 100 ? 'exception' : 'warning'" class="fw-saas-ratio" />
                   <span class="fw-text-weak">{{ r.used }}/{{ r.limitValue }}</span>
@@ -211,7 +221,7 @@ onMounted(async () => {
             <div>
               <h4 class="fw-saas-sub-title">最近生命周期变更</h4>
               <div v-if="saasOverview.recentTransitions.length" class="fw-saas-list">
-                <div v-for="(l, i) in saasOverview.recentTransitions.slice(0, 5)" :key="i" class="fw-saas-item" @click="router.push(`/saas/lifecycle?tenantId=${l.tenantId}`)">
+                <div v-for="(l, i) in saasOverview.recentTransitions.slice(0, 5)" :key="i" class="fw-saas-item" @click="goTenantPage('/saas/lifecycle', l.tenantId)">
                   <span class="fw-saas-item-main">{{ l.tenantId }}</span>
                   <el-tag size="small" :type="l.toStatus === 'active' ? 'success' : 'warning'">{{ l.fromStatus ?? '∅' }} → {{ l.toStatus }}</el-tag>
                 </div>

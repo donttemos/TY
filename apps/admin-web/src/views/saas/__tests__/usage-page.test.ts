@@ -2,13 +2,15 @@
  * @file 用量页看板化回归（M14/PRD-014 FR-14-13）
  * @description 钉住：① 首次加载配额后自动拉趋势与明细；② 趋势桶柱渲染（零桶填齐，柱高按最大值归一）；
  *   ③ 切换指标（switchMetric）一并刷新用量/趋势/明细；④ 明细分页切换请求参数；
- *   ⑤ hours 切换触发趋势+明细刷新。
+ *   ⑤ hours 切换触发趋势+明细刷新；⑥ 路由 `?tenantId=` 初始化自动取数、无参零请求、前进/后退跟随。
  * @author donttemo
  * @created 2026-10-20
+ * @modified 2026-10-20 M14 跨页闭环：mount 挂 memory router，补深链自动查询与前进/后退用例。
  * @module admin-web/views
  */
 import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
+import { createMemoryHistory, createRouter } from 'vue-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/api/saas', () => ({
@@ -31,6 +33,25 @@ import Usage from '@/views/saas/usage/index.vue';
 
 function setPermissions(codes: string[]): void {
   useUserStore().permissions = codes as MeResult['permissions'];
+}
+
+/** 页面依赖 useRoute（useTenantQuery）：挂 memory router，push 即模拟深链/前进后退 */
+function buildRouter() {
+  return createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/saas/usage', name: 'SaasUsage', component: { template: '<div />' } }],
+  });
+}
+
+/** 挂载页面；query 非空即模拟工作台「配额风险」直达链接 */
+async function mountPage(query: Record<string, string> = {}) {
+  setPermissions(['ops:saas:read']);
+  const router = buildRouter();
+  await router.push({ path: '/saas/usage', query });
+  await router.isReady();
+  const wrapper = mount(Usage, { global: { plugins: [ElementPlus, router], directives: { permission } } });
+  await flushPromises();
+  return { wrapper, router };
 }
 
 /** 选中租户 t1 并触发查询（TenantPicker v-model + 查询按钮） */
@@ -59,8 +80,7 @@ describe('用量页看板化（M14 B4）', () => {
   });
 
   it('首次加载：配额 + 窗口用量 + 趋势 + 明细四发齐发', async () => {
-    setPermissions(['ops:saas:read']);
-    const wrapper = mount(Usage, { global: { plugins: [ElementPlus], directives: { permission } } });
+    const { wrapper } = await mountPage();
     await selectTenantAndQuery(wrapper);
 
     expect(saasApi.fetchUsageTrend).toHaveBeenCalledWith('t1', 'api_calls', 168);
@@ -71,9 +91,53 @@ describe('用量页看板化（M14 B4）', () => {
     expect(wrapper.text()).toContain('事件明细');
   });
 
+  it('深链 ?tenantId=：首屏自动取数（无需再选租户/点查询）', async () => {
+    const { wrapper } = await mountPage({ tenantId: 't1' });
+
+    expect(saasApi.fetchTenantQuotas).toHaveBeenCalledWith('t1');
+    expect(saasApi.fetchTenantUsage).toHaveBeenCalledWith('t1', 'api_calls');
+    expect(wrapper.findComponent(TenantPicker).props('modelValue')).toBe('t1');
+  });
+
+  it('无 tenantId 参数：不发起任何租户级查询（不拼空租户请求）', async () => {
+    await mountPage();
+    expect(saasApi.fetchTenantQuotas).not.toHaveBeenCalled();
+    expect(saasApi.fetchTenantUsage).not.toHaveBeenCalled();
+    expect(saasApi.fetchUsageTrend).not.toHaveBeenCalled();
+    expect(saasApi.fetchUsageEventList).not.toHaveBeenCalled();
+  });
+
+  it('浏览器前进/后退改变 tenantId：同实例跟随重查，回退不残留上一租户', async () => {
+    const { wrapper, router } = await mountPage({ tenantId: 't1' });
+    expect(saasApi.fetchTenantQuotas).toHaveBeenCalledWith('t1');
+
+    await router.push({ path: '/saas/usage', query: { tenantId: 't2' } });
+    await flushPromises();
+    expect(saasApi.fetchTenantQuotas).toHaveBeenLastCalledWith('t2');
+
+    // 回退到无参地址：只复位、不发请求（参数缺失零查询）
+    const before = vi.mocked(saasApi.fetchTenantQuotas).mock.calls.length;
+    await router.push({ path: '/saas/usage' });
+    await flushPromises();
+    expect(vi.mocked(saasApi.fetchTenantQuotas).mock.calls.length).toBe(before);
+    expect(wrapper.text()).toContain('查询后展示');
+  });
+
+  it('清空已选租户：看板立即复位且不发请求（空租户不展示上一租户数据）', async () => {
+    const { wrapper } = await mountPage({ tenantId: 't1' });
+    expect(wrapper.findAll('.trend-bar-inner')).toHaveLength(2);
+
+    const before = vi.mocked(saasApi.fetchTenantQuotas).mock.calls.length;
+    wrapper.findComponent(TenantPicker).vm.$emit('update:modelValue', '');
+    await flushPromises();
+
+    expect(wrapper.findAll('.trend-bar-inner')).toHaveLength(0);
+    expect(wrapper.text()).toContain('查询后展示');
+    expect(vi.mocked(saasApi.fetchTenantQuotas).mock.calls.length).toBe(before);
+  });
+
   it('切换指标（看用量与趋势）：四请求以新指标刷新', async () => {
-    setPermissions(['ops:saas:read']);
-    const wrapper = mount(Usage, { global: { plugins: [ElementPlus], directives: { permission } } });
+    const { wrapper } = await mountPage();
     await selectTenantAndQuery(wrapper);
 
     vi.mocked(saasApi.fetchTenantQuotas).mockResolvedValue([

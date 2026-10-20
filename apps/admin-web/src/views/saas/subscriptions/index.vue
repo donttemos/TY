@@ -7,6 +7,8 @@
  * @created 2026-10-19
  * @modified 2026-10-20 M14 B3：从「单租户手输 ID 查询面板」升级为运营列表优先视图（U-14-5）；
  *   取消原因走 confirmWithReason 统一入口（U-14-1 收口）。
+ * @modified 2026-10-20 M14 跨页闭环：租户筛选取 useTenantQuery —— `/saas/subscriptions?tenantId=` 直达
+ *   即按该租户自动筛选（工作台「即将到期订阅」跳转不再要求二次选择），前进/后退同步跟随。
  * @module admin-web/views
 -->
 
@@ -17,13 +19,19 @@ import * as saasApi from '@/api/saas';
 import type { SubscriptionRow } from '@/api/saas';
 import TenantPicker from '@/components/TenantPicker/index.vue';
 import { confirmWithReason } from '@/components/ConfirmWithReason';
+import { useTenantQuery } from '@/composables/useTenantQuery';
 import { BizError, describeBizError } from '@/utils/biz-error';
 
 const STATUS_TAG: Record<string, 'success' | 'warning' | 'info' | 'danger'> = { active: 'success', expired: 'warning', cancelled: 'info' };
 
 // ---- 全局订阅列表 ----
 const loading = ref(false);
-const filters = reactive({ tenantId: '', planCode: '', status: '' });
+/** 租户筛选：由路由 `?tenantId=` 初始化；参数缺失 = 全局列表（不会拼出空租户查询） */
+const { tenantId } = useTenantQuery({
+  onTenant: () => loadList(true),
+  onEmpty: () => loadList(true),
+});
+const filters = reactive({ planCode: '', status: '' });
 const page = ref(1);
 const pageSize = ref(20);
 const total = ref(0);
@@ -36,7 +44,7 @@ async function loadList(resetPage = false): Promise<void> {
     const r = await saasApi.fetchSubscriptions({
       page: page.value,
       pageSize: pageSize.value,
-      tenantId: filters.tenantId || undefined,
+      tenantId: tenantId.value || undefined,
       planCode: filters.planCode || undefined,
       status: filters.status || undefined,
     });
@@ -50,7 +58,7 @@ async function loadList(resetPage = false): Promise<void> {
 }
 
 function resetFilters(): void {
-  filters.tenantId = '';
+  tenantId.value = '';
   filters.planCode = '';
   filters.status = '';
   void loadList(true);
@@ -136,7 +144,7 @@ async function loadPlans(): Promise<void> {
 }
 
 onMounted(() => {
-  void loadList();
+  // 列表首屏统一由 useTenantQuery 触发（带参按租户筛选、无参为全局列表），此处不再重复取数
   void loadPlans();
 });
 </script>
@@ -152,7 +160,7 @@ onMounted(() => {
       </template>
       <el-form inline @submit.prevent="loadList(true)">
         <el-form-item label="租户">
-          <TenantPicker v-model="filters.tenantId" @update:model-value="loadList(true)" />
+          <TenantPicker v-model="tenantId" @update:model-value="loadList(true)" />
         </el-form-item>
         <el-form-item label="套餐编码">
           <el-input v-model="filters.planCode" placeholder="如 default" clearable style="width: 160px" @keyup.enter="loadList(true)" />

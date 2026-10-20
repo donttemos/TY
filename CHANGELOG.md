@@ -18,6 +18,13 @@
 
 ## [Unreleased]
 
+### Fixed（P1：SaaS 运营页跨页租户上下文断链，2026-10-20）
+
+- **深链 `?tenantId=` 此前完全不被读取**：工作台「即将到期订阅 / 配额风险 / 最近生命周期变更」三处跳转（`/saas/subscriptions|usage|lifecycle?tenantId=…`）落到目标页后，订阅页按全局列表展示、用量与生命周期页保持空租户态，运营人员必须重新选择租户——M14 跨页运营闭环因此断开。**修复**：新增 `admin-web/src/composables/useTenantQuery.ts`，三页统一：① 首屏读 query 初始化 `TenantPicker` 并**自动取数**（用量页配额/用量/趋势/明细四发，生命周期页状态与迁移历史，订阅页列表按该租户筛选）；② 浏览器前进/后退（或外部跳转）改变 query 时同实例跟随，跨路由跳转与 keep-alive 停用实例不响应（防旧实例被新租户数据污染）；③ 参数缺失/非法（空串、纯空白、数组取首项、非字符串）一律视为「无租户」，**只复位不发请求**，杜绝 `/saas/tenants//quotas` 类必错调用。
+- 工作台三处跳转收敛为 `goTenantPage(path, tenantId)`（对象式 `router.push({ path, query })`，避免字符串拼接漏 encode），与目标页 query 契约同源。
+- **设计约束（已写入 PRD-014 §6.3 / OQ-14-4）**：URL 只作输入，页面内换租户**不回写** query —— `layout/AppMain.vue` 的 keep-alive 以 `route.fullPath` 为 key，回写会重建页面实例，导致在途实例与新实例各取一次数且旧实例缓存被新租户数据污染（违反 FR-14-04 数据隔离）。
+- **测试**：admin-web 216→232 例全绿（新增 16 例：composable 7 —— 归一化/首屏命中/无参零请求/前进后退/参数移除/跨路由不串租户/数组取首项；订阅页 2、用量页 3、生命周期页 3 —— 深链自动取数、前进后退跟随、无参零请求、清空选择即复位；工作台 1 —— 跳转必带 `?tenantId=`），`vue-tsc --noEmit` 零错。无后端改动、无新端点、无迁移。
+
 ### Fixed（P0：生命周期状态映射，2026-10-21）
 
 - **修正 `tenants.status` 五态 Int 映射非双射**（ADR-0029 §2.4）：旧实现「写 `pending=0` / 读 `0=frozen`」，而 0 自 M8 起即「存量停用」（`@fw/tenant` 4001 判定、租户管理端 `disableTenant`、回填脚本均依赖该语义）。**已可达**后果：① 存量停用租户 `resume`/`terminate` 的条件更新按 `status=3` 匹配不到存量 0 → 恒 4030 死锁，且错误码把排障引向迁移表；② `countTenantsByStatus('pending')` 把存量停用计为待开通、`'frozen'` 反而漏计，运营总览 `tenantCounts` 双口径失真。**定案**：0 为只读兼容码（读作 frozen，写路径永不产生），`pending` 独占编码 **5**——读写双射且**零迁移**（Int 列空闲值，存量语义不变、可回滚）。
