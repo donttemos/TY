@@ -20,6 +20,8 @@
  *   400/1001）与 GET /dict/audit_module 四项断言（M9 起为六项：seed 补 queue/config 两模块）
  * @modified 2026-10-15 donttemo M10/E-17：新增前端错误遥测段——POST /telemetry/client-errors
  *   公开摄取（合法上报 received/total、超单批上限 400/1001、非法字段 details 一次回齐）
+ * @modified 2026-10-20 donttemo 租户停用契约对齐全 ADR-0031 §2.3：DELETE /tenants/:id 由直写 status=0
+ *   改为经生命周期服务 freeze（落规范码 3），断言同步为 status=3 并补「重复停用幂等 → 200 + 3」
  * @module example-api
  */
 
@@ -588,9 +590,15 @@ async function main() {
     `http=${legacyDisable.status} code=${legacyDisable.body.code}`);
 
   const disabledTenant = await call(`/api/v1/tenants/${tenantId}`, { method: 'DELETE', token });
-  check('DELETE /tenants/:id 停用（status=0，行保留供解析给 4001）',
-    isOk(disabledTenant.status) && disabledTenant.body.data?.status === 0,
-    `http=${disabledTenant.status}`);
+  check('DELETE /tenants/:id 停用 = freeze（落规范码 3，行保留供解析给 4001）',
+    isOk(disabledTenant.status) && disabledTenant.body.data?.status === 3,
+    `http=${disabledTenant.status} status=${disabledTenant.body.data?.status}`);
+
+  // 重复停用幂等：已是冻结再停用仍 200 且保持 3（生命周期服务 alreadyApplied，不报 4030）
+  const disableAgain = await call(`/api/v1/tenants/${tenantId}`, { method: 'DELETE', token });
+  check('DELETE /tenants/:id 重复停用幂等（已是冻结 → 200 + status=3）',
+    isOk(disableAgain.status) && disableAgain.body.data?.status === 3,
+    `http=${disableAgain.status} status=${disableAgain.body.data?.status}`);
 
   // --- 迁移：长任务派发 → 任务面轮询 → 控制面切换生效 ---
   const migrate = await call(`/api/v1/tenants/${tenantId}/migrate`, {
