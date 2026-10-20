@@ -47,11 +47,12 @@
 | smoke-saas-ops（端到端，dist 实测） | 29/29 ✓（S14 七项：创建/重复 1003/字典 1002/发布/列表/历史/状态端点） |
 | smoke-mock（全链路 + bundle 门禁） | 140/140 ✓ |
 | 门禁 | headers 673 文件 / api-parity / triway 七轴 / no-raw-throw 全绿 ✓ |
-| CI 三库矩阵 | 待推送后确认（pg/mysql/sqlite 集成含新增列表用例） |
+| CI 三库矩阵 | 025df3f 与 15fb621 两个提交四腿全 success（base + pg/mysql/sqlite）✓ |
+| **真机部署 + E2E（2026-10-20，release 20261020122812）** | 零迁移纯代码更新（拉包 → install → prisma generate → 双端 build → systemd 重启 → 1Panel 站点同步）；**AC-14 E2E 24/24 通过**：AC-14-01 原因端到端（API + PG DB 双层断言 `tenant_subscriptions.reason` / `tenant_lifecycle_logs.reason`）、AC-14-05 菜单/路由/越权（permissions 2/2、menus 4 条、alice 403/3002 跨租户维护守卫拦截）、AC-14-11 核心旅程（创建含重复 1003 → 发布 v1 → 订阅绑定 → 用量上报 → 趋势 25 桶 → 明细 → 总览 → 状态端点）；错误通道修正实测 400/1001。注意：真机 `quota_definitions` 为空表（v0.7.0 backfill 未含字典），E2E 以幂等 INSERT 前置，且「字典未登记 → 1002」校验恰好被首轮实测证效 |
 
 ## 4. 遗留与后续
 
-- **B4（P2，待评审）**：用量趋势/事件明细/跨租户风险聚合端点 + 用量页看板化 + 工作台运营首页；依赖 OQ-14-3（聚合存储方案，可能立 ADR-0032）。
-- **OQ-14-1~5 待评审**：发布差异预览前后端分工（当前前端 diff）、订阅升级/降级/续期（默认不进 M14，需订阅状态机扩展 ADR）、租户上下文载体（当前路由 query 语义未固化）、原因必填策略（当前 freeze/terminate/dispose 必填）。
-- **真机窗口验收项**（沿 v0.7.0 §4 范式）：生命周期/取消订阅原因落库 DB 断言；只读角色四页无写按钮；切换租户不残留；套餐创建→发布→订阅绑定新版本全流程；菜单路由浏览器回归（v0.7.0 404 教训）；暗色主题与响应式。
-- CHANGELOG 顶部状态行随本版更新（v0.7.0 状态行此前滞留 v0.6.0 的问题一并根治）。
+- **B4（P2，待评审）**：已交付（2026-10-20，commit 025df3f，未含本版版本号，CHANGELOG 归 [Unreleased]）——用量趋势/明细/overview 三端点 + 用量页看板化 + 工作台运营首页；OQ-14-3 定案查询时聚合零迁移；**错误通道修正（15fb621）补齐 M13 遗留三处信封直返**，SaaS 运营端点 15 处入参校验全部走异常过滤器。
+- **OQ-14-1~5 待评审**：发布差异预览前后端分工（当前前端 diff）、订阅升级/降级/续期（默认不进 M14）、租户上下文载体（路由 query 语义未固化）、原因必填策略（当前 freeze/terminate/dispose 必填）。
+- **真机窗口验收项**：AC-14-02/03/04/06/07/12 的浏览器级回归（按钮渲染层已由 admin-web 212 单测覆盖，浏览器抽查留人工）；AC-14-11 的浏览器菜单点击回归（API 层已过）。
+- **数据缺口（本次 E2E 发现）**：`quota_definitions` 无运营面 CRUD 端点——新指标只能经 `publishVersion` 的 `definitions` 入参补登记或 DBA 直写；真机空表现已由 E2E 幂等 INSERT 补 `api_calls(day/hard)`。建议后续批次补配额字典运营端点（小 FR）。
