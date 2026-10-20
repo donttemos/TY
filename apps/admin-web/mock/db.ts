@@ -103,7 +103,7 @@ export interface MockAuditLog {
   /** PRD-012 OBS-06：统一审计事件契约（后端信封已全量返回；即时构造行可缺省） */
   category?: 'auth' | 'security' | 'admin' | 'data' | 'config' | 'tenant' | 'system' | null;
   event?: string | null;
-  result?: 'success' | 'denied' | 'failed' | null;
+  result?: 'success' | 'denied' | 'failed' | 'unknown' | null;
   familyId?: string | null;
   jti?: string | null;
   requestId?: string | null;
@@ -115,6 +115,13 @@ export interface MockAuditLog {
   userAgent: string | null;
   traceId: string;
   createdAt: string;
+  /** PRD-015 业务快照（后端列可空；mock 旧行留空以演示「历史记录」降级路径） */
+  tenantId?: string;
+  summary?: string | null;
+  targetLabel?: string | null;
+  actorLabel?: string | null;
+  reason?: string | null;
+  auditSource?: 'domain' | 'interceptor' | null;
 }
 
 /** 演示订单（生成器产出页面的 mock 数据源，验证「新列表页 ≤ 80 行」） */
@@ -446,12 +453,14 @@ const DICT_ITEMS: MockDictItem[] = [
   { id: 'di-aa-logout', categoryId: 'dc-audit-action', label: '登出', value: 'logout', color: 'info', sort: 5 },
   { id: 'di-aa-export', categoryId: 'dc-audit-action', label: '导出', value: 'export', color: 'info', sort: 6 },
   { id: 'di-aa-grant', categoryId: 'dc-audit-action', label: '授权', value: 'grant', color: 'warning', sort: 7 },
+  { id: 'di-aa-security', categoryId: 'dc-audit-action', label: '安全事件', value: 'security', color: 'danger', sort: 8 },
   { id: 'di-am-auth', categoryId: 'dc-audit-module', label: '认证', value: 'auth', color: 'primary', sort: 1 },
   { id: 'di-am-user', categoryId: 'dc-audit-module', label: '用户', value: 'user', color: 'success', sort: 2 },
   { id: 'di-am-role', categoryId: 'dc-audit-module', label: '角色', value: 'role', color: 'warning', sort: 3 },
   { id: 'di-am-tenant', categoryId: 'dc-audit-module', label: '租户', value: 'tenant', color: 'info', sort: 4 },
   { id: 'di-am-queue', categoryId: 'dc-audit-module', label: '队列', value: 'queue', color: 'info', sort: 5 },
   { id: 'di-am-config', categoryId: 'dc-audit-module', label: '配置', value: 'config', color: 'danger', sort: 6 },
+  { id: 'di-am-saas', categoryId: 'dc-audit-module', label: 'SaaS 运营', value: 'saas', color: 'success', sort: 7 },
   { id: 'di-ds-all', categoryId: 'dc-data-scope', label: '全部数据', value: 'all', color: 'primary', sort: 1 },
   { id: 'di-ds-org-below', categoryId: 'dc-data-scope', label: '本组织及下级', value: 'org_below', color: 'success', sort: 2 },
   { id: 'di-ds-org', categoryId: 'dc-data-scope', label: '本组织', value: 'org', color: 'warning', sort: 3 },
@@ -489,6 +498,23 @@ function seedOrders(): MockOrder[] {
 }
 
 /** 审计日志（含一条用户状态变更的前后值，验证 TC-WEB-004 字段级 diff） */
+/**
+ * 演示行的「动作 → 已登记事件码」映射
+ *
+ * mock 早期用 `${module}.${action}` 拼事件码，导致页面上大半是「未登记事件」——
+ * 演示数据必须与注册表同源，否则运营视图看起来像坏了（真机后端只写注册码）。
+ * 仍保留两类故意不登记的行：旧行（无事件码）与未登记码各一份，用于验证降级链。
+ */
+function mockEventCode(moduleName: string, action: MockAuditLog['action']): string {
+  if (action === 'login') return 'auth.login';
+  if (action === 'logout') return 'auth.logout';
+  if (action === 'export') return 'audit.export';
+  if (action === 'grant') return moduleName === 'role' ? 'auth.permission_grant' : 'auth.role_assign';
+  if (action === 'create') return moduleName === 'role' ? 'role.create' : 'user.create';
+  if (action === 'update') return moduleName === 'role' ? 'role.update' : 'user.update';
+  return moduleName === 'role' ? 'role.delete' : 'user.delete';
+}
+
 function seedAuditLogs(): MockAuditLog[] {
   const logs: MockAuditLog[] = [];
   const actions: MockAuditLog['action'][] = ['login', 'create', 'update', 'delete', 'grant', 'logout', 'export'];
@@ -506,8 +532,10 @@ function seedAuditLogs(): MockAuditLog[] {
       beforeValue: action === 'update' ? { status: 1, nickname: '旧昵称' } : action === 'delete' ? { username: 'temp' } : null,
       afterValue: action === 'update' ? { status: 0, nickname: '新昵称' } : action === 'grant' ? { permissionIds: ['p-user-read', 'p-auth-me'] } : null,
       category: 'admin',
-      event: `${moduleName}.${action}`,
-      result: 'success',
+      // 每 5 条一条「业务摘要上线前」的旧行（无事件码）；每 6 条一条未登记码——两类降级各留样本
+      event: i % 5 === 0 ? null : i % 6 === 0 ? 'legacy.custom.event' : mockEventCode(moduleName, action),
+      // 每 7 条一条「已拒绝」，用于验证结果四态的展示与筛选
+      result: i % 7 === 0 ? 'denied' : 'success',
       familyId: null,
       jti: null,
       requestId: null,
@@ -515,6 +543,40 @@ function seedAuditLogs(): MockAuditLog[] {
       userAgent: 'Mozilla/5.0 (mock)',
       traceId: `trace-${String(i).padStart(6, '0')}`,
       createdAt: new Date(Date.UTC(2026, 9, 13, 1, i)).toISOString(),
+      // 每 7 条一条「拒绝态」，且换成语义匹配的事件（login_failed）——
+      // 否则会出现「登录成功 + 已拒绝」这种自相矛盾的演示行
+      ...(i % 7 === 0
+        ? {
+            module: 'auth',
+            action: 'login' as const,
+            event: 'auth.login_failed',
+            targetType: 'user',
+            targetId: userId,
+            result: 'denied' as const,
+            afterValue: { reason: 'bad_credentials', code: 3001 },
+          }
+        : {}),
+      // PRD-015：每 4 条一条「已登记事件 + 业务快照」（domain 来源），其余留空演示旧数据降级路径。
+      // 事件码用注册表真实码（user.status_change / saas.lifecycle.freeze），保证「按风险筛选」在 mock 下可验证
+      ...(i % 4 === 0
+        ? {
+            tenantId: '1',
+            module: i % 8 === 0 ? 'saas' : 'user',
+            action: 'update',
+            event: i % 8 === 0 ? 'saas.lifecycle.freeze' : 'user.status_change',
+            targetType: i % 8 === 0 ? 'tenant' : 'user',
+            targetId: i % 8 === 0 ? '1' : 'u-bob',
+            summary: i % 8 === 0
+              ? '将租户「示例企业」由正常变更为冻结（原因：欠费 30 天）'
+              : '将用户「bob」状态改为禁用',
+            targetLabel: i % 8 === 0 ? '示例企业' : 'bob',
+            actorLabel: '平台管理员',
+            reason: i % 8 === 0 ? '欠费 30 天' : '离职交接',
+            auditSource: 'domain' as const,
+            beforeValue: i % 8 === 0 ? { from: 'active', to: 'frozen' } : { status: 1 },
+            afterValue: i % 8 === 0 ? { from: 'active', to: 'frozen' } : { status: 0, forcedLogout: true },
+          }
+        : {}),
     });
   }
   return logs;

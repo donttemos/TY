@@ -67,6 +67,9 @@ export class AuditInterceptor implements NestInterceptor {
           ip: request.ip ?? null,
           userAgent:
             typeof request.headers?.['user-agent'] === 'string' ? (request.headers['user-agent'] as string) : null,
+          // PRD-015 FR-15-13 / ADR-0032 R5：拦截器只能证明「HTTP 成功返回」，
+          // 不代表业务已完成——来源标记让运营与取证能区分兜底行与领域行
+          auditSource: 'interceptor',
         });
       }),
     );

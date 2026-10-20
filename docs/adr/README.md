@@ -40,6 +40,7 @@
 | [0029](./0029-plan-subscription-quota-model.md) | M13 套餐/订阅/生效配额三层模型：plans→plan_versions 版本化发布、订阅绑定版本 + 一租户一生效订阅、生效值 = 租户覆盖 ?? 套餐默认；tenants.plan/status/expireAt 转派生只读列（写权收口领域服务）+ 幂等回填 + M14 退役里程碑 | 已采纳（2026-10-19） | 后端 / 数据 |
 | [0030](./0030-hard-quota-concurrency.md) | M13 硬限额并发扣减：DB 事务 + 条件 UPDATE 为唯一事实源（扣减与 usage_events 留痕同事务），Redis 余量仅预检加速（漏判 DB 兜底不超发）；软限额同窗幂等告警；窗口翻转按 window_start 切片；Cluster 边界按 ADR-0028 声明 | 已采纳（2026-10-19） | 后端 / 数据 / 缓存 |
 | [0031](./0031-tenant-lifecycle-state-machine.md) | M13 租户五态生命周期：pending/active/grace/frozen/terminated 合法迁移表唯一权威 + 迁移写权唯一归属 TenantLifecycleService + 条件更新幂等（正确性不依赖分布式锁）+ 冻结 4031 作用于业务入口（白名单走 @LifecycleExempt 元数据）+ terminated 数据保留策略（审计永不删除） | 已采纳（2026-10-19） | 后端 / 数据 |
+| [0032](./0032-business-readable-audit-model.md) | M15 业务可读审计事件模型：事件注册表代码内单源（只读端点下发）+ 事实快照与解释元数据分层（摘要/对象名/操作人/原因落库冻结，展示字典不进库）+ 结果四态与 audit_source（HTTP 成功≠业务成功）+ 拒绝/失败采集边界 + tenant_id 写入与 dataScope 交集 + 软增列两表同构三库 + 导出追加式 | 提案（2026-10-20，随 PRD-015 评审） | 后端 / 前端契约 |
 
 ## 模板
 

@@ -158,6 +158,7 @@ apps/<app>/modules/<业务模块>/
 | 门禁 | 命令 | 对撞内容 |
 |---|---|---|
 | 前后端接口对撞（C-06） | `pnpm run check:api-parity` | `apps/admin-web` 前端调用面 ↔ 全仓 `*.controller.ts` 后端路由面；前端调了后端没有即失败，反方向仅提示 |
+| 审计事件 | `pnpm run check:audit-events` | 事件注册表（`@fw/auth` 源码直读，不生成第二份码表）↔ 生产代码：`event:` 与 `recordEvent('…')` 出现未登记码即失败；注册表每个未废弃条目必须在代码中有写入点；`docs/45` §7 覆盖矩阵必须逐条列出；mock 侧注册表为生成物，与后端逐字节不一致即失败（PRD-015 FR-15-21） |
 | 三方一致性 | `pnpm run check:triway-consistency` | 框架包 ↔ example-api ↔ admin 模板六轴：① 模板前端调用面 ⊆ 模板路由面（含按装配判定的框架包控制器）；② 模板路由面 ⊆ example-api 路由面（模板是参考实现的裁剪子集）；③ 权限码以框架 `PERM`/`QUEUE_PERM_*` 为权威，两侧种子声明与控制器守卫、模板前端使用逐一闭环；④ 两 Prisma schema 共有模型字段一致（`@fw/auth` Store 契约）；⑤ 模板 `@fw/*` 依赖存在且 `workspace:*`、import 必已声明；⑥ 模板 `.env.example` 配置键 ⊆ `ENV_KEY_PATHS` ∩ example-api `.env.example` |
 
 - 两个对撞门禁共用 `scripts/lib/api-parity-core.mjs`（路径归一化 / 调用面 / 路由面提取）——同一条路径必须在两个门禁里算出同一个键；

@@ -23,6 +23,7 @@ import { META_IGNORE_TENANT, META_PERMISSIONS, META_PUBLIC, META_STRATEGY, PERM 
 // Function / Object，Nest 无法解析构造函数依赖（启动期直接 DI 失败）。
 import { PermissionService } from './permission.service.js';
 import { AuditService } from './audit.service.js';
+import { AuditEventThrottle } from './audit-throttle.js';
 import { StrategyRegistry, type AuthRequest, type AuthStrategy, type StrategyIdentity } from './strategies.js';
 import { AUTH_OPTIONS, AUTH_STORE, AUTH_STRATEGY_REGISTRY } from './tokens.js';
 import type { AuthOptions, AuthStrategyName, RequestUser } from './types.js';
@@ -57,6 +58,12 @@ export class RbacGuard implements CanActivate {
     @Inject(AUTH_OPTIONS) private readonly options: AuthOptions,
     private readonly audit: AuditService,
   ) {}
+
+  /**
+   * 越权尝试的审计限流（ADR-0032 R6）：扫描器会在短时间内打满同一权限码，
+   * 每（用户 + 所需权限码）每分钟只留 3 条样本，避免审计表被攻击流量刷爆。
+   */
+  private readonly deniedThrottle = new AuditEventThrottle();
 
   /**
    * 守卫主流程
@@ -117,6 +124,20 @@ export class RbacGuard implements CanActivate {
         required,
         owned: user.permissions.length,
       });
+      // PRD-015 FR-15-12：拒绝也要留痕（此前只有 warn 日志）——「有人尝试改但被拒」
+      // 与「有人改成功」必须能区分；限流只影响落审计条数，不影响拒绝本身
+      if (this.deniedThrottle.allow(`authz:${user.id}:${required.join(',')}`)) {
+        this.audit.recordEvent('authz.denied', {
+          userId: user.id,
+          targetType: 'endpoint',
+          targetLabel: request.url ?? request.method ?? 'unknown',
+          reason: required.join(','),
+          result: 'denied',
+          ip: request.ip ?? null,
+          userAgent: typeof request.headers?.['user-agent'] === 'string' ? (request.headers['user-agent'] as string) : null,
+          after: { url: request.url ?? null, method: request.method ?? null, required },
+        });
+      }
       throw new BizError(ErrorCode.FORBIDDEN, '无操作权限');
     }
 

@@ -1,0 +1,81 @@
+{
+  "base": "http://127.0.0.1:5188",
+  "at": "2026-10-20T15:05:48.653Z",
+  "results": [
+    {
+      "id": "登录（UI 表单）",
+      "status": "pass",
+      "detail": "跳到 /dashboard"
+    },
+    {
+      "id": "列表主列为业务字段（事件/结果/风险/对象/操作人/时间）",
+      "status": "pass",
+      "detail": "表头=[\"事件\",\"结果\",\"风险\",\"对象\",\"操作人\",\"时间\",\"操作\"]"
+    },
+    {
+      "id": "摘要为可读中文（不展开 JSON 即可理解）",
+      "status": "pass",
+      "detail": "退出登录 成功 一般 — admin（管理员） 2026/10/13 09:26:00 详情"
+    },
+    {
+      "id": "结果/风险标签可见",
+      "status": "pass",
+      "detail": "结果=true 风险=true"
+    },
+    {
+      "id": "技术列默认收起（traceId 不在表头）",
+      "status": "pass",
+      "detail": "表头含 traceId=false"
+    },
+    {
+      "id": "旧数据标注「历史记录」（不编造摘要）",
+      "status": "pass",
+      "detail": "mock seed 含无事件码的旧行"
+    },
+    {
+      "id": "筛选「结果=已拒绝」后行内容一致",
+      "status": "pass",
+      "detail": "pick=picked 行数=3 首行=登录失败 · u-admin 已拒绝 注意 user:u-admin admin（管理员） 2026/10/13 09:21:00 详情"
+    },
+    {
+      "id": "筛选「风险=高风险」按事件集合展开且结果一致",
+      "status": "pass",
+      "detail": "pick=picked 行数=9 首行=将租户「示例企业」由正常变更为冻结（原因：欠费 30 天） 成功 高风险 示例企业 平台管理员 2026/10/13 09:24:00 详情"
+    },
+    {
+      "id": "详情业务区优先（摘要/原因/变更对照）",
+      "status": "pass",
+      "detail": "打开=true 摘要=true 原因=true 变更=true"
+    },
+    {
+      "id": "技术详情默认折叠（内容区高度≈0）",
+      "status": "pass",
+      "detail": "折叠标题=true 内容区高度=0px"
+    },
+    {
+      "id": "展开技术详情可见事件码/请求 ID/原始快照",
+      "status": "pass",
+      "detail": "事件码=true 请求ID=true 原始=true 高度=537px"
+    },
+    {
+      "id": "点击导出派发异步任务（提示或任务条可见）",
+      "status": "pass",
+      "detail": "提示=导出任务已派发，可在底部任务条查看进度 任务条=false"
+    },
+    {
+      "id": "暗色主题下审计页可读",
+      "status": "pass",
+      "detail": "切换=true html.dark=true"
+    },
+    {
+      "id": "1280x720 审计页无横向溢出",
+      "status": "pass",
+      "detail": "scrollWidth=1280 innerWidth=1280"
+    },
+    {
+      "id": "1920x1080 审计页无横向溢出",
+      "status": "pass",
+      "detail": "scrollWidth=1920 innerWidth=1920"
+    }
+  ]
+}

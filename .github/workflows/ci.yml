@@ -272,6 +272,11 @@ jobs:
       - name: 三方一致性门禁（框架包 / example-api / admin 模板）
         run: node scripts/check-triway-consistency.mjs
 
+      # PRD-015 FR-15-21：审计事件门禁——注册表自检 + 未登记码 + 条目必须有写入点 + 覆盖矩阵一致。
+      # 直接 import TypeScript 注册表（不生成第二份码表），故需 --experimental-strip-types
+      - name: 审计事件门禁（PRD-015 FR-15-21）
+        run: pnpm run check:audit-events
+
   # ---------- 三库集成矩阵（TC-ORM-001：同一套用例三库各跑一遍） ----------
   integration:
     name: 集成测试 / ${{ matrix.db }}

@@ -58,7 +58,25 @@ export type { DataScopeFilter, DataScopeOrgPort } from './data-scope.js';
 export { collectDescendantIds } from './org-tree.js';
 export type { OrgTreeNode } from './org-tree.js';
 export { AuditService, sanitizeForAudit } from './audit.service.js';
-export type { AuditEntry } from './audit.service.js';
+export type { AuditEntry, AuditEventPayload } from './audit.service.js';
+export {
+  AUDIT_EVENTS,
+  AUDIT_EVENT_CODE_PATTERN,
+  auditEventCodesByRisk,
+  auditEventDomain,
+  auditRegistryVersion,
+  findAuditEvent,
+  listAuditEvents,
+  renderAuditSummary,
+  verifyAuditRegistry,
+} from './audit-events.js';
+export type {
+  AuditEventChangeField,
+  AuditEventDefinition,
+  AuditEventDomain,
+  AuditEventRisk,
+} from './audit-events.js';
+export { AuditEventThrottle } from './audit-throttle.js';
 export { AuditArchiveService } from './audit-archive.js';
 export type { AuditArchivePort, AuditArchiveRunOptions, AuditArchiveRunResult } from './audit-archive.js';
 export { AuditInterceptor } from './audit.interceptor.js';
@@ -110,9 +128,13 @@ export { PERM, ROLE, MASKED, SENSITIVE_FIELDS, META_AUDIT, META_IGNORE_TENANT, M
 export type { PermissionCode } from './constants.js';
 export type {
   AuditAction,
+  AuditCategory,
+  AuditEventResult,
   AuditLogRecord,
   AuditPage,
   AuditQuery,
+  AuditSnapshotFields,
+  AuditSource,
   AuthMenu,
   AuthOptions,
   AuthPermission,

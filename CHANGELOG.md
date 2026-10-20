@@ -18,6 +18,66 @@
 
 ## [Unreleased]
 
+### Added（M15：审计页浏览器验收 + mock 注册表生成，2026-10-20）
+
+- **浏览器 E2E**：新增 `apps/admin-web/scripts/e2e-m15-audit-view.mjs`（复用 M14 的 CDP 骨架，零新依赖），覆盖列表运营视图、结果/风险筛选、详情业务区与技术折叠、导出派发、暗色与 1280×720 / 1920×1080 无横向溢出，**15/15 通过**，产出 9 张截图与 `report-m15.json`（AC-15-01 关闭）。
+- **mock 注册表改为生成物**：新增 `gen:audit-events-mock`，从 `@fw/auth` 注册表生成 `apps/admin-web/mock/audit-events.ts`；`check:audit-events` 新增第 ⑤ 项校验「生成物是否最新」。起因：B3 首版手抄 12 条，页面上大半事件显示「未登记」——手抄必然漂移。
+- **演示数据修正**：mock 拒绝行改用语义匹配的 `auth.login_failed`（原为「登录成功 + 已拒绝」自相矛盾）；旧行（无事件码）与未登记码各保留样本，用于验证降级链。
+- **测试**：admin-web 257 / smoke-mock 143 复跑全绿；六道门禁绿。
+
+### Changed（M15 收口：admin 模板同步审计改造，2026-10-20）
+
+- **模板服务端**：`templates/admin/server` 的 12 处 `@Audit` 全部改为领域 `recordEvent`（用户增改删/启停、角色增改删/复制、本人资料、单设备下线），消除与 `@fw/auth` 服务层事件的重复落库；审计端点补 `GET /audit-logs/events` 与 `result` / `tenant_id` / `event` 多值过滤；Prisma 存储层补 `tenantId` 写入、五个业务快照列读写与 `result`/`tenant_id` 过滤；种子补 `security` 动作（模板无 SaaS 模块，故不加 `saas`）。
+- **模板前端**：同步 `AuditLogRecord` 的 `tenantId/summary/targetLabel/actorLabel/reason/auditSource`、`result` 四态、`AuditQuery` 新过滤与 `fetchAuditEvents`。模板裁剪范围内本就**没有审计页与菜单**，故不产生死入口；页面可按 example-api 为范式补齐。
+- **验证**：模板无独立 `node_modules`，用 `tsc.transpileModule` 做语法校验（8 个改动文件全过）+ triway 七轴对撞（路由/权限码/模型/依赖/配置键/错误码）绿；审计事件门禁不扫模板（模板不复用框架注册表）。
+
+### Added（M15 B5：审计事件门禁，2026-10-20）
+
+- **新增 `check:audit-events` 门禁**（`scripts/check-audit-events.mjs`）：直接以 `--experimental-strip-types` 导入 TypeScript 注册表（**不生成第二份码表副本**），做四方对撞——① `verifyAuditRegistry()` 自检；② 生产代码里 `event:` 与 `recordEvent('…')` 两处语义位置出现未登记码即失败；③ 注册表每个未废弃条目必须在代码中有写入点（按字面量判定，兼容 `LIFECYCLE_EVENTS[action]` 这类映射表）；④ `docs/45` §7 覆盖矩阵必须逐条列出。
+- **接入 CI 与规范**：CI base 作业新增阻断步骤，`docs/70` §1.6.8 对撞门禁表登记；覆盖矩阵的生命周期行由 `.freeze` 简写展开为六个完整事件码（简写无法被机器校验）。
+- **反向验证**：注入 `event: 'saas.plan.publsh'` 探针后门禁 `RC=1` 并精确定位到 `文件:行号`，删除探针后恢复 `OK`——护栏本身可被证伪，不是「永远绿」的摆设。
+- 运行：`pnpm run check:audit-events`（32 条事件 / 387 个生产文件 / 30 处显式声明点；1 处动态调用仅提示）。
+
+### Added（M15 B4：导出与归档同口径，2026-10-20）
+
+- **CSV 追加业务列**：`buildAuditCsv` 在 M12 十五列后**追加**八个业务列 `eventName / summary / targetLabel / actorLabel / reason / result / auditSource / risk`，既有列序与位置不变（纯追加，下游脚本零影响）；`eventName` 与 `risk` 由事件注册表现算，未登记事件留空而不是猜测。
+- **在线与归档同源**：两个导出端点复用同一 `buildAuditCsv`，归档导出在任务中心产物上形态一致；mock 产物同表头同语义，`smoke-mock` 与 `smoke-admin` 两处表头断言同批更新（23 列）。
+- **测试**：example-api 182→187（+5：表头 23 列且前 15 列不变、BOM/CRLF、已登记事件补事件名与风险、未登记留空、引号与换行转义）；`smoke-mock` 143/143（CSV `header=true`）。
+
+### Added（M15 B3：审计运营视图与筛选扩展，2026-10-20）
+
+- **列表改运营视角**：主列为「事件摘要 + 结果 + 风险 + 对象名称 + 操作人 + 时间」，模块/动作/IP/traceId 默认收起（列设置可开）；旧行（无摘要/无事件码）标注「历史记录」、未登记事件标注「未登记事件」，均不编造业务含义。
+- **详情分层**：第一屏业务区（摘要、事件名称与说明、操作人、对象、原因、记录来源、处理指引、需复核），技术详情折叠在末尾（事件码/category/requestId/traceId/familyId/jti/IP/UA/原始 before-after）；`DiffViewer` 支持注册表提供的字段中文名与枚举翻译（如 `3` → 冻结），敏感字段仍打码。
+- **筛选扩展**：新增租户、分类、结果、风险、事件五项；风险等级不落库，由前端按注册表展开成 `event=a,b,c`（后端新增多值过滤，≤20，交集为空返回空结果而非全量）。`CrudTable` 新增 `transformSearch` 钩子，列表与导出共用同一份变换（避免「看到 20 条、导出 2000 条」）。
+- **注册表消费**：新增 `composables/useAuditEvents`（模块级缓存 + inflight 合并 + `version` 指纹 + 失败降级），前端不维护第二份事件翻译表。
+- **字典修正**：`audit_action` 补 `security`、`audit_module` 补 `saas`（seed + mock + smoke 的「七项」定数断言三处同改）；存量环境需 reseed 才能看到新选项。
+- **测试**：admin-web 243→257（+14：展示降级链 11、注册表缓存 3）、`vue-tsc` 零错；example-api 181→182（事件多值解析）。
+
+### Added（M15 B2：事件覆盖与写入点治理，2026-10-20）
+
+- **注册表扩至 31 条事件**：认证（登录成功/失败/登出/改密/强制下线/注册/角色分配/权限授予/本人资料）、权限拒绝（`authz.denied`）、账号与角色管理（user/role 增删改 + 账号启停）、配置变更、审计导出、非法生命周期迁移（`saas.lifecycle.invalid`）。
+- **认证服务 8 个写入点改用 `recordEvent`**：`login`（口令/OAuth2）/`logout`/`changePassword`/`revokeUserSessions`/`register`/`assignUserRoles`/`grantRolePermissions`；登录失败首次落审计（`result=denied`，原因映射 `bad_credentials|account_locked|rate_limited`，不记口令）。
+- **拒绝留痕与防洪**：`RbacGuard` 权限拒绝落 `authz.denied`（含所需权限码、url、method）；新增 `AuditEventThrottle`（进程内固定窗口），登录失败按（IP+账号）、越权按（用户+权限码）各 3 条/分钟，超出只丢审计不丢业务拒绝。
+- **生命周期事件可枚举**：动作→事件码改显式映射（`saas.lifecycle.*` 六条），4030 非法迁移在抛出前记 `saas.lifecycle.invalid`（不改写错误语义）。
+- **双写收口**：`users`/`rbac`/`auth` 三个控制器共 12 处 `@Audit` 全部移除，改为领域事件——此前 users 控制器「装饰器 + 手写 record」会对同一操作落两行。example-api 现已无 `@Audit` 使用点（框架保留给生成项目，行语义仅「HTTP 成功返回」）。
+- **其余接入**：配置变更走 `config.change`（`recordEventSync`，先审计后生效）、审计导出（在线 + 归档）派发成功即落 `audit.export`，摘要描述筛选条件（「全部记录」本身即高风险事实）。
+- **覆盖矩阵**：`docs/45` §7 记录每条事件的写入点、结果语义、目标对象、原因来源与限流策略；明确 400/404/429 不采集的理由。
+- **测试**：auth 243→248（守卫拒绝+限流、登录失败枚举、限流器窗口）、example-api 179→181（生命周期成功码 + 4030 denial），全绿。**模板 `templates/admin/server` 未同步**（仍 12 处 `@Audit` + 无事件写入），登记为后续批次。
+
+### Added（M15 B1：审计事件注册表与业务快照，2026-10-20）
+
+- **事件注册表（唯一语义权威）**：`@fw/auth` 新增 `AUDIT_EVENTS`（12 条现有事件：replay 安全事件、套餐创建/发布、订阅开通/取消、配额超限、生命周期六动作），每条含名称/说明/分类/风险/复核标记/处理指引/摘要模板/字段中文名；`verifyAuditRegistry()` 自检（码唯一、命名、模板变量）+ `auditRegistryVersion()` 指纹。
+- **写入收口 `AuditService.recordEvent`**：调用方只传业务事实，`module/action/category/targetType` 由注册表补全；摘要三级生成链（显式 → 模板渲染 → 事件名+对象），枚举值按注册表 `valueLabels` 翻译；未知事件码在测试/开发 fail-fast（400），生产原样落库 + error 日志（审计不阻塞业务）。
+- **业务快照列**：`audit_logs` / `audit_log_archives` 同批软增列 `summary` / `target_label` / `actor_label` / `reason` / `audit_source`（migration `20261020120000`，SQLite/PG/MySQL 三方言同构，全列可空、旧数据零回归）；`result` 扩第四态 `unknown`；`tenant_id` 起由请求上下文写入（此前恒 0），并新增 `(result, created_at)` 组合索引。
+- **端点与过滤**：新增 `GET /api/v1/audit-logs/events`（`audit:read`，返回 `{ version, items }`，路由声明在 `:id` 之前）；`/audit-logs`、`/audit-archives` 及其导出支持 `result` / `tenant_id` 过滤（非法值 400）；顺带补上归档端点缺失的 `trace_id / request_id / family_id / category / event` 五个 M12 契约过滤（此前与 api-spec「同形」声明不符）。
+- **来源标记**：`@Audit` 拦截器落库标 `audit_source=interceptor`，语义仅为「HTTP 成功返回」，不得作为业务完成证据（ADR-0032 R5）。
+- **测试**：auth 224→243（新增 16 例注册表/recordEvent/四态/租户过滤 + 既有审计用例零改动）、example-api 177→178、admin-web 243 全绿；`vue-tsc --noEmit` 零错。**注意**：改动 `schema.prisma` 后必须 `prisma generate`，否则 `store.writeAuditLog` 因未知字段抛错、replay 审计行静默丢失（`observability-chain.integration.spec` 即此症状）。
+
+### Added（文档：M15 立项，2026-10-20）
+
+- 新增 [PRD-015 业务可读审计与运营追溯](./docs/prd/prd-015-business-readable-audit.md)（M15 草案）：基于 `main@7e1be4a` 源码核实八项结构性缺口（技术字段展示 / 六字段未消费 / 无业务摘要与原因快照 / 事件码散落字面量 / 成功与拒绝覆盖不对称 / `tenant_id` 恒 0 / 字典与真实取值漂移 / 导出无业务列），定义 B1~B5 五批次、23 条 FR、13 条 AC，明确非目标（不做防篡改、不回填历史、不新增权限码）与八条假设前提。
+- 新增 [ADR-0032 业务可读审计的事件模型与解释机制](./docs/adr/0032-business-readable-audit-model.md)（提案）：事件注册表代码内单源 + 只读端点下发；事实快照（摘要/对象名/操作人/原因）落库冻结、解释元数据（名称/风险/指引/字段中文名）不进库；`result` 四态 + `audit_source` 区分「领域记录 / 拦截器兜底」；拒绝与失败采集白名单化；`tenant_id` 写入并与 `dataScope` 取交集；软增列两表同构三库 + 导出追加式，含六方案对比与规则↔FR 对照表。**无代码改动**。
+
 ### Fixed（P0：SaaS 运营页异步请求竞态，AC-14-04 关闭，2026-10-20）
 
 - **三页查询存在「先发后到覆盖」**：订阅 / 用量 / 生命周期页直接把 `await` 结果写入页面状态，切换租户或筛选后若旧请求较晚返回，会覆盖新租户数据（用量页更严重：`usageKey` 跨租户残留，导致配额与用量两组数据不匹配）。**修复**：新增 `admin-web/src/composables/useRequestGuard.ts`（请求序号 + 作用域快照双校验，纯函数、无响应式状态），三页全部查询接入；用量页按数据域拆四个守卫（配额 / 用量 / 趋势 / 明细），订阅页拆列表 / 历史，避免换时间窗时误杀在途用量请求。

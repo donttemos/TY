@@ -67,8 +67,20 @@ fw_security_family_revoked_total
 
 `user_id` `module` `action` `target_type` `target_id` `from` `to` `sort`
 `trace_id` `request_id` `family_id` `category` `event`
+`result` `tenant_id`（M15：结果四态 / 租户维度；`tenant_id=0` 表示未知/存量）
+`event` 支持逗号分隔多值（M15：风险等级不落库，前端按注册表把「高风险」展开成 `event=a,b,c`，上限 20，
+超出 400——避免把 URL 当查询语言）
 
-CSV 导出列同步：`...,traceId,requestId,familyId,category,event,before,after`。
+CSV 导出列同步：`...,traceId,requestId,familyId,category,event,before,after`
+（M15 B4 已交付：业务列**追加**在末尾 `eventName,summary,targetLabel,actorLabel,reason,result,auditSource,risk`；
+M12 十五列位置与顺序不变。`eventName`/`risk` 由注册表现算，未登记事件留空——
+导出面与页面同语义，不另造一套口径）。
+
+**事件语义不在数据库里，在注册表里**（M15/ADR-0032 R1）：`GET /api/v1/audit-logs/events` 返回
+`{ version, items }`，`items[]` 定义事件名称/说明/分类/风险/处理指引/摘要模板/变更字段中文名。
+日志、审计行、页面、导出四处对同一事件码的解释都必须来自这一份定义——前端不得维护第二份翻译表。
+审计行只冻结**事实快照**（`summary` / `target_label` / `actor_label` / `reason` / `audit_source`），
+不冻结字典：文案纠错不需要重写历史行。
 
 ## 6. 排障样例：看到 `replay_detected`，一次拉全链（G12-3）
 
@@ -105,3 +117,70 @@ curl -s http://127.0.0.1:3000/metrics | grep '^fw_security_replay_detected_total
 
 关联链：**响应头 `X-Request-Id`/`X-Trace-Id` ↔ 信封 `requestId`/`traceId` ↔ 日志 `LogRecord` ↔
 `audit_logs` 行 ↔ `fw_security_*` 计数** 五处同源，任取其一即可互查。
+
+## 7. 审计事件覆盖矩阵（M15 / PRD-015 FR-15-07）
+
+> 口径：**「必须审计」= 改了权限、动了租户、动了钱（套餐/配额）、动了全局配置、或发生拒绝**。
+> 矩阵是评审与门禁的共同依据：新增事件必须同时出现在注册表（`packages/auth/src/audit-events.ts`）、
+> 本表与一个真实写入点；三者缺一不算交付——由 `pnpm run check:audit-events` 门禁强制（CI 已接入）。
+>
+> mock 侧注册表（`apps/admin-web/mock/audit-events.ts`）是**自动生成物**：由 `pnpm run gen:audit-events-mock`
+> 从 `@fw/auth` 注册表生成，`check:audit-events` 校验其是否最新。手抄副本会漂移——B3 首版只抄 12 条，
+> 页面上大半事件显示「未登记」，正是这条护栏的由来。
+>
+> 记录来源（`audit_source`）：本表全部为 `domain`（领域层显式记录）。
+> **example-api 已无 `@Audit` 使用点**——12 处装饰器全部改为领域事件，避免「拦截器 + 领域」双写；
+> 拦截器保留在框架内供生成项目使用，其行语义仅为「HTTP 成功返回」，不得作为业务完成证据（ADR-0032 R5）。
+
+### 7.1 认证与权限
+
+| 事件码 | 风险 | 结果 | 写入点 | 目标对象 | 原因来源 | 备注 |
+|---|---|---|---|---|---|---|
+| `auth.login` | low | success | `packages/auth/src/auth.service.ts`（口令 / OAuth2 两条路径） | 用户（`target_label`=账号名） | — | 摘要含认证方式 |
+| `auth.login_failed` | notice | denied | 同上（`login()` 的 catch 收敛，原因按错误码映射） | 用户（尝试的账号） | 枚举：口令错误 / 锁定禁用 / 限流 | 按（IP+账号）3 条/分钟防洪 |
+| `auth.logout` | low | success | 同上（`logout`） | 用户 | — | 记录撤销的令牌数 |
+| `auth.password_change` | notice | success | 同上（`changePassword`） | 用户 | — | 前后值中的口令哈希已脱敏为 `***` |
+| `auth.session_revoke` | high | success | 同上（`revokeUserSessions`）+ `auth.controller.ts`（单设备下线） | 用户 / 会话 | 系统生成（forced） | 单设备下线用显式摘要覆盖模板 |
+| `auth.register` | notice | success | 同上（`register`） | 用户 | — | 自助注册受 `AUTH_ALLOW_REGISTER` 开关约束 |
+| `auth.profile_update` | low | success | `apps/example-api/.../auth.controller.ts` | 用户 | — | 仅昵称/手机/邮箱，不含账号名与角色 |
+| `auth.role_assign` | high | success | `packages/auth/src/auth.service.ts`（`assignUserRoles`） | 用户 | — | 需复核；角色集合走 `after.roleIds` |
+| `auth.permission_grant` | critical | success | 同上（`grantRolePermissions`） | 角色 | — | 需复核；影响全部持有该角色的账号 |
+| `authz.denied` | notice | denied | `packages/auth/src/rbac.guard.ts`（权限比对失败处） | 接口（`target_label`=url） | 缺少的权限码 | 按（用户+权限码）3 条/分钟防洪 |
+
+### 7.2 账号与角色管理
+
+| 事件码 | 风险 | 结果 | 写入点 | 目标对象 | 原因来源 | 备注 |
+|---|---|---|---|---|---|---|
+| `user.create` | notice | success | `apps/example-api/.../users.controller.ts` | 用户 | — | 含初始角色集合 |
+| `user.update` | notice | success | 同上 | 用户 | — | 资料 + 角色集合前后值 |
+| `user.status_change` | high | success | 同上 | 用户 | — | 禁用会连带强制下线（`after.forcedLogout`） |
+| `user.delete` | high | success | 同上 | 用户 | — | 需复核；内置管理员不可删 |
+| `role.create` | notice | success | `apps/example-api/.../rbac.controller.ts` | 角色 | — | 复制角色用显式摘要（含来源角色） |
+| `role.update` | notice | success | 同上 | 角色 | — | 数据范围变更后失效相关用户缓存 |
+| `role.delete` | high | success | 同上 | 角色 | — | 需复核；仍有持有者时拒绝 |
+
+### 7.3 租户、套餐与配额
+
+| 事件码 | 风险 | 结果 | 写入点 | 目标对象 | 原因来源 | 备注 |
+|---|---|---|---|---|---|---|
+| `saas.lifecycle.activate`<br>`saas.lifecycle.freeze`<br>`saas.lifecycle.resume`<br>`saas.lifecycle.terminate`<br>`saas.lifecycle.expire`<br>`saas.lifecycle.dispose` | notice~critical | success | `apps/example-api/.../saas-ops.controller.ts`（动作→码显式映射） | 租户 | 运营填写 / 系统生成 | freeze/terminate/dispose 需复核；摘要含状态迁移 |
+| `saas.lifecycle.invalid` | notice | denied | 同上（捕获 4030 后记录再原样抛出） | 租户 | 领域错误文案 | 不改写错误语义，只补留痕 |
+| `saas.plan.create` | notice | success | 同上 | 套餐 | — | `target_label`=套餐名 |
+| `saas.plan.publish` | high | success | 同上 | 套餐 | — | 含版本号与配额项数；发布后版本不可变 |
+| `saas.subscription.create` | notice | success | 同上 | 订阅 | — | 含套餐编码/版本/到期时间 |
+| `saas.subscription.cancel` | high | success | 同上 | 订阅 | 运营填写（必填建议） | 需复核；原因同时落 `reason` 列 |
+| `saas.quota.exceeded` | notice | denied | 同上（4029 分支） | 租户 | 系统生成 | 硬限额拒绝，未扣减用量 |
+
+### 7.4 安全、配置与运维
+
+| 事件码 | 风险 | 结果 | 写入点 | 目标对象 | 原因来源 | 备注 |
+|---|---|---|---|---|---|---|
+| `refresh.replay_detected` | critical | denied | `packages/auth/src/refresh-token.service.ts`（`handleReplay`） | 令牌族 | 低基数枚举（reason） | 需复核；直连 store 写入（九要素齐备） |
+| `config.change` | high | success | `apps/example-api/.../config-center/audit-bridge.ts` | 配置项（键名） | 变更入参 reason | `recordEventSync`：先审计后生效，失败整体回滚 |
+| `audit.export` | notice | success | `audit.controller.ts` + `audit-archive.controller.ts`（派发成功后） | 导出任务 | — | 摘要描述筛选条件；「全部记录」本身即高风险事实 |
+
+### 7.5 不采集的范围（有意为之）
+
+参数校验 400、资源不存在 404、限流 429 **不落审计**（日志与指标已覆盖）。理由：审计是取证资产，
+不是访问日志——把每次 400 都写进去会让真正的安全事件淹没在噪声里，并给攻击者提供刷表放大面
+（ADR-0032 R6）。拒绝类只保留清单内的高风险动作，并按主体限流。

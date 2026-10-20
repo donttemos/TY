@@ -1,67 +1,165 @@
 <!--
- * @file 审计日志页
- * @description PRD-005 FR-08 / TC-WEB-004：按人 / 模块 / 动作 / 时间区间查询；
- *   详情抽屉展示字段级 diff（before → after，敏感字段脱敏，见 DiffViewer）。
+ * @file 审计日志页（运营视图）
+ * @description PRD-005 FR-08 / PRD-015 FR-15-14~17：
+ *   列表以「中文事件摘要 + 结果 + 风险 + 对象名称」为主列，技术字段默认收起；
+ *   详情第一屏回答「谁 / 对什么 / 做了什么 / 为什么 / 结果如何」，技术详情折叠在末尾。
+ *   事件名称、风险、字段中文名全部来自服务端注册表（`GET /audit-logs/events`），
+ *   前端不维护第二份翻译表；旧行（无摘要/无事件码）走显式降级链并标注，不编造业务含义。
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo 移除 exportable：后端 /audit-logs/export 尚未实现
- *   （docs/40-api-spec.md §3.7 标注 Backlog），按钮点了无任何反应属死 UI
- * @modified 2026-10-15 donttemo N-02：恢复导出入口并改为**异步任务**——点击只派发任务拿到 jobId，
- *   进度与下载由全局任务条（layout/JobBar.vue）承载，页面不阻塞；失败可在任务条上重试并看到 traceId
- * @modified 2026-10-15 donttemo E-07：模块筛选项由硬编码改为 audit_module 字典消费（原选项过期：
- *   缺 tenant 且含从未写入审计的 order）
+ * @modified 2026-10-15 donttemo N-02：恢复导出入口并改为异步任务；E-07：模块筛选项改字典
+ * @modified 2026-10-20 donttemo M15 B3：列表运营视图 + 详情分层 + 结果/风险/租户筛选 + 旧数据降级
  * @module admin-web/views
 -->
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import CrudTable from '@/components/CrudTable/index.vue';
 import DiffViewer from '@/components/DiffViewer/index.vue';
 import * as auditApi from '@/api/audit';
 import * as userApi from '@/api/user';
+import { fetchTenants } from '@/api/tenant';
+import { useAuditEvents } from '@/composables/useAuditEvents';
 import { useJobCenterStore } from '@/composables/useJobCenter';
 import { BizError, describeBizError } from '@/utils/biz-error';
 import type { CrudColumn, SearchField, SearchModel } from '@/components/CrudTable/types';
-import type { AuditLogRecord, AuditQuery, UserListItem } from '@/api/types';
+import type { AuditEventDefinition, AuditLogRecord, AuditQuery, UserListItem } from '@/api/types';
+import {
+  CATEGORY_OPTIONS,
+  RESULT_OPTIONS,
+  RISK_OPTIONS,
+  actorText,
+  auditTitle,
+  changeFieldMeta,
+  isLegacyRow,
+  resultMeta,
+  riskMeta,
+  sourceText,
+  targetText,
+} from './audit-display';
+
+/** 事件注册表（名称/风险/字段中文名的唯一来源） */
+const auditEvents = useAuditEvents();
 
 const columns: CrudColumn[] = [
-  { prop: 'userId', label: '操作人', width: 120, slot: 'user' },
-  { prop: 'module', label: '模块', width: 100, align: 'center', sortable: true },
-  { prop: 'action', label: '动作', width: 100, align: 'center', slot: 'action', sortable: true },
-  { prop: 'targetType', label: '对象', width: 140, slot: 'target', sortable: true },
-  { prop: 'ip', label: 'IP', width: 130 },
-  { prop: 'traceId', label: 'traceId', minWidth: 160 },
+  { prop: 'summary', label: '事件', minWidth: 380, slot: 'event' },
+  { prop: 'result', label: '结果', width: 96, align: 'center', slot: 'result' },
+  { prop: 'risk', label: '风险', width: 92, align: 'center', slot: 'risk' },
+  { prop: 'targetLabel', label: '对象', width: 160, slot: 'target' },
+  { prop: 'userId', label: '操作人', width: 140, slot: 'user' },
   { prop: 'createdAt', label: '时间', width: 180, slot: 'createdAt', sortable: true },
+  // 技术字段默认收起：需要排查时通过「列设置」打开
+  { prop: 'module', label: '模块', width: 100, slot: 'module', defaultHidden: true },
+  { prop: 'action', label: '动作', width: 100, slot: 'action', defaultHidden: true },
+  { prop: 'ip', label: 'IP', width: 130, defaultHidden: true },
+  { prop: 'traceId', label: 'traceId', minWidth: 160, defaultHidden: true },
 ];
 
-const searchForm: SearchField[] = [
+/** 查询区（>3 项自动折叠为「展开」） */
+const searchForm = ref<SearchField[]>([
   { prop: 'user_id', label: '操作人', type: 'select', options: [] },
-  // E-07：模块取值走 audit_module 字典（原硬编码选项过期——缺 tenant 且含从未写入审计的 order）
-  { prop: 'module', label: '模块', type: 'select', dictCode: 'audit_module' },
-  { prop: 'action', label: '动作', type: 'select', dictCode: 'audit_action' },
+  { prop: 'tenant_id', label: '租户', type: 'select', options: [] },
+  { prop: 'category', label: '分类', type: 'select', options: CATEGORY_OPTIONS },
+  { prop: 'result', label: '结果', type: 'select', options: RESULT_OPTIONS },
+  { prop: 'risk', label: '风险', type: 'select', options: RISK_OPTIONS },
+  // options 在 computed 中由注册表填充（事件码对运营不可读，label 用事件名）
+  { prop: 'event', label: '事件', type: 'select', options: [] },
   { prop: 'from', label: '开始', type: 'date' },
   { prop: 'to', label: '结束', type: 'date' },
-];
+]);
 
-/** 用户选项（操作人筛选） */
+/** 用户 / 租户选项（筛选下拉） */
 const userOptions = ref<{ label: string; value: string }[]>([]);
+const tenantOptions = ref<{ label: string; value: string }[]>([]);
 
 onMounted(async () => {
+  void auditEvents.load();
   try {
     const result = await userApi.fetchUsers({ pageSize: 100 });
-    userOptions.value = result.items.map((user: UserListItem) => ({ label: `${user.username}${user.nickname ? `（${user.nickname}）` : ''}`, value: user.id }));
-    const field = searchForm.find((f) => f.prop === 'user_id');
+    userOptions.value = result.items.map((user: UserListItem) => ({
+      label: `${user.username}${user.nickname ? `（${user.nickname}）` : ''}`,
+      value: user.id,
+    }));
+    const field = searchForm.value.find((f) => f.prop === 'user_id');
     if (field) field.options = userOptions.value;
   } catch {
-    // 用户列表拉取失败时退化为手动输入 user_id 的场景不存在，仅留空选项
+    // 用户列表拉取失败：筛选退化为不可选，不阻塞列表
+  }
+  try {
+    const tenants = await fetchTenants({ pageSize: 100 });
+    tenantOptions.value = tenants.items.map((tenant) => ({ label: tenant.name, value: tenant.id }));
+    const field = searchForm.value.find((f) => f.prop === 'tenant_id');
+    if (field) field.options = tenantOptions.value;
+  } catch {
+    // 租户列表拉取失败同上
   }
 });
+
+/** 事件下拉随注册表到达后填充（注册表失败时保持空，仍可按其他条件筛选） */
+const eventOptions = computed(() => auditEvents.eventOptions.value);
+const searchFields = computed<SearchField[]>(() =>
+  searchForm.value.map((field) => (field.prop === 'event' ? { ...field, options: eventOptions.value } : field)),
+);
+
+/**
+ * 查询条件变换：风险等级不落库，按注册表展开成事件码集合（ADR-0032 R9）
+ *
+ * 与「事件」同时选择时取交集；交集为空时用一个不存在的码，得到空结果而非全量——
+ * 宁可显示 0 条，也不能把「高风险 + 某低风险事件」误解成「该事件全部」。
+ * @param search 查询区原始值
+ */
+function toQuery(search: SearchModel): SearchModel {
+  const next: SearchModel = { ...search };
+  const risk = next.risk === undefined || next.risk === null ? '' : String(next.risk);
+  const picked = next.event === undefined || next.event === null ? '' : String(next.event);
+  delete next.risk;
+  if (risk) {
+    let codes = auditEvents.codesByRisk(risk);
+    if (picked) codes = codes.filter((code) => code === picked);
+    next.event = (codes.length > 0 ? codes : ['__none__']).join(',');
+  }
+  return next;
+}
+
+/**
+ * 插槽行 → 审计记录
+ *
+ * CrudTable 的插槽把行标成 `Record<string, unknown>`（它不感知具体实体），
+ * 这里集中做一次类型收窄，避免模板里散落 `as any`。
+ * @param row 插槽行
+ */
+function asAudit(row: Record<string, unknown>): AuditLogRecord {
+  return row as unknown as AuditLogRecord;
+}
+
+/** 当前行的事件定义（未登记返回 undefined，模板走降级链） */
+function definitionOf(row: AuditLogRecord): AuditEventDefinition | undefined {
+  return auditEvents.find(row.event);
+}
+
+function titleOf(row: AuditLogRecord): string {
+  return auditTitle(row, definitionOf(row)).text;
+}
+
+function titleKindOf(row: AuditLogRecord): string {
+  return auditTitle(row, definitionOf(row)).kind;
+}
 
 /** 详情抽屉 */
 const detailVisible = ref(false);
 const detail = ref<AuditLogRecord | null>(null);
 const detailLoading = ref(false);
+
+const detailDefinition = computed<AuditEventDefinition | undefined>(() =>
+  detail.value ? auditEvents.find(detail.value.event) : undefined,
+);
+const detailTitle = computed(() => (detail.value ? auditTitle(detail.value, detailDefinition.value) : null));
+const detailResult = computed(() => resultMeta(detail.value?.result ?? null));
+const detailRisk = computed(() => riskMeta(detailDefinition.value));
+const detailFieldMeta = computed(() => changeFieldMeta(detailDefinition.value));
+const detailLegacy = computed(() => (detail.value ? isLegacyRow(detail.value) : false));
 
 async function openDetail(row: AuditLogRecord): Promise<void> {
   detailVisible.value = true;
@@ -91,6 +189,16 @@ function copyTraceId(traceId: string): void {
   void navigator.clipboard.writeText(traceId).then(() => ElMessage.success('traceId 已复制'));
 }
 
+/** 原始快照（技术详情展示；敏感字段已由服务端脱敏） */
+function pretty(value: unknown): string {
+  if (value === null || value === undefined) return '—';
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 /** 任务中心（导出进度 / 下载入口在全局任务条上） */
 const jobCenter = useJobCenterStore();
 const exporting = ref(false);
@@ -98,8 +206,8 @@ const exporting = ref(false);
 /**
  * 导出当前筛选条件下的审计日志（N-02 异步任务）
  *
- * 只派发、不等结果：后端立即返回 jobId，进度与产物由任务条接管。
- * 这样即使筛选结果上万条，页面也不会被卡住，用户可以直接跳去别的页面。
+ * payload.search 已由 CrudTable 用同一份 `toQuery` 变换过（风险 → 事件集合），
+ * 这里不得再次变换，否则风险筛选会被展开两次。
  */
 async function handleExport(payload: { search: SearchModel; sort: string | null }): Promise<void> {
   if (exporting.value) return;
@@ -120,53 +228,108 @@ async function handleExport(payload: { search: SearchModel; sort: string | null 
 
 <template>
   <div class="fw-page">
-    <!-- permission="audit" → 导出按钮自动按 audit:export 判权（与后端 PERM.AUDIT_EXPORT 同码） -->
     <CrudTable
       api="/audit-logs"
       :columns="columns"
-      :search-form="searchForm"
+      :search-form="searchFields"
+      :transform-search="toQuery"
       permission="audit"
       exportable
       @export="handleExport"
     >
-      <template #cell-user="{ row }">
-        {{ userName(row.userId) }}
+      <!-- 事件摘要：业务摘要优先，旧行显式标注来源（不编造） -->
+      <template #cell-event="{ row }">
+        <div class="fw-audit-event">
+          <span class="fw-audit-event-text">{{ titleOf(asAudit(row)) }}</span>
+          <el-tag v-if="titleKindOf(asAudit(row)) === 'legacy'" size="small" type="info" effect="plain">历史记录</el-tag>
+          <el-tag v-else-if="titleKindOf(asAudit(row)) === 'unregistered'" size="small" type="warning" effect="plain">未登记事件</el-tag>
+        </div>
       </template>
-      <template #cell-action="{ row }">
-        <el-tag size="small" :type="row.action === 'delete' ? 'danger' : row.action === 'create' ? 'success' : 'warning'" effect="light">
-          {{ row.action }}
+      <template #cell-result="{ row }">
+        <el-tag size="small" :type="resultMeta(asAudit(row).result).tagType" effect="light">{{ resultMeta(asAudit(row).result).label }}</el-tag>
+      </template>
+      <template #cell-risk="{ row }">
+        <el-tag v-if="riskMeta(definitionOf(asAudit(row)))" size="small" :type="riskMeta(definitionOf(asAudit(row)))!.tagType" effect="plain">
+          {{ riskMeta(definitionOf(asAudit(row)))!.label }}
         </el-tag>
-      </template>
-      <template #cell-target="{ row }">
-        <span v-if="row.targetType">{{ row.targetType }}:{{ row.targetId }}</span>
         <span v-else class="fw-text-weak">—</span>
       </template>
-      <template #cell-createdAt="{ row }">
-        {{ formatTime(row.createdAt) }}
-      </template>
+      <template #cell-target="{ row }">{{ targetText(asAudit(row)) }}</template>
+      <template #cell-user="{ row }">{{ asAudit(row).actorLabel ?? userName(asAudit(row).userId) }}</template>
+      <template #cell-createdAt="{ row }">{{ formatTime(row.createdAt) }}</template>
+      <template #cell-module="{ row }">{{ row.module }}</template>
+      <template #cell-action="{ row }">{{ row.action }}</template>
       <template #actions-extra="{ row }">
-        <el-button link type="primary" @click="openDetail(row)">详情</el-button>
+        <el-button link type="primary" @click="openDetail(asAudit(row))">详情</el-button>
       </template>
     </CrudTable>
 
-    <!-- 审计详情：字段级 diff -->
-    <el-drawer v-model="detailVisible" title="审计详情" size="560px">
+    <!-- 审计详情：业务区在前，技术详情折叠 -->
+    <el-drawer v-model="detailVisible" title="审计详情" size="640px">
       <div v-loading="detailLoading">
         <template v-if="detail">
+          <div class="fw-audit-headline">
+            <h3 class="fw-audit-headline-title">{{ detailTitle?.text }}</h3>
+            <div class="fw-audit-tags">
+              <el-tag :type="detailResult.tagType" effect="light">{{ detailResult.label }}</el-tag>
+              <el-tag v-if="detailRisk" :type="detailRisk.tagType" effect="plain">风险：{{ detailRisk.label }}</el-tag>
+              <el-tag v-if="detailDefinition?.reviewRequired" type="danger" effect="plain">需复核</el-tag>
+              <el-tag v-if="detailTitle?.kind === 'legacy'" type="info" effect="plain">历史记录（无业务摘要）</el-tag>
+              <el-tag v-else-if="detailTitle?.kind === 'unregistered'" type="warning" effect="plain">未登记事件</el-tag>
+            </div>
+          </div>
+
+          <el-alert
+            v-if="detailLegacy"
+            class="fw-audit-legacy"
+            type="info"
+            :closable="false"
+            show-icon
+            title="该记录产生于业务摘要上线前，仅保留技术字段"
+            description="系统不会为历史记录补写摘要或原因，以免伪造当时不存在的事实。"
+          />
+
           <el-descriptions :column="2" border>
-            <el-descriptions-item label="操作人">{{ userName(detail.userId) }}</el-descriptions-item>
-            <el-descriptions-item label="模块 / 动作">{{ detail.module }} / {{ detail.action }}</el-descriptions-item>
-            <el-descriptions-item label="对象">{{ detail.targetType ? `${detail.targetType}:${detail.targetId}` : '—' }}</el-descriptions-item>
-            <el-descriptions-item label="IP">{{ detail.ip ?? '—' }}</el-descriptions-item>
-            <el-descriptions-item label="时间">{{ formatTime(detail.createdAt) }}</el-descriptions-item>
-            <el-descriptions-item label="traceId">
-              <span v-if="detail.traceId" class="fw-audit-trace" @click="copyTraceId(detail.traceId)">{{ detail.traceId }}</span>
-              <span v-else>—</span>
+            <el-descriptions-item label="事件">{{ detailDefinition?.name ?? detail.event ?? '—' }}</el-descriptions-item>
+            <el-descriptions-item label="操作人">{{ detail.actorLabel ?? actorText(detail) }}</el-descriptions-item>
+            <el-descriptions-item label="操作对象">{{ targetText(detail) }}</el-descriptions-item>
+            <el-descriptions-item label="记录来源">{{ sourceText(detail) }}</el-descriptions-item>
+            <el-descriptions-item label="操作原因" :span="2">{{ detail.reason ?? '未填写' }}</el-descriptions-item>
+            <el-descriptions-item v-if="detailDefinition?.description" label="事件说明" :span="2">
+              {{ detailDefinition.description }}
             </el-descriptions-item>
-            <el-descriptions-item label="User-Agent" :span="2">{{ detail.userAgent ?? '—' }}</el-descriptions-item>
+            <el-descriptions-item v-if="detailDefinition?.guidance" label="处理指引" :span="2">
+              {{ detailDefinition.guidance }}
+            </el-descriptions-item>
           </el-descriptions>
+
           <h4 class="fw-audit-diff-title">变更前后值（敏感字段已脱敏）</h4>
-          <diff-viewer :before="detail.beforeValue" :after="detail.afterValue" />
+          <diff-viewer :before="detail.beforeValue" :after="detail.afterValue" :field-meta="detailFieldMeta" />
+
+          <el-collapse class="fw-audit-tech">
+            <el-collapse-item title="技术详情（事件码 / 链路 / 原始快照）" name="tech">
+              <el-descriptions :column="1" border size="small">
+                <el-descriptions-item label="事件码">{{ detail.event ?? '—' }}</el-descriptions-item>
+                <el-descriptions-item label="模块 / 动作">{{ detail.module }} / {{ detail.action }}</el-descriptions-item>
+                <el-descriptions-item label="分类">{{ detail.category ?? '—' }}</el-descriptions-item>
+                <el-descriptions-item label="结果值">{{ detail.result ?? '—' }}</el-descriptions-item>
+                <el-descriptions-item label="租户">{{ detail.tenantId }}（0 = 未知/存量）</el-descriptions-item>
+                <el-descriptions-item label="请求 ID">{{ detail.requestId ?? '—' }}</el-descriptions-item>
+                <el-descriptions-item label="链路 ID">
+                  <span v-if="detail.traceId" class="fw-audit-trace" @click="copyTraceId(detail.traceId)">{{ detail.traceId }}</span>
+                  <span v-else>—</span>
+                </el-descriptions-item>
+                <el-descriptions-item label="令牌族">{{ detail.familyId ?? '—' }}</el-descriptions-item>
+                <el-descriptions-item label="jti">{{ detail.jti ?? '—' }}</el-descriptions-item>
+                <el-descriptions-item label="IP">{{ detail.ip ?? '—' }}</el-descriptions-item>
+                <el-descriptions-item label="User-Agent">{{ detail.userAgent ?? '—' }}</el-descriptions-item>
+                <el-descriptions-item label="记录时间">{{ formatTime(detail.createdAt) }}</el-descriptions-item>
+              </el-descriptions>
+              <h5 class="fw-audit-raw-title">原始 before / after</h5>
+              <pre class="fw-audit-raw">{{ pretty(detail.beforeValue) }}</pre>
+              <pre class="fw-audit-raw">{{ pretty(detail.afterValue) }}</pre>
+            </el-collapse-item>
+          </el-collapse>
         </template>
       </div>
     </el-drawer>
@@ -174,6 +337,38 @@ async function handleExport(payload: { search: SearchModel; sort: string | null 
 </template>
 
 <style scoped>
+.fw-audit-event {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fw-audit-event-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fw-audit-headline {
+  margin-bottom: 12px;
+}
+
+.fw-audit-headline-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.fw-audit-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.fw-audit-legacy {
+  margin-bottom: 12px;
+}
+
 .fw-audit-trace {
   color: var(--el-color-primary);
   cursor: pointer;
@@ -183,5 +378,25 @@ async function handleExport(payload: { search: SearchModel; sort: string | null 
 .fw-audit-diff-title {
   margin: 16px 0 8px;
   font-size: 14px;
+}
+
+.fw-audit-tech {
+  margin-top: 16px;
+}
+
+.fw-audit-raw-title {
+  margin: 12px 0 6px;
+  font-size: 13px;
+}
+
+.fw-audit-raw {
+  max-height: 200px;
+  overflow: auto;
+  margin: 0 0 8px;
+  padding: 8px 12px;
+  background: var(--fw-bg);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
 }
 </style>

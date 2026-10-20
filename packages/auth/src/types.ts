@@ -130,11 +130,45 @@ export type AuditAction = 'create' | 'update' | 'delete' | 'login' | 'logout' | 
  */
 export type AuditCategory = 'auth' | 'security' | 'admin' | 'data' | 'config' | 'tenant' | 'system';
 
-/** 审计事件结果（PRD-012 OBS-06） */
-export type AuditEventResult = 'success' | 'denied' | 'failed';
+/**
+ * 审计事件结果（PRD-012 OBS-06；PRD-015 FR-15-05 扩为四态）
+ *
+ * `unknown` 仅用于「操作已发起但结果未确认」（进程中断、任务超时、外部依赖结果不明）：
+ * 记 failed 是错误归因，记 success 是造假，第四态让不确定可以被如实记录（ADR-0032 R5）。
+ */
+export type AuditEventResult = 'success' | 'denied' | 'failed' | 'unknown';
+
+/**
+ * 审计记录来源（PRD-015 FR-15-05，ADR-0032 R5）
+ *
+ * `domain`：领域层显式记录，代表业务动作的真实结果；
+ * `interceptor`：`@Audit` 拦截器兜底，**仅代表 HTTP 请求成功返回**，不得作为业务完成的证据。
+ */
+export type AuditSource = 'domain' | 'interceptor';
+
+/**
+ * 业务快照字段（PRD-015 FR-15-04，ADR-0032 R2）
+ *
+ * 这些值会随业务数据变化而漂移（租户改名、用户改名、套餐改版），因此必须在事件发生时
+ * 固化进审计行；解释性字典（名称/风险/指引/字段中文名）留在注册表，不进库。
+ */
+export interface AuditSnapshotFields {
+  /** 事件发生时所属租户；存量行恒 '0'，语义为「未知/存量」（不回填，ADR-0032 R7） */
+  tenantId: string;
+  /** 业务摘要快照（写入时固化，三级生成链见 ADR-0032 R3） */
+  summary: string | null;
+  /** 目标对象名称快照（租户名/套餐名/用户名） */
+  targetLabel: string | null;
+  /** 操作人名称快照（改名后历史不变） */
+  actorLabel: string | null;
+  /** 操作原因（人工填写或系统生成） */
+  reason: string | null;
+  /** 记录来源：domain / interceptor */
+  auditSource: AuditSource | null;
+}
 
 /** 审计日志记录（数据字典 §3.13） */
-export interface AuditLogRecord {
+export interface AuditLogRecord extends AuditSnapshotFields {
   id: ID;
   /** 操作人；系统任务为 null */
   userId: ID | null;
@@ -254,6 +288,18 @@ export interface AuditQuery extends PageParams {
   category?: string;
   /** 点分事件名精确过滤（M12 W2 OBS-14：如 refresh.replay_detected） */
   event?: string;
+  /**
+   * 事件名多值过滤（PRD-015 FR-15-16：前端「按风险筛选」由注册表展开为事件集合）
+   * 与 `event` 互斥使用；上限 20（超出由 HTTP 层 400，避免把 URL 当查询语言）
+   */
+  events?: string[];
+  /**
+   * 租户过滤（PRD-015 FR-15-06）：与 dataScope 取交集，禁止放大可见范围。
+   * 传 `'0'` 表示查「未知/存量」行（存量 tenant_id 未填充）。
+   */
+  tenantId?: string;
+  /** 结果过滤（PRD-015 FR-15-05：success / denied / failed / unknown） */
+  result?: AuditEventResult;
   /** 起始时间（含） */
   from?: Date;
   /** 结束时间（含） */

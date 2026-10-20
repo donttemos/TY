@@ -83,6 +83,14 @@ const props = withDefaults(
     formDefaults?: FormModel;
     /** 固定查询条件（不出现在查询区，如字典项按分类过滤） */
     filters?: SearchModel;
+    /**
+     * 查询条件变换（PRD-015 FR-15-16）
+     *
+     * 某些筛选值不能直接作为接口参数：例如「风险等级」不落库，需由事件注册表展开成
+     * `event=a,b,c`。变换函数在构造请求参数前执行（列表与导出共用同一份逻辑），
+     * 未提供时行为不变。
+     */
+    transformSearch?: (search: SearchModel) => SearchModel;
   }>(),
   {
     rowKey: 'id',
@@ -223,7 +231,8 @@ function canExport(): boolean {
 
 /** 查询参数（固定 filters + 查询区（去掉空值；daterange 转 min/max）+ 分页 + 排序） */
 function buildParams(): SearchModel {
-  const params: SearchModel = { ...(props.filters ?? {}), ...search };
+  const transformed = props.transformSearch ? props.transformSearch({ ...search }) : search;
+  const params: SearchModel = { ...(props.filters ?? {}), ...transformed };
   for (const [key, value] of Object.entries(params)) {
     if (value === '' || value === null || value === undefined || (Array.isArray(value) && value.length === 0)) {
       delete params[key];
@@ -428,7 +437,9 @@ function handleBatchDelete(): void {
 
 /** 导出（页面实现；这里只透传当前查询条件） */
 function handleExport(): void {
-  emit('export', { search: { ...search }, sort: sort.value });
+  // 导出与列表用同一份变换后的条件，避免「看到 20 条、导出 2000 条」
+  const transformed = props.transformSearch ? props.transformSearch({ ...search }) : { ...search };
+  emit('export', { search: transformed, sort: sort.value });
 }
 
 /** 列设置 */

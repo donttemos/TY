@@ -90,7 +90,16 @@ export type RefreshRotationResult =
   | { outcome: 'replay_detected'; reason: 'not_found' | 'expired' | 'no_replacement' };
 
 /** 新增审计日志入参（id 由存储层生成） */
-export type NewAuditLog = Omit<AuditLogRecord, 'id'>;
+/**
+ * 写入侧审计行（PRD-015 FR-15-04）
+ *
+ * 业务快照列（tenantId / summary / targetLabel / actorLabel / reason / auditSource）在写入侧可选：
+ * 旧调用方与直连 store 的路径（如 refresh replay）无需逐个补 null，存储实现统一归一为「缺省 null / 租户 '0'」；
+ * 读取侧 `AuditLogRecord` 则保持字段完整（形状不漂移，M12 OBS-08 的既有约定）。
+ */
+export type AuditWriteOptionalFields = 'tenantId' | 'summary' | 'targetLabel' | 'actorLabel' | 'reason' | 'auditSource';
+export type NewAuditLog = Omit<AuditLogRecord, 'id' | AuditWriteOptionalFields> &
+  Partial<Pick<AuditLogRecord, AuditWriteOptionalFields>>;
 
 /**
  * 鉴权存储端口

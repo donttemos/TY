@@ -18,6 +18,7 @@ import { Logger } from '@fw/logger';
 import type { AuditPage, AuditQuery, AuthOptions, ID, LoginResult, MenuNode, MeResult, RequestUser, TokenPair } from './types.js';
 import type { AuthStore } from './auth-store.js';
 import type { AuditService } from './audit.service.js';
+import { AuditEventThrottle } from './audit-throttle.js';
 import { recordLoginMetric } from './auth-metrics.js';
 import type { LoginSecurity } from './login-security.js';
 import type { PasswordService } from './password.service.js';
@@ -81,6 +82,12 @@ export interface AuthServiceDeps {
  */
 export class AuthService {
   /**
+   * 登录失败审计限流（ADR-0032 R6）：暴力破解会制造大量 denied 事件，
+   * 只保留每（IP+账号）每分钟前 3 条样本，业务侧照常拒绝。
+   */
+  private readonly loginFailThrottle = new AuditEventThrottle();
+
+  /**
    * @param deps 依赖集合
    */
   constructor(private readonly deps: AuthServiceDeps) {}
@@ -97,8 +104,37 @@ export class AuthService {
       return await this.performLogin(input);
     } catch (error) {
       recordLoginMetric('failed');
+      // PRD-015 FR-15-08：失败登录此前只有指标与日志，运营侧看不到「谁在试」
+      this.recordLoginFailure(input, error);
       throw error;
     }
+  }
+
+  /**
+   * 记录登录失败事件（拒绝态，不记口令）
+   *
+   * 原因取低基数枚举而非原始 message：错误文案会变，枚举是稳定的取证维度。
+   * 限流只影响「是否落审计」，不影响抛错——用户该看到的错误照旧。
+   * @param input 登录入参
+   * @param error 失败原因（BizError）
+   */
+  private recordLoginFailure(input: LoginInput, error: unknown): void {
+    const code = (error as { code?: number } | null)?.code;
+    const reason =
+      code === ErrorCode.ACCOUNT_LOCKED
+        ? 'account_locked'
+        : code === ErrorCode.RATE_LIMITED
+          ? 'rate_limited'
+          : 'bad_credentials';
+    if (!this.loginFailThrottle.allow(`login:${input.ip}:${input.account}`)) return;
+    this.deps.audit.recordEvent('auth.login_failed', {
+      targetLabel: input.account,
+      reason,
+      result: 'denied',
+      ip: input.ip,
+      userAgent: input.userAgent ?? null,
+      after: { reason, code: code ?? null },
+    });
   }
 
   /** 登录主体（OBS-12 计数包装拆出，逻辑与拆分前逐字一致） */
@@ -154,14 +190,14 @@ export class AuthService {
       userAgent: input.userAgent ?? null,
     });
 
-    audit.record({
+    audit.recordEvent('auth.login', {
       userId: user.id,
-      module: 'auth',
-      action: 'login',
-      targetType: 'user',
       targetId: user.id,
+      targetLabel: user.username,
+      actorLabel: user.nickname ?? user.username,
       ip: input.ip,
       userAgent: input.userAgent ?? null,
+      after: { via: 'password' },
     });
     logger.info('登录成功', { userId: user.id, username: user.username, ip: input.ip, policy: options.passwordPolicy });
     recordLoginMetric('success');
@@ -197,15 +233,14 @@ export class AuthService {
       ip: input.ip,
       userAgent: input.userAgent ?? null,
     });
-    audit.record({
+    audit.recordEvent('auth.login', {
       userId: user.id,
-      module: 'auth',
-      action: 'login',
-      targetType: 'user',
       targetId: user.id,
+      targetLabel: user.username,
+      actorLabel: user.nickname ?? user.username,
       ip: input.ip,
       userAgent: input.userAgent ?? null,
-      after: { provider: input.provider },
+      after: { via: 'oauth2', provider: input.provider },
     });
     logger.info('OAuth2 登录成功', { userId: user.id, username: user.username, provider: input.provider, ip: input.ip, policy: options.passwordPolicy });
     return result;
@@ -252,12 +287,11 @@ export class AuthService {
     const fallback = roles.find((role) => role.code === 'user');
     if (fallback) await store.replaceUserRoles(created.id, [fallback.id]);
 
-    audit.record({
+    audit.recordEvent('auth.register', {
       userId: created.id,
-      module: 'auth',
-      action: 'create',
-      targetType: 'user',
       targetId: created.id,
+      targetLabel: created.username,
+      actorLabel: created.nickname ?? created.username,
       ip: input.ip,
       userAgent: input.userAgent ?? null,
       after: { username: created.username, phone: created.phone, email: created.email },
@@ -318,12 +352,11 @@ export class AuthService {
     const exp = expiresAt ?? user.exp ?? Math.floor(Date.now() / 1000) + tokens.accessTtlSeconds;
     if (user.jti) await blacklist.revoke(user.jti, exp);
     const revoked = user.fam ? await refresh.revokeFamily(user.fam) : await refresh.revokeAllForUser(user.id);
-    audit.record({
+    audit.recordEvent('auth.logout', {
       userId: user.id,
-      module: 'auth',
-      action: 'logout',
-      targetType: 'user',
       targetId: user.id,
+      targetLabel: user.username,
+      actorLabel: user.username,
       ip,
       userAgent: userAgent ?? null,
       after: { revokedRefreshTokens: revoked, family: user.fam ?? null },
@@ -367,14 +400,13 @@ export class AuthService {
     const context = await permissions.getUserContext(user.id);
     const issued = await refresh.issue(user.id, input.ip, input.userAgent ?? null);
     const access = await tokens.signAccess({ id: user.id, username: updated.username, roles: context.roles }, issued.familyId);
-    audit.record({
+    audit.recordEvent('auth.password_change', {
       userId: user.id,
-      module: 'auth',
-      action: 'update',
-      targetType: 'user',
       targetId: user.id,
+      targetLabel: user.username,
+      actorLabel: user.nickname ?? user.username,
       before,
-      after: { passwordHash: updated.passwordHash },
+      after: { passwordHash: updated.passwordHash, revokedRefreshTokens: revoked },
       ip: input.ip,
       userAgent: input.userAgent ?? null,
     });
@@ -399,14 +431,11 @@ export class AuthService {
     const { refresh, blacklist, tokens, audit } = this.deps;
     const revoked = await refresh.revokeAllForUser(userId);
     await blacklist.setUserCutoff(userId, Math.floor(Date.now() / 1000), tokens.accessTtlSeconds);
-    audit.record({
+    audit.recordEvent('auth.session_revoke', {
       userId: operator ?? userId,
-      module: 'auth',
-      action: 'logout',
-      targetType: 'user',
       targetId: userId,
-      ip,
       after: { revokedRefreshTokens: revoked, reason: 'forced' },
+      ip,
     });
     logger.info('已强制用户全部会话下线', { userId, revokedRefreshTokens: revoked });
     return { revokedRefreshTokens: revoked };
@@ -461,11 +490,8 @@ export class AuthService {
     await this.deps.store.replaceUserRoles(userId, roleIds);
     await this.deps.permissions.invalidateUser(userId);
     const context = await this.deps.permissions.getUserContext(userId);
-    this.deps.audit.record({
+    this.deps.audit.recordEvent('auth.role_assign', {
       userId: operator,
-      module: 'auth',
-      action: 'grant',
-      targetType: 'user_role',
       targetId: userId,
       after: { roleIds },
       ip,
@@ -515,11 +541,8 @@ export class AuthService {
     await this.deps.store.replaceRolePermissions(roleId, permissionIds);
     const affected = await this.deps.store.listUserIdsByRoleId(roleId);
     await this.deps.permissions.invalidateUsers(affected);
-    this.deps.audit.record({
+    this.deps.audit.recordEvent('auth.permission_grant', {
       userId: operator,
-      module: 'auth',
-      action: 'grant',
-      targetType: 'role_permission',
       targetId: roleId,
       after: { permissionIds },
       ip,

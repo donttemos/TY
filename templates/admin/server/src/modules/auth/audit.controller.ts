@@ -20,8 +20,12 @@ import {
   DATA_SCOPE_ORG,
   PERM,
   Permissions,
+  auditRegistryVersion,
+  listAuditEvents,
   resolveDataScopeFilter,
   type AuditAction,
+  type AuditEventDefinition,
+  type AuditEventResult,
   type AuditLogRecord,
   type DataScopeOrgPort,
   type RequestUser,
@@ -63,9 +67,55 @@ export const AUDIT_FILTER_PARAMS = [
   'family_id',
   'category',
   'event',
+  // PRD-015（M15）：结果与租户维度过滤
+  'result',
+  'tenant_id',
   // mock 失败演示路径专用透传参数（simulate=fail；smoke-mock 用，后端忽略该值）
   'simulate',
 ] as const;
+
+/** 结果枚举（PRD-015 FR-15-05 四态） */
+const AUDIT_RESULTS: readonly AuditEventResult[] = ['success', 'denied', 'failed', 'unknown'];
+/** 事件多值过滤上限（防止把 URL 当查询语言） */
+const AUDIT_EVENTS_MAX = 20;
+
+/**
+ * 解析结果过滤参数（非法取值 400，不静默忽略）
+ * @param value 查询参数
+ */
+export function parseAuditResult(value?: string): AuditEventResult | undefined {
+  if (!value) return undefined;
+  if (!(AUDIT_RESULTS as readonly string[]).includes(value)) {
+    throw new BizError(ErrorCode.BAD_REQUEST, `非法 result：${value}（允许：${AUDIT_RESULTS.join(' / ')}）`);
+  }
+  return value as AuditEventResult;
+}
+
+/**
+ * 解析事件过滤参数（逗号分隔多值，≤20）——「按风险筛选」由前端注册表展开
+ * @param value 查询参数
+ */
+export function parseAuditEvents(value?: string): string[] | undefined {
+  if (!value) return undefined;
+  const codes = [...new Set(value.split(',').map((item) => item.trim()).filter((item) => item.length > 0))];
+  if (codes.length === 0) return undefined;
+  if (codes.length > AUDIT_EVENTS_MAX) {
+    throw new BizError(ErrorCode.BAD_REQUEST, `event 多值上限 ${AUDIT_EVENTS_MAX}，当前 ${codes.length}`);
+  }
+  return codes;
+}
+
+/**
+ * 解析租户过滤参数（十进制字符串；'0' 表示未知/存量）
+ * @param value 查询参数
+ */
+export function parseTenantId(value?: string): string | undefined {
+  if (!value) return undefined;
+  if (!/^\d+$/.test(value)) {
+    throw new BizError(ErrorCode.BAD_REQUEST, `非法 tenant_id：${value}（应为十进制数字字符串）`);
+  }
+  return value;
+}
 
 /** 白名单校验：未知过滤参数直接 400（反向验证：不静默忽略） */
 export function assertKnownFilterParams(query: Record<string, unknown>): void {
@@ -108,6 +158,8 @@ export class AuditController {
     @Query('family_id') familyId?: string,
     @Query('category') category?: string,
     @Query('event') event?: string,
+    @Query('result') result?: string,
+    @Query('tenant_id') tenantId?: string,
   ): Promise<PageResult<AuditLogRecord>> {
     assertKnownFilterParams(request.query as Record<string, unknown>);
     const scope = await resolveDataScopeFilter(user, this.org);
@@ -135,8 +187,22 @@ export class AuditController {
       requestId,
       familyId,
       category,
-      event,
+      events: parseAuditEvents(event),
+      // PRD-015：结果与租户过滤（与 dataScope 取交集，不放大可见范围）
+      result: parseAuditResult(result),
+      tenantId: parseTenantId(tenantId),
     });
+  }
+
+  /**
+   * 事件注册表（PRD-015 FR-15-01，ADR-0032 R1）
+   *
+   * 路由必须声明在 `:id` 之前，否则 `events` 会被当作 id 命中详情分支。
+   */
+  @Permissions(PERM.AUDIT_READ)
+  @Get('events')
+  listEvents(): { version: string; items: readonly AuditEventDefinition[] } {
+    return { version: auditRegistryVersion(), items: listAuditEvents() };
   }
 
   /**

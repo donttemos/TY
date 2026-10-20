@@ -94,6 +94,7 @@ interface DictItemRow extends Omit<BaseEntity, 'id'> {
 /** audit_logs 表行 */
 interface AuditLogRow {
   id: string;
+  tenantId: bigint;
   userId: string | null;
   module: string;
   action: string;
@@ -111,6 +112,12 @@ interface AuditLogRow {
   userAgent: string | null;
   traceId: string | null;
   createdAt: Date;
+  /** PRD-015 业务快照列 */
+  summary: string | null;
+  targetLabel: string | null;
+  actorLabel: string | null;
+  reason: string | null;
+  auditSource: string | null;
 }
 
 /** 用户-角色关联行 */
@@ -666,6 +673,7 @@ export class PrismaAdminStore implements AdminStore {
   private toAuditLog(row: AuditLogRow): AuditLogRecord {
     return {
       id: row.id,
+      tenantId: (row.tenantId ?? 0n).toString(),
       userId: row.userId,
       module: row.module,
       action: row.action as AuditAction,
@@ -683,6 +691,11 @@ export class PrismaAdminStore implements AdminStore {
       userAgent: row.userAgent,
       traceId: row.traceId,
       createdAt: row.createdAt,
+      summary: row.summary ?? null,
+      targetLabel: row.targetLabel ?? null,
+      actorLabel: row.actorLabel ?? null,
+      reason: row.reason ?? null,
+      auditSource: (row.auditSource ?? null) as AuditLogRecord['auditSource'],
     };
   }
 

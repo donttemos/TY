@@ -309,6 +309,8 @@ const DICT_SEED: DictSeed[] = [
       { label: '登出', value: 'logout', color: 'info' },
       { label: '导出', value: 'export', color: 'info' },
       { label: '授权', value: 'grant', color: 'primary' },
+      // M15：安全事件（replay / 越权拒绝）在记录层早已使用 action=security，字典此前缺项
+      { label: '安全事件', value: 'security', color: 'danger' },
     ],
   },
   {
@@ -322,6 +324,8 @@ const DICT_SEED: DictSeed[] = [
       { label: '租户', value: 'tenant', color: 'info' },
       { label: '队列', value: 'queue', color: 'info' },
       { label: '配置', value: 'config', color: 'danger' },
+      // M15：M13/M14 的 SaaS 审计全部 module=saas，字典此前缺项导致筛不到
+      { label: 'SaaS 运营', value: 'saas', color: 'success' },
     ],
   },
   {

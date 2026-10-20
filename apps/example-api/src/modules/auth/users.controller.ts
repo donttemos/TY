@@ -24,7 +24,6 @@ import { BizError, ErrorCode } from '@fw/core';
 import { parseSortQuery, type PageResult } from '@fw/db';
 import {
   AUTH_STORE,
-  Audit,
   AuthService,
   AuditService,
   CurrentUser,
@@ -181,12 +180,11 @@ export class UsersController {
     const updated = await this.store.updateUser(id, { status: body.status });
     const revoked = body.status === 0 ? await this.auth.revokeUserSessions(id, clientIp(request), operator) : null;
 
-    this.audit.record({
+    this.audit.recordEvent('user.status_change', {
       userId: operator,
-      module: 'user',
-      action: 'update',
       targetType: 'user',
       targetId: id,
+      targetLabel: before.username,
       before: { status: before.status },
       after: { status: updated.status, forcedLogout: revoked !== null },
       ip: clientIp(request),
@@ -209,7 +207,6 @@ export class UsersController {
 
   /** 新建用户（密码走后端强校验，不信任前端强度判断；账号唯一冲突 409） */
   @Permissions(PERM.USER_CREATE)
-  @Audit({ module: 'user', action: 'create', targetType: 'user' })
   @Post()
   async create(
     @Body() body: UserUpsertBody,
@@ -242,12 +239,11 @@ export class UsersController {
     if (body.roleIds?.length) await this.auth.assertRoleIds(body.roleIds);
     if (body.roleIds?.length) await this.store.replaceUserRoles(created.id, body.roleIds);
 
-    this.audit.record({
+    this.audit.recordEvent('user.create', {
       userId: operator,
-      module: 'user',
-      action: 'create',
       targetType: 'user',
       targetId: created.id,
+      targetLabel: created.username,
       after: { username: created.username, roleIds: body.roleIds ?? [] },
       ip: clientIp(request),
     });
@@ -262,7 +258,6 @@ export class UsersController {
    * 约束：username 不可改（账号是登录与审计锚点）；禁用（status=0）同时强制下线，与 setStatus 同语义。
    */
   @Permissions(PERM.USER_UPDATE)
-  @Audit({ module: 'user', action: 'update', targetType: 'user' })
   @Put(':id')
   async update(
     @Param('id') id: string,
@@ -302,12 +297,11 @@ export class UsersController {
     }
     const revoked = patch.status === 0 ? await this.auth.revokeUserSessions(id, clientIp(request), operator) : null;
 
-    this.audit.record({
+    this.audit.recordEvent('user.update', {
       userId: operator,
-      module: 'user',
-      action: 'update',
       targetType: 'user',
       targetId: id,
+      targetLabel: before.username,
       before: { nickname: before.nickname, status: before.status, roleIds: before.roleIds },
       after: { nickname: body.nickname ?? before.nickname, status: patch.status ?? before.status, roleIds: body.roleIds ?? before.roleIds, forcedLogout: revoked !== null },
       ip: clientIp(request),
@@ -320,7 +314,6 @@ export class UsersController {
 
   /** 软删除用户（内置管理员拒绝；不可删当前登录账号；删除同时强制下线） */
   @Permissions(PERM.USER_DELETE)
-  @Audit({ module: 'user', action: 'delete', targetType: 'user' })
   @Delete(':id')
   async remove(
     @Param('id') id: string,
@@ -339,12 +332,11 @@ export class UsersController {
 
     await this.admin.softDeleteUser(id);
     const revoked = await this.auth.revokeUserSessions(id, clientIp(request), operator);
-    this.audit.record({
+    this.audit.recordEvent('user.delete', {
       userId: operator,
-      module: 'user',
-      action: 'delete',
       targetType: 'user',
       targetId: id,
+      targetLabel: target.username,
       before: { username: target.username, status: target.status },
       after: { deleted: true, forcedLogout: revoked.revokedRefreshTokens > 0 },
       ip: clientIp(request),
@@ -357,7 +349,6 @@ export class UsersController {
    * 重置即失效该用户全部登录态——旧会话必须全部掉线，否则旧令牌仍可用。
    */
   @Permissions(PERM.USER_RESET_PASSWORD)
-  @Audit({ module: 'user', action: 'update', targetType: 'user' })
   @Post(':id/reset-password')
   async resetPassword(
     @Param('id') id: string,

@@ -151,6 +151,7 @@ interface DepartmentRow {
 /** audit_logs 行 */
 interface AuditLogRow {
   id: string;
+  tenantId: bigint;
   userId: string | null;
   module: string;
   action: string;
@@ -168,6 +169,12 @@ interface AuditLogRow {
   userAgent: string | null;
   traceId: string | null;
   createdAt: Date;
+  /** PRD-015 业务快照列（列可空；旧行读出为 null） */
+  summary: string | null;
+  targetLabel: string | null;
+  actorLabel: string | null;
+  reason: string | null;
+  auditSource: string | null;
 }
 
 /** 单页条数上限（与 @fw/db 对齐） */
@@ -569,6 +576,8 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
   async writeAuditLog(record: NewAuditLog): Promise<void> {
     await this.delegate('auditLog').create({
       data: {
+        // PRD-015 FR-15-06：租户列此前从未写入（恒默认 0），现按请求上下文落库
+        tenantId: toTenantId(record.tenantId),
         userId: record.userId,
         module: record.module,
         action: record.action,
@@ -586,6 +595,11 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
         userAgent: record.userAgent,
         traceId: record.traceId,
         createdAt: record.createdAt,
+        summary: record.summary ?? null,
+        targetLabel: record.targetLabel ?? null,
+        actorLabel: record.actorLabel ?? null,
+        reason: record.reason ?? null,
+        auditSource: record.auditSource ?? null,
       },
     });
   }
@@ -611,7 +625,11 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
     if (query.requestId) where.requestId = query.requestId;
     if (query.familyId) where.familyId = query.familyId;
     if (query.category) where.category = query.category;
-    if (query.event) where.event = query.event;
+    if (query.events && query.events.length > 0) where.event = { in: query.events };
+    else if (query.event) where.event = query.event;
+    // PRD-015 FR-15-05/06：结果与租户过滤（tenant_id 走既有 idx_audit_tenant）
+    if (query.result) where.result = query.result;
+    if (query.tenantId) where.tenantId = toTenantId(query.tenantId);
     if (query.from || query.to) {
       where.createdAt = {
         ...(query.from ? { gte: query.from } : {}),
@@ -746,6 +764,7 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
   private toAuditLog(row: AuditLogRow): AuditLogRecord {
     return {
       id: row.id,
+      tenantId: (row.tenantId ?? 0n).toString(),
       userId: row.userId,
       module: row.module,
       action: row.action as AuditAction,
@@ -763,11 +782,33 @@ export class PrismaAuthStore implements AuthStore, DataScopeOrgPort {
       userAgent: row.userAgent,
       traceId: row.traceId,
       createdAt: row.createdAt,
+      summary: row.summary ?? null,
+      targetLabel: row.targetLabel ?? null,
+      actorLabel: row.actorLabel ?? null,
+      reason: row.reason ?? null,
+      auditSource: (row.auditSource ?? null) as AuditLogRecord['auditSource'],
     };
   }
 
   /** 审计 JSON 字段：空值写 DB NULL，非空写 JSON 值 */
   private toJson(value: unknown): Prisma.InputJsonValue | typeof Prisma.DbNull {
     return value === null || value === undefined ? Prisma.DbNull : (value as Prisma.InputJsonValue);
+  }
+}
+
+/**
+ * 审计租户列归一（PRD-015 FR-15-06）
+ *
+ * 请求上下文的 tenantId 是十进制字符串；缺失或非法一律落 0（语义 = 未知/存量），
+ * 绝不因格式问题抛错——审计写入失败会丢取证行，代价远大于归属标为「未知」。
+ * @param value 上下文字符串
+ * @returns bigint 租户 ID
+ */
+function toTenantId(value: string | null | undefined): bigint {
+  if (!value || !/^\d+$/.test(value)) return 0n;
+  try {
+    return BigInt(value);
+  } catch {
+    return 0n;
   }
 }

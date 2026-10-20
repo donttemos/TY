@@ -8,7 +8,7 @@
  * @module example-api/auth
  */
 import { describe, expect, it } from 'vitest';
-import { AUDIT_FILTER_PARAMS, assertKnownFilterParams } from './audit.controller.js';
+import { AUDIT_FILTER_PARAMS, assertKnownFilterParams, parseAuditEvents, parseAuditResult, parseTenantId } from './audit.controller.js';
 import { BizError } from '@fw/core';
 
 describe('M12 W2 · 审计过滤参数白名单（OBS-14 反向验证）', () => {
@@ -49,5 +49,30 @@ describe('M12 W2 · 审计过滤参数白名单（OBS-14 反向验证）', () =>
       expect((error as Error).message).toContain('hack_field');
       expect((error as Error).message).toContain('trace_id');
     }
+  });
+
+  it('PRD-015 新增 result / tenant_id 在白名单内，且取值经过校验（非法即 400）', () => {
+    expect(() => assertKnownFilterParams({ result: 'denied', tenant_id: '1024' })).not.toThrow();
+    expect(AUDIT_FILTER_PARAMS).toContain('result');
+    expect(AUDIT_FILTER_PARAMS).toContain('tenant_id');
+
+    expect(parseAuditResult('denied')).toBe('denied');
+    expect(parseAuditResult('unknown')).toBe('unknown');
+    expect(parseAuditResult(undefined)).toBeUndefined();
+    expect(() => parseAuditResult('done')).toThrowError(/非法 result/);
+
+    expect(parseTenantId('1024')).toBe('1024');
+    expect(parseTenantId('0')).toBe('0');
+    expect(parseTenantId(undefined)).toBeUndefined();
+    expect(() => parseTenantId('tenant-a')).toThrowError(/非法 tenant_id/);
+  });
+
+  it('event 支持逗号分隔多值（风险筛选展开）：去空去重，上限 20', () => {
+    expect(parseAuditEvents('a.b.c,d.e.f')).toEqual(['a.b.c', 'd.e.f']);
+    expect(parseAuditEvents(' a.b.c , ,a.b.c ')).toEqual(['a.b.c']);
+    expect(parseAuditEvents(undefined)).toBeUndefined();
+    expect(parseAuditEvents(' , ')).toBeUndefined();
+    const many = Array.from({ length: 21 }, (_, index) => `e.v${index}`).join(',');
+    expect(() => parseAuditEvents(many)).toThrowError(/多值上限 20/);
   });
 });

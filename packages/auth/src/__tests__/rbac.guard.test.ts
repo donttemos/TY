@@ -16,7 +16,7 @@ import { JWT_ISSUER, META_IGNORE_TENANT, META_PERMISSIONS, META_PUBLIC, META_STR
 import { IgnoreTenant } from '../index.js';
 import { RbacGuard } from '../rbac.guard.js';
 import { ApiKeyStrategy, JwtStrategy, StrategyRegistry } from '../strategies.js';
-import { TEST_SECRET, createHarness, fakeContext, makeRequest } from './test-helpers.js';
+import { TEST_SECRET, createHarness, fakeContext, flushAsync, makeRequest } from './test-helpers.js';
 import type { GuardRequest } from '../rbac.guard.js';
 
 /** 打元数据（不用装饰器语法，避免依赖 esbuild 的装饰器转译） */
@@ -128,6 +128,37 @@ describe('RbacGuard', () => {
       http: 403,
     });
     expect(reached).toBe(false);
+  });
+
+  it('M15：越权拒绝落 authz.denied 审计，且按（用户+权限码）限流（ADR-0032 R6）', async () => {
+    const h = createHarness();
+    const seeded = await h.seed();
+    const access = await h.tokens.signAccess({ id: seeded.normal.id, username: 'alice', roles: ['user'] }, 'fam-denied');
+    const probe = (): void => undefined;
+    meta(probe, META_PERMISSIONS, [PERM.USER_READ]);
+    const guard = buildGuard(h);
+
+    // 同一用户 + 同一权限码连打 5 次：业务每次都必须拒绝，审计只留 3 条样本
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const request = makeRequest({ authorization: `Bearer ${access.token}` });
+      await expect(guard.canActivate(fakeContext(request, probe, controller))).rejects.toMatchObject({
+        code: ErrorCode.FORBIDDEN,
+      });
+    }
+    await flushAsync();
+
+    const rows = await h.audit.page({ page: 1, pageSize: 20, event: 'authz.denied' });
+    expect(rows.total).toBe(3);
+    expect(rows.items[0]).toMatchObject({
+      event: 'authz.denied',
+      category: 'security',
+      action: 'security',
+      result: 'denied',
+      targetType: 'endpoint',
+      userId: seeded.normal.id,
+      auditSource: 'domain',
+    });
+    expect(rows.items[0].reason).toBe(PERM.USER_READ);
   });
 
   it('@Public 路由无令牌放行；凭证异常时降级为匿名而非拒绝', async () => {

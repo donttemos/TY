@@ -12,13 +12,15 @@
  * @module example-api/auth
  */
 
-import { Controller, Get, Inject, Query } from '@nestjs/common';
-import { PERM, Permissions, CurrentUser, resolveDataScopeFilter, DATA_SCOPE_ORG, AuditArchiveService, type AuditAction, type AuditLogRecord, type DataScopeOrgPort, type RequestUser } from '@fw/auth';
+import { Controller, Get, Inject, Query, Req } from '@nestjs/common';
+import { PERM, Permissions, CurrentUser, resolveDataScopeFilter, DATA_SCOPE_ORG, AuditArchiveService, AuditService, type AuditAction, type AuditEventResult, type AuditLogRecord, type DataScopeOrgPort, type RequestUser } from '@fw/auth';
 import { parseSortQuery, type PageResult, type Sort } from '@fw/db';
-import { AUDIT_SORT_FIELDS, buildAuditCsv } from './audit.controller.js';
+import { AUDIT_SORT_FIELDS, assertKnownFilterParams, buildAuditCsv, describeExportFilters, parseAuditEvents, parseAuditResult, parseTenantId } from './audit.controller.js';
 import { JobRunnerRegistry } from '../jobs/job-runner.registry.js';
 import { JobCenterService, type JobView } from '../jobs/job-center.service.js';
 import type { JobArtifact, JobReporter } from '../jobs/job-center.port.js';
+import { clientIp } from './auth.controller.js';
+import type { Request } from 'express';
 
 /** 归档导出任务类型（JobRunnerRegistry 登记键） */
 export const AUDIT_ARCHIVE_EXPORT_TYPE = 'audit.archive.export';
@@ -40,6 +42,14 @@ interface ArchiveExportQuery {
   from?: Date;
   to?: Date;
   sort?: Sort<AuditLogRecord>;
+  /** M12 W2 契约字段 + PRD-015 结果/租户过滤（与在线导出同口径） */
+  traceId?: string;
+  requestId?: string;
+  familyId?: string;
+  category?: string;
+  events?: string[];
+  result?: AuditEventResult;
+  tenantId?: string;
 }
 
 /**
@@ -52,6 +62,7 @@ export class AuditArchiveController {
     @Inject(DATA_SCOPE_ORG) private readonly org: DataScopeOrgPort,
     private readonly jobs: JobCenterService,
     private readonly jobRegistry: JobRunnerRegistry,
+    private readonly audit: AuditService,
   ) {
     // M10 E-01：登记归档导出的执行体工厂——db/bullmq 驱动下跨实例重跑经此处按 params 重建
     this.jobRegistry.register(AUDIT_ARCHIVE_EXPORT_TYPE, (params) => (report) => this.executeExport(rebuildExportQuery(params), report));
@@ -62,6 +73,7 @@ export class AuditArchiveController {
   @Get()
   async list(
     @CurrentUser() user: RequestUser,
+    @Req() request: Request,
     @Query('page') page = '1',
     @Query('pageSize') pageSize = '20',
     @Query('user_id') userId?: string,
@@ -72,7 +84,16 @@ export class AuditArchiveController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('sort') sort?: string,
+    @Query('trace_id') traceId?: string,
+    @Query('request_id') requestId?: string,
+    @Query('family_id') familyId?: string,
+    @Query('category') category?: string,
+    @Query('event') event?: string,
+    @Query('result') result?: string,
+    @Query('tenant_id') tenantId?: string,
   ): Promise<PageResult<AuditLogRecord>> {
+    // 与在线列表同一条白名单：未知参数 400，不静默忽略（M12 W2 约定）
+    assertKnownFilterParams(request.query as Record<string, unknown>);
     const scope = await resolveDataScopeFilter(user, this.org);
     const parsedSort = parseSortQuery<AuditLogRecord>(sort, AUDIT_SORT_FIELDS);
     let scopeUserIds: string[] | undefined;
@@ -91,6 +112,14 @@ export class AuditArchiveController {
       from: from ? new Date(from) : undefined,
       to: to ? new Date(to) : undefined,
       sort: parsedSort,
+      // 归档不是越权后门：过滤只做收窄，归属人集合仍按 dataScope 收敛
+      traceId,
+      requestId,
+      familyId,
+      category,
+      event,
+      result: parseAuditResult(result),
+      tenantId: parseTenantId(tenantId),
     });
   }
 
@@ -103,6 +132,7 @@ export class AuditArchiveController {
   async export(
     @CurrentUser() user: RequestUser,
     @CurrentUser('id') operator: string,
+    @Req() request: Request,
     @Query('user_id') userId?: string,
     @Query('module') module?: string,
     @Query('action') action?: string,
@@ -111,7 +141,16 @@ export class AuditArchiveController {
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('sort') sort?: string,
+    @Query('trace_id') traceId?: string,
+    @Query('request_id') requestId?: string,
+    @Query('family_id') familyId?: string,
+    @Query('category') category?: string,
+    @Query('event') event?: string,
+    @Query('result') result?: string,
+    @Query('tenant_id') tenantId?: string,
   ): Promise<JobView> {
+    // 与列表同一条白名单（此前归档导出未校验，未知参数会被静默忽略）
+    assertKnownFilterParams(request.query as Record<string, unknown>);
     const scope = await resolveDataScopeFilter(user, this.org);
     const parsedSort = parseSortQuery<AuditLogRecord>(sort, AUDIT_SORT_FIELDS);
     let scopeUserIds: string[] | undefined;
@@ -128,16 +167,41 @@ export class AuditArchiveController {
       from: from ?? null,
       to: to ?? null,
       sort: parsedSort ?? null,
+      traceId: traceId ?? null,
+      requestId: requestId ?? null,
+      familyId: familyId ?? null,
+      category: category ?? null,
+      events: parseAuditEvents(event) ?? null,
+      result: parseAuditResult(result) ?? null,
+      tenantId: parseTenantId(tenantId) ?? null,
       maxRows: EXPORT_MAX_ROWS,
     };
 
-    return this.jobs.create({
+    const job = await this.jobs.create({
       type: AUDIT_ARCHIVE_EXPORT_TYPE,
       title: '审计归档导出',
       ownerId: operator,
       params,
       runner: (report) => this.executeExport(rebuildExportQuery(params), report),
     });
+    // 冷数据导出同样留痕（与在线导出一致：谁、按什么条件、导的是归档）
+    this.audit.recordEvent('audit.export', {
+      userId: operator,
+      targetId: job.id,
+      targetLabel: `归档 · ${describeExportFilters({
+        userId: params.userId as string | undefined,
+        module: params.module as string | undefined,
+        action: params.action as string | undefined,
+        event: Array.isArray(params.events) ? (params.events as string[]).join(',') : undefined,
+        result: params.result as string | undefined,
+        tenantId: params.tenantId as string | undefined,
+        from: params.from as string | undefined,
+        to: params.to as string | undefined,
+      })}`,
+      after: { filters: params, scope: 'archive', maxRows: EXPORT_MAX_ROWS },
+      ip: clientIp(request),
+    });
+    return job;
   }
 
   /** 执行归档导出（派发闭包与重跑工厂共用；逐页读归档表，CSV 与在线导出同构） */
@@ -183,5 +247,12 @@ function rebuildExportQuery(params: Record<string, unknown>): ArchiveExportQuery
     from: strOrNull(params.from) ? new Date(params.from as string) : undefined,
     to: strOrNull(params.to) ? new Date(params.to as string) : undefined,
     sort: (params.sort ?? undefined) as Sort<AuditLogRecord> | undefined,
+    traceId: strOrNull(params.traceId),
+    requestId: strOrNull(params.requestId),
+    familyId: strOrNull(params.familyId),
+    category: strOrNull(params.category),
+    events: Array.isArray(params.events) ? (params.events.filter((value) => typeof value === 'string') as string[]) : undefined,
+    result: strOrNull(params.result) as AuditEventResult | undefined,
+    tenantId: strOrNull(params.tenantId),
   };
 }

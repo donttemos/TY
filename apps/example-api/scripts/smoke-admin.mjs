@@ -667,11 +667,11 @@ async function main() {
   // 注意：response.text() 会剥掉 UTF-8 BOM（TextDecoder 标准行为），BOM 必须验字节
   const csvBytes = Buffer.from(await download.arrayBuffer());
   const csvText = csvBytes.toString('utf8');
-  // CSV 形状与 buildAuditCsv 一致：BOM(ef bb bf) + 15 列表头（W1 OBS-14 契约列扩展，与 mock 逐字节同构）+ CRLF 行尾
+  // CSV 形状与 buildAuditCsv 一致：BOM(ef bb bf) + 23 列表头（M12 十五列 + M15 八个业务列追加在末尾，与 mock 逐字节同构）+ CRLF 行尾
   check('GET /jobs/:id/download 取回 CSV 产物（BOM + 表头 + 至少一行，非统一信封）',
     download.status === 200
     && csvBytes[0] === 0xef && csvBytes[1] === 0xbb && csvBytes[2] === 0xbf
-    && csvText.includes('id,createdAt,userId,module,action,targetType,targetId,ip,traceId,requestId,familyId,category,event,before,after')
+    && csvText.includes('id,createdAt,userId,module,action,targetType,targetId,ip,traceId,requestId,familyId,category,event,before,after,eventName,summary,targetLabel,actorLabel,reason,result,auditSource,risk')
     && csvText.split('\r\n').length >= 2,
     `http=${download.status} bytes=${csvBytes.length}`);
 

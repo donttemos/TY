@@ -453,7 +453,17 @@ export class MemoryAuthStore implements AuthStore {
   // ---------- 审计 ----------
 
   async writeAuditLog(record: NewAuditLog): Promise<void> {
-    this.auditLogs.push({ ...record, id: this.nextId() });
+    // PRD-015：业务快照列写入侧可选，内存实现统一归一（与 Prisma 的可空列语义对齐）
+    this.auditLogs.push({
+      ...record,
+      tenantId: record.tenantId ?? '0',
+      summary: record.summary ?? null,
+      targetLabel: record.targetLabel ?? null,
+      actorLabel: record.actorLabel ?? null,
+      reason: record.reason ?? null,
+      auditSource: record.auditSource ?? null,
+      id: this.nextId(),
+    });
   }
 
   async pageAuditLogs(query: AuditQuery): Promise<PageResult<AuditLogRecord>> {
@@ -470,7 +480,14 @@ export class MemoryAuthStore implements AuthStore {
     if (query.requestId) rows = rows.filter((r) => r.requestId === query.requestId);
     if (query.familyId) rows = rows.filter((r) => r.familyId === query.familyId);
     if (query.category) rows = rows.filter((r) => r.category === query.category);
-    if (query.event) rows = rows.filter((r) => r.event === query.event);
+    if (query.events && query.events.length > 0) {
+      // 多值过滤（按风险展开的事件集合）；与单值 event 互斥，二者同时存在时取交集语义
+      const allowed = new Set(query.events);
+      rows = rows.filter((r) => (r.event ? allowed.has(r.event) : false));
+    } else if (query.event) rows = rows.filter((r) => r.event === query.event);
+    // PRD-015 FR-15-05/06：结果与租户过滤（与 Prisma 实现同语义；'0' = 未知/存量）
+    if (query.result) rows = rows.filter((r) => r.result === query.result);
+    if (query.tenantId) rows = rows.filter((r) => r.tenantId === query.tenantId);
     if (query.from) rows = rows.filter((r) => r.createdAt >= (query.from as Date));
     if (query.to) rows = rows.filter((r) => r.createdAt <= (query.to as Date));
     // 排序（BUG-15）：字段白名单已在 HTTP 层校验，这里只负责方向；

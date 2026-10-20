@@ -19,6 +19,7 @@
  * @modified 2026-10-15 donttemo BUG-15 增量 + E-07：roles/dict 排序白名单断言（合法排序 + 未知字段
  *   400/1001）与 GET /dict/audit_module 四项断言
  * @modified 2026-10-15 donttemo M9/PRD-009：① audit_module 断言更新为六项（seed 与 mock 同批补 queue/config）；
+ * @modified 2026-10-20 donttemo M15：audit_module 再补 saas（七项）——字典与真实写入值同源，范围断言三处同改；
  *   ② 新增参数配置段——GET /configs 白名单 12 键、PUT 合法值生效（source 翻转 + 版本号递增 + 审计落盘）、
  *   boot 键 400/5001、未知键 404/5003、非法值 400/5002（旧值保持 + 失败审计 + 原因回显）、同值写不产生审计、
  *   alice 无 system:config:read/write → 3002 双断言
@@ -319,6 +320,28 @@ async function main() {
     const auditList = audit.body?.data ?? [];
     check('审计日志可按模块查询', audit.body?.code === 0 && Array.isArray(auditList?.items), `${auditList?.total ?? 0} 条 user 模块`);
     check('审计记录含变更前后值', auditList.items?.some((a) => a.beforeValue !== null || a.afterValue !== null));
+
+    // M15：事件注册表下发（前端运营视图的唯一语义来源）
+    const auditEvents = await api('GET', '/audit-logs/events', { token: newAccess });
+    const eventItems = auditEvents.body?.data?.items ?? [];
+    check('GET /audit-logs/events 返回注册表 + version',
+      auditEvents.body?.code === 0 && typeof auditEvents.body?.data?.version === 'string' && eventItems.length >= 12,
+      `code=${auditEvents.body?.code} items=${eventItems.length}`);
+
+    // M15：结果筛选（seed 每 7 条一条 denied）
+    const auditDenied = await api('GET', '/audit-logs?result=denied&page=1&pageSize=50', { token: newAccess });
+    const deniedItems = auditDenied.body?.data?.items ?? [];
+    check('审计按 result=denied 过滤且结果一致',
+      auditDenied.body?.code === 0 && deniedItems.length > 0 && deniedItems.every((a) => a.result === 'denied'),
+      `items=${deniedItems.length}`);
+
+    // M15：事件多值过滤（风险筛选的前端展开形态）
+    const auditMulti = await api('GET', '/audit-logs?event=user.status_change,saas.lifecycle.freeze&page=1&pageSize=50', { token: newAccess });
+    const multiItems = auditMulti.body?.data?.items ?? [];
+    check('审计按 event 多值过滤（逗号分隔）',
+      auditMulti.body?.code === 0 && multiItems.length > 0
+        && multiItems.every((a) => ['user.status_change', 'saas.lifecycle.freeze'].includes(a.event)),
+      `items=${multiItems.length}`);
     // 排序（BUG-15）：mock 必须与后端同语义，白名单外字段 / 非法方向一律 400/1001
     const auditSorted = await api('GET', '/audit-logs?page=1&pageSize=10&sort=created_at:asc', { token: newAccess });
     const auditTimes = (auditSorted.body?.data?.items ?? []).map((a) => a.createdAt);
@@ -502,7 +525,10 @@ async function main() {
     const csvDownloadText = csvDownloadBytes.toString('utf8');
     const csvHasBom = csvDownloadBytes[0] === 0xef && csvDownloadBytes[1] === 0xbb && csvDownloadBytes[2] === 0xbf;
     // M12 W2 OBS-14：CSV 列扩展（与 example-api buildAuditCsv / mock 产物逐字节同构）
-    const csvHasHeader = csvDownloadText.includes('id,createdAt,userId,module,action,targetType,targetId,ip,traceId,requestId,familyId,category,event,before,after');
+    // M15 B4：15 列位置不变 + 8 个业务列追加在末尾（与后端 buildAuditCsv 逐字节同构）
+    const csvHasHeader = csvDownloadText.includes(
+      'id,createdAt,userId,module,action,targetType,targetId,ip,traceId,requestId,familyId,category,event,before,after,eventName,summary,targetLabel,actorLabel,reason,result,auditSource,risk',
+    );
     const csvLines = csvDownloadText.split('\r\n').length;
     check('GET /jobs/:id/download 取回 CSV（BOM + 表头 + 行数据，非统一信封）',
       csvDownload.status === 200 && csvHasBom && csvHasHeader && csvLines >= 2,
@@ -619,8 +645,8 @@ async function main() {
 
     const amDict = await api('GET', '/dict/audit_module', { token: newAccess });
     const amValues = (amDict.body?.data ?? []).map((i) => i.value).sort();
-    check('GET /dict/audit_module 返回 auth/config/queue/role/tenant/user 六项（E-07 + M9 补 config/queue）',
-      amDict.body?.code === 0 && JSON.stringify(amValues) === JSON.stringify(['auth', 'config', 'queue', 'role', 'tenant', 'user']),
+    check('GET /dict/audit_module 返回 auth/config/queue/role/saas/tenant/user 七项（E-07 + M9 + M15 补 saas）',
+      amDict.body?.code === 0 && JSON.stringify(amValues) === JSON.stringify(['auth', 'config', 'queue', 'role', 'saas', 'tenant', 'user']),
       `values=${amValues.join(',')}`);
 
     // ---------- M9 参数配置（PRD-009 FR-08：同白名单 / 同错误码 / 同审计可见性） ----------

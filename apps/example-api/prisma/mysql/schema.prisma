@@ -226,6 +226,12 @@ model AuditLog {
   userAgent   String?  @map("user_agent")
   traceId     String?  @map("trace_id")
   createdAt   DateTime @default(now()) @map("created_at")
+  /// PRD-015（ADR-0032）：业务快照——会随业务数据漂移的事实，事件发生时固化
+  summary     String?
+  targetLabel String?  @map("target_label")
+  actorLabel  String?  @map("actor_label")
+  reason      String?
+  auditSource String?  @map("audit_source")
 
   @@index([tenantId], map: "idx_audit_tenant")
   @@index([userId], map: "idx_audit_user")
@@ -237,6 +243,7 @@ model AuditLog {
   @@index([requestId], map: "idx_audit_request")
   @@index([category, createdAt], map: "idx_audit_category_created")
   @@index([createdAt], map: "idx_audit_created")
+  @@index([result, createdAt], map: "idx_audit_result_created")
   @@map("audit_logs")
 }
 
@@ -262,6 +269,12 @@ model AuditLogArchive {
   userAgent   String?  @map("user_agent")
   traceId     String?  @map("trace_id")
   createdAt   DateTime @map("created_at")
+  /// PRD-015（ADR-0032 R8）：归档表与在线表同构——快照列必须同步，否则冷数据不可读
+  summary     String?
+  targetLabel String?  @map("target_label")
+  actorLabel  String?  @map("actor_label")
+  reason      String?
+  auditSource String?  @map("audit_source")
   archivedAt  DateTime @default(now()) @map("archived_at")
 
   @@index([userId], map: "idx_audit_archive_user")
@@ -271,6 +284,7 @@ model AuditLogArchive {
   @@index([requestId], map: "idx_audit_archive_request")
   @@index([category, archivedAt], map: "idx_audit_archive_category")
   @@index([createdAt], map: "idx_audit_archive_created")
+  @@index([result, createdAt], map: "idx_audit_archive_result_created")
   @@map("audit_log_archives")
 }
 

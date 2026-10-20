@@ -60,6 +60,7 @@ import type {
   MockUser,
 } from './db';
 import { db as defaultDb } from './db';
+import { MOCK_AUDIT_EVENTS } from './audit-events';
 
 /** 统一响应信封（与 @fw/core ResponseInterceptor 一致） */
 interface Envelope<T> {
@@ -535,8 +536,11 @@ const MOCK_AUDIT_SORT_FIELDS: Record<string, string> = {
 const MOCK_AUDIT_FILTER_PARAMS = [
   'page', 'pageSize', 'user_id', 'module', 'action', 'target_type', 'target_id', 'from', 'to', 'sort',
   'trace_id', 'request_id', 'family_id', 'category', 'event',
+  'result', 'tenant_id', // PRD-015：结果与租户维度（与 example-api 白名单逐项一致）
   'simulate', // 失败演示路径（与 example-api 的 AUDIT_FILTER_PARAMS 逐项一致）
 ];
+
+
 
 /** 白名单校验：返回首个未知过滤参数的 400 文案；全部合法返回 null（反向验证：不静默忽略） */
 function unknownMockAuditFilterParam(query: URLSearchParams): string | null {
@@ -549,10 +553,15 @@ function unknownMockAuditFilterParam(query: URLSearchParams): string | null {
 }
 
 /** M12 W2 OBS-14：契约字段精确过滤（列表与导出共用） */
-function applyMockAuditContractFilters<T extends { traceId?: string | null; requestId?: string | null; familyId?: string | null; category?: string | null; event?: string | null; targetType?: string | null; targetId?: string | null }>(
+function applyMockAuditContractFilters<T extends { traceId?: string | null; requestId?: string | null; familyId?: string | null; category?: string | null; event?: string | null; targetType?: string | null; targetId?: string | null; result?: string | null; tenantId?: string }>(
   rows: T[],
   query: URLSearchParams,
 ): T[] {
+  const result = query.get('result');
+  if (result) rows = rows.filter((a) => a.result === result);
+  const tenantId = query.get('tenant_id');
+  // 存量行 tenantId 未填 → 语义为 '0'（未知/存量），与后端 toTenantId 归一一致
+  if (tenantId) rows = rows.filter((a) => (a.tenantId ?? '0') === tenantId);
   const targetType = query.get('target_type');
   if (targetType) rows = rows.filter((a) => a.targetType === targetType);
   const targetId = query.get('target_id');
@@ -566,7 +575,11 @@ function applyMockAuditContractFilters<T extends { traceId?: string | null; requ
   const category = query.get('category');
   if (category) rows = rows.filter((a) => a.category === category);
   const event = query.get('event');
-  if (event) rows = rows.filter((a) => a.event === event);
+  if (event) {
+    // M15 FR-15-16：event 支持逗号分隔多值（风险筛选按注册表展开），与后端 parseAuditEvents 同语义
+    const codes = new Set(event.split(',').map((item) => item.trim()).filter((item) => item.length > 0));
+    rows = rows.filter((a) => (a.event ? codes.has(a.event) : false));
+  }
   return rows;
 }
 
@@ -1677,7 +1690,16 @@ export async function handleMockRequest(
     // 产物快照在派发时固化（与后端「导出时的筛选结果」一致，不随后续新日志漂移）。
     // CSV 形状与 example-api 的 buildAuditCsv **逐字节同构**：同表头、同 BOM、同 CRLF、
     // 同引号转义——mock 与真实后端零差异，切真实 API 后下载产物行为不变。
-    const header = ['id', 'createdAt', 'userId', 'module', 'action', 'targetType', 'targetId', 'ip', 'traceId', 'requestId', 'familyId', 'category', 'event', 'before', 'after'];
+    // M15 B4：与 example-api buildAuditCsv 逐字节同构——15 列位置不变，业务列追加在末尾
+    const header = [
+      'id', 'createdAt', 'userId', 'module', 'action', 'targetType', 'targetId', 'ip', 'traceId',
+      'requestId', 'familyId', 'category', 'event', 'before', 'after',
+      'eventName', 'summary', 'targetLabel', 'actorLabel', 'reason', 'result', 'auditSource', 'risk',
+    ];
+    // 生成物是 as const（字面量联合），此处按业务键放宽为 string —— 未登记事件码也要能查到「无定义」
+    const eventMeta = new Map<string, { name: string; risk: string }>(
+      MOCK_AUDIT_EVENTS.map((item) => [item.code as string, { name: item.name, risk: item.risk }]),
+    );
     const csvCell = (value: unknown): string => {
       if (value === null || value === undefined) return '""';
       const text = typeof value === 'string' ? value : JSON.stringify(value) ?? String(value);
@@ -1700,6 +1722,15 @@ export async function handleMockRequest(
         csvCell(a.event),
         csvCell(a.beforeValue),
         csvCell(a.afterValue),
+        // 注册表可解释列（mock 只用演示子集；未登记码留空，与后端同语义）
+        csvCell(eventMeta.get(a.event ?? '')?.name ?? null),
+        csvCell(a.summary ?? null),
+        csvCell(a.targetLabel ?? null),
+        csvCell(a.actorLabel ?? null),
+        csvCell(a.reason ?? null),
+        csvCell(a.result ?? null),
+        csvCell(a.auditSource ?? null),
+        csvCell(eventMeta.get(a.event ?? '')?.risk ?? null),
       ].join(','),
     );
     const job = dispatchJob(database, {
@@ -1713,6 +1744,16 @@ export async function handleMockRequest(
       traceId,
     });
     send(res, CODE.OK, 'ok', jobView(job), traceId);
+    return { handled: true };
+  }
+  // 审计事件注册表（PRD-015 FR-15-01）：路由必须在 auditMatch 之前，否则 'events' 会被当成 id
+  if (path === '/audit-logs/events' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'audit:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    send(res, CODE.OK, 'ok', { version: 'mock-1', items: MOCK_AUDIT_EVENTS }, traceId);
     return { handled: true };
   }
   const auditMatch = /^\/audit-logs\/([\w-]+)$/.exec(path);

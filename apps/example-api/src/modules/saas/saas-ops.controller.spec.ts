@@ -14,7 +14,7 @@
  * @module example-api/saas
  */
 import 'reflect-metadata';
-import { ErrorCode } from '@fw/core';
+import { BizError, ErrorCode } from '@fw/core';
 import { describe, expect, it, vi } from 'vitest';
 import { SaasOpsController } from './saas-ops.controller.js';
 import type { SaasStore, SubscriptionView } from '@fw/saas';
@@ -47,7 +47,7 @@ function makePlans(overrides: Record<string, unknown> = {}) {
   };
 }
 
-const AUDIT = { record: vi.fn() };
+const AUDIT = { record: vi.fn(), recordEvent: vi.fn() };
 
 /** 通用订阅行（列表/历史用例共享） */
 const sub = { id: 'sub-1', tenantId: 't1', planId: 'plan-1', planVersionId: 'pv-1', status: 'active', effectiveAt: new Date(), expireAt: null, closedAt: null, reason: null } as SubscriptionView;
@@ -88,7 +88,10 @@ describe('SaasOpsController POST /saas/plans（M14 FR-14-05）', () => {
     const r = await makeController(makeStore(), plans).createPlan({ code: ' pro ', name: ' 专业版 ', description: null });
     expect(plans.createPlan).toHaveBeenCalledWith({ code: 'pro', name: '专业版', description: null });
     expect(r).toMatchObject({ id: 'plan-1', code: 'pro' });
-    expect(AUDIT.record).toHaveBeenCalledWith(expect.objectContaining({ event: 'saas.plan.create', targetType: 'plan', after: { code: 'pro', name: '专业版', description: null } }));
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.plan.create',
+      expect.objectContaining({ targetLabel: '专业版', after: { code: 'pro', name: '专业版', description: null } }),
+    );
   });
 });
 
@@ -108,7 +111,10 @@ describe('SaasOpsController POST /saas/plans/:id/versions（M14 FR-14-06）', ()
     });
     expect(plans.publishVersion).toHaveBeenCalledWith('plan-1', { remark: 'v3', quotas: [{ quotaKey: 'api_calls', limitValue: 500n, execution: 'hard' }] });
     expect(r).toMatchObject({ version: 3, quotas: [{ quotaKey: 'api_calls', limitValue: '500', execution: 'hard' }] });
-    expect(AUDIT.record).toHaveBeenCalledWith(expect.objectContaining({ event: 'saas.plan.publish', after: { planId: 'plan-1', version: 3, remark: 'v3', quotaCount: 1 } }));
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.plan.publish',
+      expect.objectContaining({ after: { planId: 'plan-1', version: 3, remark: 'v3', quotaCount: 1 } }),
+    );
   });
 
   it('limitValue 非法（负数/非数）→ 1001', async () => {
@@ -273,5 +279,56 @@ describe('SaasOpsController GET /saas/usage/overview（M14 FR-14-14）', () => {
     expect(r.expiringSubscriptions.map((x) => x.subscriptionId)).toEqual(['s1']);
     expect(r.tenantCounts).toMatchObject({ active: 3, frozen: 1, terminated: 0 });
     expect(r.recentTransitions[0].action).toBe('freeze');
+  });
+});
+
+describe('SaasOpsController 生命周期事件（M15 FR-15-09）', () => {
+  it('迁移成功：落独立事件码（不再用模板拼码）', async () => {
+    const lifecycle = { transition: vi.fn(async () => ({ from: 'active', to: 'frozen', alreadyApplied: false })) };
+    const controller = new SaasOpsController(
+      makeStore(),
+      makePlans() as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      lifecycle as never,
+      AUDIT as never,
+    );
+    await controller.transition('t1', { action: 'freeze', reason: '欠费' } as never, undefined as never);
+
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.lifecycle.freeze',
+      expect.objectContaining({ targetId: 't1', reason: '欠费', after: expect.objectContaining({ from: 'active', to: 'frozen' }) }),
+    );
+  });
+
+  it('非法迁移（4030）：先记 denial 再原样抛出，不改变错误语义', async () => {
+    const lifecycle = {
+      transition: vi.fn(async () => {
+        throw new BizError(ErrorCode.LIFECYCLE_TRANSITION_INVALID, '非法迁移：active -> resume');
+      }),
+    };
+    const controller = new SaasOpsController(
+      makeStore(),
+      makePlans() as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      lifecycle as never,
+      AUDIT as never,
+    );
+
+    await expect(controller.transition('t1', { action: 'resume' } as never, undefined as never)).rejects.toMatchObject({
+      code: ErrorCode.LIFECYCLE_TRANSITION_INVALID,
+    });
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.lifecycle.invalid',
+      expect.objectContaining({
+        targetId: 't1',
+        result: 'denied',
+        reason: '非法迁移：active -> resume',
+        after: expect.objectContaining({ action: 'resume', code: ErrorCode.LIFECYCLE_TRANSITION_INVALID }),
+      }),
+    );
   });
 });

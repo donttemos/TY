@@ -22,12 +22,12 @@ export class ConfigAuditBridge implements ConfigAuditPort {
 
   /** @inheritdoc */
   async recordChange(change: ConfigChangeRecord): Promise<void> {
-    await this.audit.recordSync({
+    await this.audit.recordEventSync('config.change', {
       userId: change.operatorId ?? null,
-      module: 'config',
-      action: 'update',
       targetType: 'config',
       targetId: change.key,
+      targetLabel: change.key,
+      reason: change.reason ?? null,
       before: { value: change.oldValue },
       after: {
         value: change.newValue,

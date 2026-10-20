@@ -238,12 +238,19 @@
 
 | 方法 | 路径 | 权限点 | 说明 |
 |---|---|---|---|
-| GET | `/audit-logs` | `audit:read` | 分页查询，支持 `user_id / module / action / target / 时间区间` 与 M12 W2 契约字段 `trace_id / request_id / family_id / category / event`（精确过滤、可组合）；**过滤参数白名单外字段一律 400**（不静默忽略，OBS-14）。排序见 §1.5 |
+| GET | `/audit-logs` | `audit:read` | 分页查询，支持 `user_id / module / action / target / 时间区间`、M12 W2 契约字段 `trace_id / request_id / family_id / category / event`，以及 M15 新增 `result`（四态，非法值 400）/ `tenant_id`（十进制串，`0`=未知/存量，与 dataScope 取交集）/ `event` 多值（逗号分隔，≤20，用于「按风险筛选」由注册表展开）（精确过滤、可组合）；**过滤参数白名单外字段一律 400**（不静默忽略，OBS-14）。响应新增业务快照字段 `tenantId / summary / targetLabel / actorLabel / reason / auditSource`（additive）。排序见 §1.5 |
+| GET | `/audit-logs/events` | `audit:read` | **事件注册表**（M15/ADR-0032 R1）：返回 `{ version, items }`，`items[]` 含 `code / name / description / category / risk / reviewRequired / guidance / targetType / summaryTemplate / changeFields / deprecated`；`version` 为注册表指纹供前端缓存失效。只读、服务端单源，前端不得另建翻译表。**路由声明必须在 `/audit-logs/:id` 之前**（否则 `events` 会被当作 id） |
 | GET | `/audit-logs/:id` | `audit:read` | 详情，含变更前后值（脱敏） |
-| GET | `/audit-logs/export` | `audit:export` | 异步导出：派发到任务中心并**立即返回 `jobId`**（不等导出完成），进度 / 下载 / 重跑走 §3.11 的 `/jobs/:id/*`；同样受 `dataScope` 收敛（`self` 范围只导自己的记录）；过滤面与列表同源（含 `trace_id / request_id / family_id / category / event`）。CSV 产物与 mock 逐字节同构（UTF-8 BOM + CRLF + 引号转义；M12 W2 列序：`...,traceId,requestId,familyId,category,event,before,after`） |
-| GET | `/audit-archives` | `audit:read` | 归档审计分页查询（M10 E-10）：参数与 `/audit-logs` 同形（`user_id / module / action / target / 时间区间 / sort` 白名单同源）；数据范围同样收敛——归档不是越权后门 |
+| GET | `/audit-logs/export` | `audit:export` | 异步导出：派发到任务中心并**立即返回 `jobId`**（不等导出完成），进度 / 下载 / 重跑走 §3.11 的 `/jobs/:id/*`；同样受 `dataScope` 收敛（`self` 范围只导自己的记录）；过滤面与列表同源（含 `trace_id / request_id / family_id / category / event`）。CSV 产物与 mock 逐字节同构（UTF-8 BOM + CRLF + 引号转义）；列序为 **M12 十五列位置不变 + M15 八个业务列追加在末尾**：`id,createdAt,userId,module,action,targetType,targetId,ip,traceId,requestId,familyId,category,event,before,after,eventName,summary,targetLabel,actorLabel,reason,result,auditSource,risk`（`eventName` / `risk` 由注册表现算，未登记事件留空，不猜） |
+| GET | `/audit-archives` | `audit:read` | 归档审计分页查询（M10 E-10）：参数与 `/audit-logs` 同形（`user_id / module / action / target / 时间区间 / sort` 白名单同源，M12 契约字段与 M15 `result / tenant_id` 一并对齐——此前仅支持前四类，与「同形」声明不符，M15 修正）；数据范围同样收敛——归档不是越权后门 |
 | GET | `/audit-archives/export` | `audit:export` | 归档审计异步导出（M10 E-10）：与 `/audit-logs/export` 同机制（任务中心类型 `audit.archive.export`，返回 `jobId`），CSV 产物形态逐字节同构；数据范围在派发时收敛固化进 params |
 
+> M15（PRD-015，ADR-0032）起审计记录追加**业务快照**（`summary` / `targetLabel` / `actorLabel` / `reason` /
+> `auditSource` / `tenantId`），并由 `GET /audit-logs/events` 下发事件语义。分层约定：快照落库冻结、
+> 解释元数据（名称/风险/指引/字段中文名）不进库；`result` 新增第四态 `unknown`；`auditSource=interceptor`
+> 仅表示「HTTP 成功返回」，不作为业务完成证据。CSV 业务列在 M15 B4 以**追加**方式写入末尾（既有列序不变），
+> 当前版本导出列仍是 M12 形态。
+>
 > M12 W1（PRD-012 OBS-06/OBS-07，ADR-0025）起审计记录携带**统一事件契约**字段：`category` / `event` /
 > `result` / `family_id` / `jti` / `request_id`（全可空，缺省 NULL——形状不漂移）。安全事件（replay 族撤销）
 > 按 `action=security + category=security + event=refresh.replay_detected + result=denied` 落库，且

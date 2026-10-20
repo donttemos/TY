@@ -231,7 +231,7 @@ export interface AuditLogRecord {
   category: string | null;
   /** 点分事件名（如 auth.login / refresh.replay_detected） */
   event: string | null;
-  /** 事件结果（success / denied / failed） */
+  /** 事件结果（success / denied / failed / unknown，PRD-015 FR-15-05 四态） */
   result: string | null;
   /** 令牌家族 ID（安全事件关联键） */
   familyId: string | null;
@@ -247,6 +247,18 @@ export interface AuditLogRecord {
   userAgent: string | null;
   traceId: string | null;
   createdAt: string;
+  /** 所属租户（PRD-015 FR-15-06；存量行为 '0'，语义「未知/存量」） */
+  tenantId: string;
+  /** 业务摘要快照（PRD-015 FR-15-04；存量/拦截器行为 null） */
+  summary: string | null;
+  /** 目标对象名称快照 */
+  targetLabel: string | null;
+  /** 操作人名称快照 */
+  actorLabel: string | null;
+  /** 操作原因 */
+  reason: string | null;
+  /** 记录来源（domain=领域记录 / interceptor=拦截器兜底 / null=未标注） */
+  auditSource: 'domain' | 'interceptor' | null;
 }
 
 /** 审计查询参数 */
@@ -270,8 +282,33 @@ export interface AuditQuery {
   family_id?: string;
   /** 低基数大类过滤（M12 W2 OBS-14） */
   category?: string;
-  /** 点分事件名精确过滤（M12 W2 OBS-14） */
+  /** 点分事件名精确过滤（M12 W2 OBS-14）；M15 起支持逗号分隔多值（≤20） */
   event?: string;
+  /** 结果过滤（PRD-015：success / denied / failed / unknown） */
+  result?: string;
+  /** 租户过滤（PRD-015；'0' = 未知/存量） */
+  tenant_id?: string;
+}
+
+/** 审计事件定义（PRD-015 FR-15-01；`GET /audit-logs/events` 下发） */
+export interface AuditEventDefinition {
+  code: string;
+  name: string;
+  description?: string;
+  category: string;
+  risk: 'low' | 'notice' | 'high' | 'critical';
+  reviewRequired?: boolean;
+  guidance?: string;
+  targetType?: string;
+  summaryTemplate?: string;
+  changeFields?: Record<string, { label: string; valueLabels?: Record<string, string> }>;
+  deprecated?: { since: string; replacedBy?: string };
+}
+
+/** 事件注册表响应（含 version 供前端缓存失效） */
+export interface AuditEventRegistry {
+  version: string;
+  items: AuditEventDefinition[];
 }
 
 /** 登录设备 / 会话 */

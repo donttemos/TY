@@ -19,18 +19,25 @@ import { Controller, Get, Inject, Param, Query, Req } from '@nestjs/common';
 import { BizError, ErrorCode } from '@fw/core';
 import { parseSortQuery, type PageResult, type Sort } from '@fw/db';
 import {
+  AuditService,
   AuthService,
   CurrentUser,
   DATA_SCOPE_ORG,
   PERM,
   Permissions,
+  auditRegistryVersion,
+  findAuditEvent,
+  listAuditEvents,
   resolveDataScopeFilter,
   type AuditAction,
+  type AuditEventDefinition,
+  type AuditEventResult,
   type AuditLogRecord,
   type DataScopeOrgPort,
   type RequestUser,
 } from '@fw/auth';
 import { ADMIN_STORE } from '../admin/admin-store.js';
+import { clientIp } from './auth.controller.js';
 import type { AdminStore } from '../admin/admin-store.js';
 import { JobRunnerRegistry } from '../jobs/job-runner.registry.js';
 import { JobCenterService, type JobView } from '../jobs/job-center.service.js';
@@ -73,9 +80,61 @@ export const AUDIT_FILTER_PARAMS = [
   'family_id',
   'category',
   'event',
+  // PRD-015（M15）：结果与租户维度过滤
+  'result',
+  'tenant_id',
   // mock 失败演示路径专用透传参数（simulate=fail；smoke-mock 用，后端忽略该值）
   'simulate',
 ] as const;
+
+/** 结果枚举（PRD-015 FR-15-05 四态） */
+const AUDIT_RESULTS: readonly AuditEventResult[] = ['success', 'denied', 'failed', 'unknown'];
+
+/**
+ * 解析结果过滤参数
+ *
+ * 非法取值直接 400：静默忽略会让调用方误以为「过滤后就是这些」，
+ * 这与 M12 W2「白名单外字段一律 400」的排障原则同源。
+ * @param value 查询参数
+ */
+export function parseAuditResult(value?: string): AuditEventResult | undefined {
+  if (!value) return undefined;
+  if (!(AUDIT_RESULTS as readonly string[]).includes(value)) {
+    throw new BizError(ErrorCode.BAD_REQUEST, `非法 result：${value}（允许：${AUDIT_RESULTS.join(' / ')}）`);
+  }
+  return value as AuditEventResult;
+}
+
+/** 事件多值过滤上限（防止把 URL 当查询语言） */
+const AUDIT_EVENTS_MAX = 20;
+
+/**
+ * 解析事件过滤参数：`event=a,b,c`（逗号分隔，去空去重，上限 20）
+ *
+ * 多值只为支撑「按风险筛选」——风险等级不落库，由注册表把风险展开成事件集合（ADR-0032 R9）。
+ * @param value 查询参数
+ */
+export function parseAuditEvents(value?: string): string[] | undefined {
+  if (!value) return undefined;
+  const codes = [...new Set(value.split(',').map((item) => item.trim()).filter((item) => item.length > 0))];
+  if (codes.length === 0) return undefined;
+  if (codes.length > AUDIT_EVENTS_MAX) {
+    throw new BizError(ErrorCode.BAD_REQUEST, `event 多值上限 ${AUDIT_EVENTS_MAX}，当前 ${codes.length}`);
+  }
+  return codes;
+}
+
+/**
+ * 解析租户过滤参数（十进制字符串；'0' 表示未知/存量）
+ * @param value 查询参数
+ */
+export function parseTenantId(value?: string): string | undefined {
+  if (!value) return undefined;
+  if (!/^\d+$/.test(value)) {
+    throw new BizError(ErrorCode.BAD_REQUEST, `非法 tenant_id：${value}（应为十进制数字字符串）`);
+  }
+  return value;
+}
 
 /** 白名单校验：未知过滤参数直接 400（反向验证：不静默忽略） */
 export function assertKnownFilterParams(query: Record<string, unknown>): void {
@@ -97,6 +156,7 @@ export class AuditController {
     @Inject(ADMIN_STORE) private readonly admin: AdminStore,
     private readonly jobs: JobCenterService,
     private readonly jobRegistry: JobRunnerRegistry,
+    private readonly audit: AuditService,
   ) {
     // M10 E-01：登记审计导出的执行体工厂——db/bullmq 驱动下跨实例重跑经此处按 params 重建
     // runner（闭包不落盘）；memory 驱动下派发仍走闭包，此登记不参与执行路径
@@ -124,6 +184,8 @@ export class AuditController {
     @Query('family_id') familyId?: string,
     @Query('category') category?: string,
     @Query('event') event?: string,
+    @Query('result') result?: string,
+    @Query('tenant_id') tenantId?: string,
   ): Promise<PageResult<AuditLogRecord>> {
     // M12 W2 OBS-14：未知过滤参数 400（不静默忽略）
     assertKnownFilterParams(request.query as Record<string, unknown>);
@@ -152,7 +214,11 @@ export class AuditController {
       requestId,
       familyId,
       category,
-      event,
+      events: parseAuditEvents(event),
+      // PRD-015 FR-15-05/06：结果与租户过滤（tenant_id 与 dataScope 取交集——
+      // 归属人集合仍在上面收敛，租户过滤只做进一步收窄，不放大可见范围）
+      result: parseAuditResult(result),
+      tenantId: parseTenantId(tenantId),
     });
   }
 
@@ -187,6 +253,8 @@ export class AuditController {
     @Query('family_id') familyId?: string,
     @Query('category') category?: string,
     @Query('event') event?: string,
+    @Query('result') result?: string,
+    @Query('tenant_id') tenantId?: string,
   ): Promise<JobView> {
     assertKnownFilterParams(request.query as Record<string, unknown>);
     const scope = await resolveDataScopeFilter(user, this.org);
@@ -211,17 +279,37 @@ export class AuditController {
       requestId: requestId ?? null,
       familyId: familyId ?? null,
       category: category ?? null,
-      event: event ?? null,
+      events: parseAuditEvents(event) ?? null,
+      result: parseAuditResult(result) ?? null,
+      tenantId: parseTenantId(tenantId) ?? null,
       maxRows: EXPORT_MAX_ROWS,
     };
 
-    return this.jobs.create({
+    const job = await this.jobs.create({
       type: 'audit.export',
       title: '审计日志导出',
       ownerId: operator,
       params,
       runner: (report) => this.executeExport(rebuildExportQuery(params), report),
     });
+    // PRD-015 FR-15-11：导出行为本身也是敏感操作（谁、按什么条件、导了什么），必须留痕
+    this.audit.recordEvent('audit.export', {
+      userId: operator,
+      targetId: job.id,
+      targetLabel: describeExportFilters({
+        userId: params.userId as string | undefined,
+        module: params.module as string | undefined,
+        action: params.action as string | undefined,
+        event: Array.isArray(params.events) ? (params.events as string[]).join(',') : undefined,
+        result: params.result as string | undefined,
+        tenantId: params.tenantId as string | undefined,
+        from: params.from as string | undefined,
+        to: params.to as string | undefined,
+      }),
+      after: { filters: params, maxRows: EXPORT_MAX_ROWS },
+      ip: clientIp(request),
+    });
+    return job;
   }
 
   /**
@@ -253,6 +341,19 @@ export class AuditController {
       contentType: 'text/csv',
       content,
     };
+  }
+
+  /**
+   * 事件注册表（PRD-015 FR-15-01，ADR-0032 R1）
+   *
+   * 只读下发事件定义（名称/说明/分类/风险/指引/摘要模板/字段中文名）与 `version` 指纹：
+   * 前端据此渲染运营视图并做缓存失效，**不在前端维护第二份翻译表**。
+   * 路由必须声明在 `@Get(':id')` 之前，否则 `events` 会被当作 id 命中详情分支。
+   */
+  @Permissions(PERM.AUDIT_READ)
+  @Get('events')
+  listEvents(): { version: string; items: readonly AuditEventDefinition[] } {
+    return { version: auditRegistryVersion(), items: listAuditEvents() };
   }
 
   /**
@@ -293,7 +394,30 @@ interface ExportQuery {
   requestId?: string;
   familyId?: string;
   category?: string;
-  event?: string;
+  events?: string[];
+  /** PRD-015：结果与租户过滤（导出与列表同源） */
+  result?: AuditEventResult;
+  tenantId?: string;
+}
+
+/**
+ * 把导出筛选条件描述成一句中文（审计摘要用）
+ *
+ * 只列「有值」的条件：导出「全部记录」本身是需要被看见的高风险事实。
+ * @param filters 筛选键
+ */
+export function describeExportFilters(filters: Record<string, string | undefined>): string {
+  const labels: Array<[string, string]> = [
+    ['userId', '操作人'],
+    ['tenantId', '租户'],
+    ['module', '模块'],
+    ['action', '动作'],
+    ['event', '事件'],
+    ['result', '结果'],
+  ];
+  const parts = labels.filter(([key]) => Boolean(filters[key])).map(([key, label]) => `${label} ${filters[key]}`);
+  if (filters.from || filters.to) parts.push(`时间 ${filters.from ?? '…'} ~ ${filters.to ?? '…'}`);
+  return parts.length > 0 ? parts.join('，') : '全部记录（无筛选条件）';
 }
 
 /** null/undefined → undefined（params 反序列化后空值统一为 null） */
@@ -322,7 +446,9 @@ function rebuildExportQuery(params: Record<string, unknown>): ExportQuery {
     requestId: strOrNull(params.requestId),
     familyId: strOrNull(params.familyId),
     category: strOrNull(params.category),
-    event: strOrNull(params.event),
+    events: Array.isArray(params.events) ? (params.events.filter((value) => typeof value === 'string') as string[]) : undefined,
+    result: strOrNull(params.result) as AuditEventResult | undefined,
+    tenantId: strOrNull(params.tenantId),
   };
 }
 
@@ -336,12 +462,25 @@ function csvCell(value: unknown): string {
 /**
  * 组装审计 CSV
  *
+ * 列序约定（PRD-015 FR-15-19）：M12 的 15 列**位置与顺序不变**，M15 的 8 个业务列
+ * **追加在末尾**。追加而非插入，是为了不破坏既有下游脚本与 mock 的逐字节同构断言
+ * （M12 曾因列序/范围固定断言漏同步导致 CI 红）。
+ *
+ * 业务列是「运营可读」的导出面：事件名/摘要/对象/操作人/原因/结果/来源/风险，
+ * 其中事件名与风险由注册表现算（不落库），历史行取不到时留空而不是编造。
+ *
  * 带 UTF-8 BOM：Excel 直接打开中文列头不乱码（这是导出功能最常见的落地问题）。
  */
 export function buildAuditCsv(rows: AuditLogRecord[]): string {
-  const header = ['id', 'createdAt', 'userId', 'module', 'action', 'targetType', 'targetId', 'ip', 'traceId', 'requestId', 'familyId', 'category', 'event', 'before', 'after'];
+  const header = [
+    'id', 'createdAt', 'userId', 'module', 'action', 'targetType', 'targetId', 'ip', 'traceId',
+    'requestId', 'familyId', 'category', 'event', 'before', 'after',
+    // ---- M15 追加（位置固定，勿插入到上方） ----
+    'eventName', 'summary', 'targetLabel', 'actorLabel', 'reason', 'result', 'auditSource', 'risk',
+  ];
   const lines = [header.join(',')];
   for (const row of rows) {
+    const definition = findAuditEvent(row.event ?? '');
     lines.push(
       [
         csvCell(row.id),
@@ -359,6 +498,15 @@ export function buildAuditCsv(rows: AuditLogRecord[]): string {
         csvCell(row.event),
         csvCell(row.beforeValue),
         csvCell(row.afterValue),
+        // 注册表可解释的列（未登记事件 → 空，不猜）
+        csvCell(definition?.name ?? null),
+        csvCell(row.summary),
+        csvCell(row.targetLabel),
+        csvCell(row.actorLabel),
+        csvCell(row.reason),
+        csvCell(row.result),
+        csvCell(row.auditSource),
+        csvCell(definition?.risk ?? null),
       ].join(','),
     );
   }

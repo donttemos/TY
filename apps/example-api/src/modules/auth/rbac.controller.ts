@@ -23,7 +23,7 @@ import { BizError, ErrorCode } from '@fw/core';
 import { parseSortQuery, type Sort } from '@fw/db';
 import {
   AUTH_STORE,
-  Audit,
+  AuditService,
   AuthService,
   CurrentUser,
   PERM,
@@ -76,6 +76,7 @@ const ROLE_SORT_FIELDS = {
 export class RbacController {
   constructor(
     private readonly auth: AuthService,
+    private readonly audit: AuditService,
     @Inject(AUTH_STORE) private readonly store: AuthStore,
     @Inject(ADMIN_STORE) private readonly admin: AdminStore,
   ) {}
@@ -184,18 +185,26 @@ export class RbacController {
 
   /** 新建角色（编码唯一，冲突 409；新角色默认无权限，需再走授权接口） */
   @Permissions(PERM.ROLE_CREATE)
-  @Audit({ module: 'role', action: 'create', targetType: 'role' })
   @Post('roles')
   async createRole(
     @Body() body: RoleUpsertInput,
     @CurrentUser('id') operator: string,
     @Req() request: Request,
   ): Promise<RoleDetail> {
+    let role: RoleDetail;
     try {
-      return await this.admin.createRole(body);
+      role = await this.admin.createRole(body);
     } catch (error) {
       throw this.conflict(error, '角色编码已存在');
     }
+    this.audit.recordEvent('role.create', {
+      userId: operator,
+      targetId: role.id,
+      targetLabel: role.name,
+      after: { code: role.code, name: role.name, dataScope: role.dataScope },
+      ip: clientIp(request),
+    });
+    return role;
   }
 
   /**
@@ -204,7 +213,6 @@ export class RbacController {
    * （保证内置管理员始终 all，否则改窄即失去系统可管理性）。dataScope 变更后失效相关用户缓存。
    */
   @Permissions(PERM.ROLE_UPDATE)
-  @Audit({ module: 'role', action: 'update', targetType: 'role' })
   @Put('roles/:id')
   async updateRole(
     @Param('id') id: string,
@@ -224,12 +232,19 @@ export class RbacController {
     if (body.dataScope !== undefined && body.dataScope !== existing.dataScope) {
       await this.auth.invalidateUsersOfRole(id);
     }
+    this.audit.recordEvent('role.update', {
+      userId: operator,
+      targetId: id,
+      targetLabel: updated.name,
+      before: { name: existing.name, dataScope: existing.dataScope, remark: existing.remark },
+      after: { name: updated.name, dataScope: updated.dataScope, remark: updated.remark },
+      ip: clientIp(request),
+    });
     return updated;
   }
 
   /** 删除角色（内置角色拒绝；仍有用户持有时拒绝，先解绑） */
   @Permissions(PERM.ROLE_DELETE)
-  @Audit({ module: 'role', action: 'delete', targetType: 'role' })
   @Delete('roles/:id')
   async deleteRole(@Param('id') id: string, @CurrentUser('id') operator: string, @Req() request: Request): Promise<{ id: string }> {
     const existing = (await this.admin.listRoleDetails()).find((role) => role.id === id);
@@ -242,15 +257,36 @@ export class RbacController {
       throw new BizError(ErrorCode.STATE_NOT_ALLOWED, `仍有 ${holders} 个用户持有该角色，请先解绑`);
     }
     await this.admin.deleteRole(id);
+    this.audit.recordEvent('role.delete', {
+      userId: operator,
+      targetId: id,
+      targetLabel: existing.name,
+      before: { code: existing.code, name: existing.name, dataScope: existing.dataScope },
+      after: { deleted: true },
+      ip: clientIp(request),
+    });
     return { id };
   }
 
   /** 复制角色（含权限）；新角色编码自动加 `-copy` 后缀并保证唯一 */
   @Permissions(PERM.ROLE_CREATE)
-  @Audit({ module: 'role', action: 'create', targetType: 'role' })
   @Post('roles/:id/copy')
-  async copyRole(@Param('id') id: string): Promise<RoleDetail> {
-    return this.admin.copyRole(id);
+  async copyRole(
+    @Param('id') id: string,
+    @CurrentUser('id') operator: string,
+    @Req() request: Request,
+  ): Promise<RoleDetail> {
+    const source = (await this.admin.listRoleDetails()).find((role) => role.id === id);
+    const created = await this.admin.copyRole(id);
+    this.audit.recordEvent('role.create', {
+      userId: operator,
+      targetId: created.id,
+      targetLabel: created.name,
+      summary: `复制角色「${source?.name ?? id}」为「${created.name}」`,
+      after: { code: created.code, name: created.name, dataScope: created.dataScope, copyFrom: source?.code ?? id },
+      ip: clientIp(request),
+    });
+    return created;
   }
 
   /** 唯一约束冲突转业务 409（其余原样抛出，交由全局异常过滤） */

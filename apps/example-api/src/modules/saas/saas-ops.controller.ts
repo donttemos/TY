@@ -84,6 +84,21 @@ const TREND_HOURS = [24, 48, 72, 168, 720] as const;
 /** 合法迁移动作白名单（控制器层先校验，领域层迁移表再校验一次，双保险） */
 const LIFECYCLE_ACTIONS: readonly LifecycleAction[] = ['activate', 'expire', 'freeze', 'resume', 'terminate', 'dispose'];
 
+/**
+ * 生命周期动作 → 事件码（PRD-015 FR-15-09）
+ *
+ * 此前用模板字符串 `saas.lifecycle.${action}` 拼码：值虽然稳定，但事件不可枚举，
+ * 注册表与门禁都覆盖不到。显式映射让「新增动作」必须同时登记事件定义。
+ */
+const LIFECYCLE_EVENTS: Record<LifecycleAction, string> = {
+  activate: 'saas.lifecycle.activate',
+  expire: 'saas.lifecycle.expire',
+  freeze: 'saas.lifecycle.freeze',
+  resume: 'saas.lifecycle.resume',
+  terminate: 'saas.lifecycle.terminate',
+  dispose: 'saas.lifecycle.dispose',
+};
+
 @IgnoreTenant()
 @LifecycleExempt()
 @Controller('/api/v1/saas')
@@ -122,14 +137,11 @@ export class SaasOpsController {
       throw new BizError(ErrorCode.BAD_REQUEST, 'code 与 name 必填');
     }
     const plan = await this.plans.createPlan({ code: body.code.trim(), name: body.name.trim(), description: body.description ?? null });
-    this.audit.record({
+    this.audit.recordEvent('saas.plan.create', {
       userId: operator?.id,
-      module: 'saas',
-      action: 'create',
-      event: 'saas.plan.create',
-      category: 'admin',
-      targetType: 'plan',
       targetId: plan.id,
+      targetLabel: plan.name,
+      actorLabel: operator?.username,
       after: { code: plan.code, name: plan.name, description: plan.description ?? null },
       ip: request ? clientIp(request) : undefined,
     });
@@ -160,14 +172,11 @@ export class SaasOpsController {
     }
     const version = await this.plans.publishVersion(planId, { remark: body?.remark ?? null, quotas: normalized });
     const withQuotas = await this.plans.listPlanQuotas(version.id);
-    this.audit.record({
+    this.audit.recordEvent('saas.plan.publish', {
       userId: operator?.id,
-      module: 'saas',
-      action: 'create',
-      event: 'saas.plan.publish',
-      category: 'admin',
-      targetType: 'plan',
       targetId: planId,
+      targetLabel: planId,
+      actorLabel: operator?.username,
       after: { planId, version: version.version, remark: body?.remark ?? null, quotaCount: normalized.length },
       ip: request ? clientIp(request) : undefined,
     });
@@ -185,14 +194,11 @@ export class SaasOpsController {
       planVersion: body.planVersion,
       expireAt: body.expireAt ? new Date(body.expireAt) : null,
     });
-    this.audit.record({
+    this.audit.recordEvent('saas.subscription.create', {
       userId: operator?.id,
-      module: 'saas',
-      action: 'create',
-      event: 'saas.subscription.create',
-      category: 'admin',
-      targetType: 'tenant_subscription',
       targetId: sub.id,
+      targetLabel: body.tenantId,
+      actorLabel: operator?.username,
       after: { tenantId: body.tenantId, planCode: body.planCode, planVersion: body.planVersion ?? null, expireAt: body.expireAt ?? null },
       ip: request ? clientIp(request) : undefined,
     });
@@ -203,14 +209,12 @@ export class SaasOpsController {
   @Permissions(PERM.OPS_SAAS_WRITE)
   async cancelSubscription(@Param('id') id: string, @Body() body: { reason?: string }, @CurrentUser() operator?: RequestUser, @Req() request?: Request): Promise<unknown> {
     await this.subscriptions.cancel(id, { reason: body?.reason ?? null });
-    this.audit.record({
+    this.audit.recordEvent('saas.subscription.cancel', {
       userId: operator?.id,
-      module: 'saas',
-      action: 'update',
-      event: 'saas.subscription.cancel',
-      category: 'admin',
-      targetType: 'tenant_subscription',
       targetId: id,
+      targetLabel: id,
+      actorLabel: operator?.username,
+      reason: body?.reason ?? null,
       after: { reason: body?.reason ?? null },
       ip: request ? clientIp(request) : undefined,
     });
@@ -344,15 +348,12 @@ export class SaasOpsController {
     } catch (e) {
       // QuotaExceededError 等 BizError 由全局过滤器转统一信封；此处仅做审计增强
       if (e instanceof Error && (e as { code?: number }).code === 4029) {
-        this.audit.record({
+        this.audit.recordEvent('saas.quota.exceeded', {
           userId: operator?.id,
-          module: 'saas',
-          action: 'security',
-          event: 'saas.quota.exceeded',
-          category: 'admin',
-          result: 'denied',
-          targetType: 'tenant',
           targetId: tenantId,
+          targetLabel: tenantId,
+          actorLabel: operator?.username,
+          result: 'denied',
           after: { quotaKey: body.quotaKey, idempotencyKey: body.idempotencyKey },
           ip: request ? clientIp(request) : undefined,
         });
@@ -486,20 +487,36 @@ export class SaasOpsController {
     if (!body?.action || !LIFECYCLE_ACTIONS.includes(body.action)) {
       throw new BizError(ErrorCode.BAD_REQUEST, `非法动作：${body?.action ?? '(empty)'}`);
     }
-    const result = await this.lifecycle.transition(tenantId, body.action, {
-      actorType: 'user',
-      actorId: operator?.id ?? null,
-      reason: body?.reason ?? null,
-      ip: request ? clientIp(request) : null,
-    });
-    this.audit.record({
+    let result: Awaited<ReturnType<TenantLifecycleService['transition']>>;
+    try {
+      result = await this.lifecycle.transition(tenantId, body.action, {
+        actorType: 'user',
+        actorId: operator?.id ?? null,
+        reason: body?.reason ?? null,
+        ip: request ? clientIp(request) : null,
+      });
+    } catch (error) {
+      // 非法迁移（4030）是运营最常见的拒绝态：必须与「迁移成功」在同一事件模型里可区分
+      if (error instanceof BizError && error.code === ErrorCode.LIFECYCLE_TRANSITION_INVALID) {
+        this.audit.recordEvent('saas.lifecycle.invalid', {
+          userId: operator?.id,
+          targetId: tenantId,
+          targetLabel: tenantId,
+          actorLabel: operator?.username,
+          result: 'denied',
+          reason: error.message,
+          after: { action: body.action, code: error.code },
+          ip: request ? clientIp(request) : undefined,
+        });
+      }
+      throw error;
+    }
+    this.audit.recordEvent(LIFECYCLE_EVENTS[body.action], {
       userId: operator?.id,
-      module: 'saas',
-      action: 'update',
-      event: `saas.lifecycle.${body.action}`,
-      category: 'admin',
-      targetType: 'tenant',
       targetId: tenantId,
+      targetLabel: tenantId,
+      actorLabel: operator?.username,
+      reason: body?.reason ?? null,
       after: { from: result.from, to: result.to, alreadyApplied: result.alreadyApplied, reason: body?.reason ?? null },
       ip: request ? clientIp(request) : undefined,
     });

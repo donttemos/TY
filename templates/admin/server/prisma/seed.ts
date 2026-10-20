@@ -181,6 +181,8 @@ const DICT_SEED: DictSeed[] = [
       { label: '删除', value: 'delete', color: 'danger' },
       { label: '登录', value: 'login', color: 'primary' },
       { label: '登出', value: 'logout', color: 'info' },
+      // M15：安全事件（replay / 越权拒绝）在记录层使用 action=security，字典此前缺项
+      { label: '安全事件', value: 'security', color: 'danger' },
     ],
   },
   {

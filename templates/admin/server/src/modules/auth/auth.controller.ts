@@ -18,7 +18,6 @@
 import { Body, Controller, Delete, Get, Inject, Param, Post, Put, Req } from '@nestjs/common';
 import { BizError, ErrorCode } from '@fw/core';
 import {
-  Audit,
   AUTH_STORE,
   AuditService,
   AuthService,
@@ -109,7 +108,6 @@ export class AuthController {
 
   /** 登出：access 进黑名单 + 撤销当前设备 refresh 族 */
   @Permissions(PERM.AUTH_LOGOUT)
-  @Audit({ module: 'auth', action: 'logout', targetType: 'user' })
   @Post('logout')
   async logout(@CurrentUser() user: RequestUser, @Req() request: Request): Promise<unknown> {
     return this.auth.logout(user, user.exp, clientIp(request), clientUserAgent(request));
@@ -147,7 +145,6 @@ export class AuthController {
    * phone / email 与其他账号冲突时 409（与建号唯一性策略一致，不指明冲突字段以避免枚举）。
    */
   @Permissions(PERM.AUTH_ME)
-  @Audit({ module: 'auth', action: 'update', targetType: 'user' })
   @Put('profile')
   async updateProfile(
     @CurrentUser('id') userId: string,
@@ -174,12 +171,11 @@ export class AuthController {
     }
 
     await this.store.updateUser(userId, patch);
-    this.audit.record({
+    this.audit.recordEvent('auth.profile_update', {
       userId,
-      module: 'user',
-      action: 'update',
       targetType: 'user',
       targetId: userId,
+      targetLabel: before.username,
       before: { nickname: before.nickname, phone: before.phone, email: before.email },
       after: { nickname: patch.nickname ?? before.nickname, phone: patch.phone ?? before.phone, email: patch.email ?? before.email },
       ip: clientIp(request),
@@ -197,7 +193,6 @@ export class AuthController {
 
   /** 修改密码：成功后其它设备下线，当前设备换新令牌 */
   @Permissions(PERM.AUTH_CHANGE_PASSWORD)
-  @Audit({ module: 'auth', action: 'update', targetType: 'user' })
   @Post('change-password')
   async changePassword(
     @CurrentUser('id') userId: string,
@@ -236,7 +231,6 @@ export class AuthController {
 
   /** 下线指定设备：先确认该族属于当前用户，再整族撤销（防越权踢他人下线） */
   @Permissions(PERM.AUTH_REVOKE_SESSION)
-  @Audit({ module: 'auth', action: 'logout', targetType: 'session' })
   @Delete('sessions/:id')
   async revokeSession(
     @CurrentUser('id') userId: string,
@@ -249,6 +243,15 @@ export class AuthController {
       throw new BizError(ErrorCode.NOT_FOUND, '登录设备不存在或已下线');
     }
     await this.store.revokeRefreshFamily(target.familyId, new Date());
+    // 单设备下线与「撤销全部会话」语义不同，摘要显式覆盖
+    this.audit.recordEvent('auth.session_revoke', {
+      userId,
+      targetType: 'session',
+      targetId: sessionId,
+      summary: `下线登录设备「${target.device ?? sessionId}」`,
+      after: { familyId: target.familyId, ip: target.ip ?? null, device: target.device ?? null },
+      ip: clientIp(request),
+    });
     return { revoked: sessionId };
   }
 }

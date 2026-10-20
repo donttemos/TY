@@ -394,13 +394,13 @@ erDiagram
 | 字段 | 类型 | 必填 | 默认 | 说明 | 索引 |
 |---|---|---|---|---|---|
 | `id` | bigint | 是 | — | 主键 | PK |
-| `tenant_id` | bigint | 是 | 0 | 租户 ID | `idx_audit_tenant` |
+| `tenant_id` | bigint | 是 | 0 | 租户 ID（M15 起由请求上下文写入；`0` = 未知/存量，不回填） | `idx_audit_tenant` |
 | `user_id` | bigint | 否 | NULL | 操作人（系统任务为 NULL） | `idx_audit_user` |
 | `module` | varchar(64) | 是 | — | 模块名 | — |
 | `action` | varchar(32) | 是 | — | `create` / `update` / `delete` / `login` / `export` | `idx_audit_action` |
 | `category` | varchar(32) | 否 | NULL | 审计大类（PRD-012 OBS-06：`auth` / `security` / `admin` / `data` / `config` / `tenant` / `system`，低基数粗筛键） | `idx_audit_category_created` |
 | `event` | varchar(64) | 否 | NULL | 点分事件名（如 `refresh.replay_detected` / `auth.login`，细分检索键） | `idx_audit_event` |
-| `result` | varchar(16) | 否 | NULL | 事件结果：`success` / `denied` / `failed` | — |
+| `result` | varchar(16) | 否 | NULL | 事件结果：`success` / `denied` / `failed` / `unknown`（M15 增第四态：已发起但结果未确认） | `idx_audit_result_created` |
 | `family_id` | varchar(36) | 否 | NULL | 令牌家族 ID（M11.1 rotation family，安全事件关联键） | `idx_audit_family` |
 | `jti` | varchar(64) | 否 | NULL | 令牌标识（非令牌本体，可安全落库） | — |
 | `request_id` | varchar(64) | 否 | NULL | 单次请求 ID（PRD-012 OBS-09，W2 起填充；本列随 OBS-06 先行落位） | `idx_audit_request` |
@@ -412,6 +412,11 @@ erDiagram
 | `user_agent` | varchar(255) | 否 | NULL | 客户端标识 | — |
 | `trace_id` | varchar(64) | 否 | NULL | 链路 ID，串联日志 | `idx_audit_trace` |
 | `created_at` | datetime(3) | 是 | — | 操作时间（仅创建，不更新不删除） | `idx_audit_created` |
+| `summary` | varchar(255) | 否 | NULL | 业务摘要快照（M15/ADR-0032：写入时固化，超长截断并以 `…` 标记） | — |
+| `target_label` | varchar(128) | 否 | NULL | 目标对象名称快照（租户名/套餐名/用户名；改名后历史不变） | — |
+| `actor_label` | varchar(64) | 否 | NULL | 操作人名称快照（改名后历史不变） | — |
+| `reason` | varchar(255) | 否 | NULL | 操作原因（人工填写或系统生成；系统任务自动生成原因） | — |
+| `audit_source` | varchar(16) | 否 | NULL | 记录来源：`domain`（领域层显式记录）/ `interceptor`（`@Audit` 兜底，仅代表 HTTP 成功返回）/ NULL（未标注） | — |
 
 > 保留期默认 180 天可配（`AUDIT_ARCHIVE_RETENTION_DAYS`，M10 E-10 起）：早于保留线的记录由定时任务
 > `audit.archive`（每天 02:00，分布式锁多副本单执行）迁入 §3.17 的 `audit_log_archives` 冷存表，在线表行数持续有界；
@@ -422,6 +427,13 @@ erDiagram
 > 旧数据 / 旧代码零回归）；`AuditService` 落盘时**字段全量落位**（缺省 NULL，序列化形状不漂移）。
 > replay 安全事件按 `category='security' + event='refresh.replay_detected' + result='denied'` 落库，
 > `trace_id` 取自请求上下文（OBS-07 断链修复），`reason`（低基数结构化原因）与人读 `detail` 在 `after_value` 内。
+>
+> M15（PRD-015，ADR-0032）起增**业务快照列**（`summary` / `target_label` / `actor_label` / `reason` / `audit_source`，
+> migration `20261020120000` 三方言同构、在线表与归档表同批增列）。分层口径：**会随业务数据漂移的事实落库冻结**
+> （改名后历史不变），**解释性字典不进库**（事件名称/风险/指引/字段中文名由 `@fw/auth` 的 `AUDIT_EVENTS`
+> 注册表经 `GET /api/v1/audit-logs/events` 下发）。`result` 扩第四态 `unknown`（已发起但结果未确认）；
+> `audit_source='interceptor'` 的行**只代表 HTTP 成功返回**，不能当作业务已完成。存量行不回填：
+> `tenant_id=0` 与 `summary IS NULL` 一律按「未知/存量」展示，不猜测归属。
 
 ### 3.14 `jobs` 任务登记表（M7 规划为 `job_records`；M10 E-01 落地为 `jobs`）
 
@@ -490,6 +502,7 @@ erDiagram
 | `module` | varchar(64) | 是 | — | 模块名（沿在线表） | `idx_audit_archive_module` |
 | `action` | varchar(32) | 是 | — | 动作（沿在线表） | — |
 | `category` / `event` / `result` / `family_id` / `jti` / `request_id` | varchar | 否 | NULL | 统一审计事件契约（PRD-012 OBS-06，与在线表同构软增列） | `idx_audit_archive_event` / `idx_audit_archive_family` / `idx_audit_archive_request` / `idx_audit_archive_category` |
+| `summary` / `target_label` / `actor_label` / `reason` / `audit_source` | varchar | 否 | NULL | 业务快照（M15/ADR-0032 R8：与在线表**同一迁移**同构增列，归档不是另一套模型） | `idx_audit_archive_result_created`（`result`+`created_at`） |
 | `target_type` / `target_id` | varchar(64) | 否 | NULL | 对象类型 / ID（沿在线表） | — |
 | `before_value` / `after_value` | json | 否 | NULL | 变更前 / 后（脱敏后，沿在线表） | — |
 | `ip` | varchar(45) | 否 | NULL | 来源 IP（沿在线表） | — |

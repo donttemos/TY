@@ -24,6 +24,7 @@ import type { AuditLogRecord, AuditQuery, ID } from '@fw/auth';
 /** audit_logs / audit_log_archives 行（两表同构，归档表多 archived_at） */
 interface AuditLogRow {
   id: string;
+  tenantId: bigint;
   userId: string | null;
   module: string;
   action: string;
@@ -41,6 +42,12 @@ interface AuditLogRow {
   userAgent: string | null;
   traceId: string | null;
   createdAt: Date;
+  /** PRD-015 业务快照列（归档表与在线表同构，E-10 不变量） */
+  summary: string | null;
+  targetLabel: string | null;
+  actorLabel: string | null;
+  reason: string | null;
+  auditSource: string | null;
 }
 
 /** 单页条数上限（与 @fw/db 对齐） */
@@ -74,6 +81,7 @@ export class PrismaAuditArchiveStore implements AuditArchivePort {
     const delegate = this.delegate('auditLogArchive');
     for (const record of rows) {
       const data = {
+        tenantId: toTenantId(record.tenantId),
         userId: record.userId,
         module: record.module,
         action: record.action,
@@ -91,6 +99,11 @@ export class PrismaAuditArchiveStore implements AuditArchivePort {
         userAgent: record.userAgent,
         traceId: record.traceId,
         createdAt: record.createdAt,
+        summary: record.summary ?? null,
+        targetLabel: record.targetLabel ?? null,
+        actorLabel: record.actorLabel ?? null,
+        reason: record.reason ?? null,
+        auditSource: record.auditSource ?? null,
       };
       // 主键 upsert：归档表只增不改不删，update 分支仅为崩溃重跑的覆盖路径兜底
       await delegate.upsert({ where: { id: record.id }, create: { id: record.id, ...data }, update: data });
@@ -126,6 +139,16 @@ export class PrismaAuditArchiveStore implements AuditArchivePort {
     if (query.action) where.action = query.action;
     if (query.targetType) where.targetType = query.targetType;
     if (query.targetId) where.targetId = query.targetId;
+    // M12 W2 OBS-14 契约字段 + PRD-015 结果/租户过滤：冷数据追溯与在线查询必须同口径
+    // （此前归档端点只支持 module/action/target/时间，与 api-spec 声称的「同形」不符）
+    if (query.traceId) where.traceId = query.traceId;
+    if (query.requestId) where.requestId = query.requestId;
+    if (query.familyId) where.familyId = query.familyId;
+    if (query.category) where.category = query.category;
+    if (query.events && query.events.length > 0) where.event = { in: query.events };
+    else if (query.event) where.event = query.event;
+    if (query.result) where.result = query.result;
+    if (query.tenantId) where.tenantId = toTenantId(query.tenantId);
     if (query.from || query.to) {
       where.createdAt = {
         ...(query.from ? { gte: query.from } : {}),
@@ -164,6 +187,7 @@ export class PrismaAuditArchiveStore implements AuditArchivePort {
 function toAuditRecord(row: AuditLogRow): AuditLogRecord {
   return {
     id: row.id,
+    tenantId: (row.tenantId ?? 0n).toString(),
     userId: row.userId,
     module: row.module,
     action: row.action as AuditLogRecord['action'],
@@ -181,5 +205,23 @@ function toAuditRecord(row: AuditLogRow): AuditLogRecord {
     userAgent: row.userAgent,
     traceId: row.traceId,
     createdAt: row.createdAt,
+    summary: row.summary ?? null,
+    targetLabel: row.targetLabel ?? null,
+    actorLabel: row.actorLabel ?? null,
+    reason: row.reason ?? null,
+    auditSource: (row.auditSource ?? null) as AuditLogRecord['auditSource'],
   };
+}
+
+/**
+ * 租户列归一（与 PrismaAuthStore.toTenantId 同源语义）
+ * @param value 十进制字符串
+ */
+function toTenantId(value: string | null | undefined): bigint {
+  if (!value || !/^\d+$/.test(value)) return 0n;
+  try {
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
 }
