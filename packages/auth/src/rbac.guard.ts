@@ -8,6 +8,8 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo 依赖改值导入 + @Inject 令牌（类型导入导致 DI 元数据为 Function/Object，装配失败）
+ * @modified 2026-10-21 donttemo M15 P2 观测闭环：越权审计限流丢弃经 onDrop 接入
+ *   fw_auth_audit_dropped_total{path="authz",reason} 与周期性汇总日志（丢弃不再静默）
  * @module @fw/auth
  */
 
@@ -16,7 +18,7 @@ import { Reflector } from '@nestjs/core';
 import { BizError, ErrorCode } from '@fw/core';
 import { getRequestContext, Logger, patchRequestContext } from '@fw/logger';
 import type { AuthStore } from './auth-store.js';
-import { recordTokenVerifyFailedMetric } from './auth-metrics.js';
+import { recordAuditThrottleDrop, recordTokenVerifyFailedMetric } from './auth-metrics.js';
 import { TokenVerifyError } from './token.service.js';
 import { META_IGNORE_TENANT, META_PERMISSIONS, META_PUBLIC, META_STRATEGY, PERM } from './constants.js';
 // 注意：以下三个依赖必须「值导入」——仅在类型位置引用时 emitDecoratorMetadata 只能发出
@@ -62,8 +64,12 @@ export class RbacGuard implements CanActivate {
   /**
    * 越权尝试的审计限流（ADR-0032 R6）：扫描器会在短时间内打满同一权限码，
    * 每（用户 + 所需权限码）每分钟只留 3 条样本，避免审计表被攻击流量刷爆。
+   * 丢弃（限流超限 / 容量拒建桶）经 onDrop 进 fw_auth_audit_dropped_total 与周期性
+   * 汇总日志——`allow()` 返回 false 时本路径不落审计也不抛额外错，观测必须在此接线。
    */
-  private readonly deniedThrottle = new AuditEventThrottle();
+  private readonly deniedThrottle = new AuditEventThrottle({
+    onDrop: (drop) => recordAuditThrottleDrop('authz', drop.reason),
+  });
 
   /**
    * 守卫主流程

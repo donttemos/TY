@@ -4,6 +4,8 @@
  *   使各测试文件只关注被验证行为；不依赖数据库、不需要 JWT_SECRET 环境变量。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-21 donttemo M15 P2 观测闭环：createHarness 增加可选 auditThrottle 参数
+ *   （注入小 maxBuckets，使「容量丢弃」可在真实 AuthService.login 路径被观测）
  * @module @fw/auth
  */
 
@@ -11,6 +13,7 @@ import type { ExecutionContext } from '@nestjs/common';
 import { AuditService } from '../audit.service.js';
 import { MemoryAuthCache } from '../auth-cache.js';
 import { AuthService } from '../auth.service.js';
+import type { AuditEventThrottleOptions } from '../audit-throttle.js';
 import { LoginSecurity } from '../login-security.js';
 import { MemoryAuthStore } from '../memory-auth-store.js';
 import { PasswordService } from '../password.service.js';
@@ -83,8 +86,9 @@ export interface SeedResult {
 /**
  * 装配内存版鉴权栈
  * @param overrides 运行时配置覆盖
+ * @param auditThrottle 登录失败审计限流器选项（测试注入；生产不传）
  */
-export function createHarness(overrides: Partial<AuthOptions> = {}): Harness {
+export function createHarness(overrides: Partial<AuthOptions> = {}, auditThrottle?: AuditEventThrottleOptions): Harness {
   const options = buildTestOptions(overrides);
   const store = new MemoryAuthStore();
   const cache = new MemoryAuthCache();
@@ -105,7 +109,7 @@ export function createHarness(overrides: Partial<AuthOptions> = {}): Harness {
   const permissions = new PermissionService(store, cache, options.permissionCacheTtlSeconds);
   const audit = new AuditService(store);
   const registry = new StrategyRegistry([new JwtStrategy(tokens, blacklist), new ApiKeyStrategy(options.apiKeys)]);
-  const service = new AuthService({ store, passwords, tokens, refresh, blacklist, security, permissions, audit, options });
+  const service = new AuthService({ store, passwords, tokens, refresh, blacklist, security, permissions, audit, options, auditThrottle });
 
   const seed = async (): Promise<SeedResult> => {
     const adminRole = store.seedRole({ code: ROLE.ADMIN, name: '超级管理员', dataScope: 'all', isSystem: true });

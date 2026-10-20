@@ -306,7 +306,7 @@ describe('查询面（列表 / 详情 / 窗口解析 / 重复取消幂等）', (
     await subs.cancel(sub.id, { reason: '二次' }); // 已关闭 → 幂等直返
   });
 
-  it('FakeSaasStore 辅助查询面（findPlanById / findVersion / findSubscriptionById / findRollup 空值）', async () => {
+  it('FakeSaasStore 辅助查询面（findPlanById / findVersion / findSubscriptionById / findTenantName / findRollup 空值）', async () => {
     const { store, plans, subs, usage } = await setup();
     const plan = await plans.createPlan({ code: 'default', name: '基础版' });
     expect((await store.findPlanById(plan.id))?.code).toBe('default');
@@ -316,6 +316,10 @@ describe('查询面（列表 / 详情 / 窗口解析 / 重复取消幂等）', (
     const at = new Date();
     expect(await usage.findRollup('t1', 'api_calls', 'day', dayStartUTC(at))).toBeNull();
     expect(await store.findWindow('t1', 'api_calls', 'day', dayStartUTC(at))).toBeNull();
+    // findTenantName（PRD-015 FR-15-10 审计名称快照）：命中返回名称，未登记租户返回 null
+    store.tenantNames.set('t1', '示例企业');
+    expect(await store.findTenantName('t1')).toBe('示例企业');
+    expect(await store.findTenantName('ghost')).toBeNull();
   });
 });
 

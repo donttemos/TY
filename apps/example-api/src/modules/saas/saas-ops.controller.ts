@@ -31,6 +31,9 @@
  * @modified 2026-10-20 M14/PRD-014 B4（FR-14-12/13/14）：用量趋势（hours 白名单 + UTC 桶聚合填零）、
  *   事件明细分页（内存分页，OQ-14-3 定案查询时聚合零迁移）、平台总览 overview
  *   （风险 TOP20 + 7 天到期订阅 + 五态计数 + 最近迁移）；端口扩展 listWindows/countTenantsByStatus/listRecentLifecycleLogs。
+ * @modified 2026-10-21 donttemo P1（PRD-015 FR-15-10 收口）：审计事件 target_label 停止落裸 ID——
+ *   套餐发布/订阅开通/订阅取消/配额超限/生命周期迁移（含非法）六处改为写入时解析
+ *   租户名/套餐名快照；解析不到时写「名称快照缺失（ID: …）」显式声明，不让 ID 冒充名称。
  * @modified 2026-10-20 M14 收口：全部入参校验（含 M13 遗留三处）统一 throw BizError——
  *   信封直返会被全局响应拦截器包双层（{code:0,data:{code:1001}}），前端按顶层 code 误判成功；
  *   禁新增信封直返校验（冒烟 S15.0 断言锁定）。
@@ -40,7 +43,7 @@
 import { Body, Controller, Get, Inject, Param, Post, Query, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import { BizError, ErrorCode } from '@fw/core';
-import { AuditService, CurrentUser, IgnoreTenant, PERM, Permissions } from '@fw/auth';
+import { AuditService, CurrentUser, IgnoreTenant, PERM, Permissions, snapshotMissingLabel } from '@fw/auth';
 import type { RequestUser } from '@fw/auth';
 import { clientIp } from '../auth/auth.controller.js';
 import { LifecycleExempt } from './lifecycle.decorator.js';
@@ -117,6 +120,33 @@ export class SaasOpsController {
     private readonly audit: AuditService,
   ) {}
 
+  /**
+   * 租户名称快照（PRD-015 FR-15-10 / AC-15-02）
+   *
+   * 审计 `target_label` 必须是**可读名称**而不是 ID：运营在对象列看到 `t1` 会误以为是
+   * 租户名。取不到（租户不存在 / 脏引用）时写「名称快照缺失（ID: …）」显式声明——
+   * 缺失是可核验的事实，不是需要美化成 ID 的空白。
+   */
+  private async tenantLabelOf(tenantId: string): Promise<string> {
+    const name = await this.store.findTenantName(tenantId);
+    return name?.trim() ? name : snapshotMissingLabel(tenantId);
+  }
+
+  /**
+   * 套餐名称快照（同上）。与订阅列表 `enrichSubscriptions` 同口径：软删套餐不暴露名称，
+   * 落缺失标记——两侧看到的事实必须一致，不能列表说「没有」、审计却编一个名字。
+   */
+  private async planLabelOf(planId: string): Promise<string> {
+    const plan = await this.store.findPlanById(planId);
+    return plan?.name?.trim() ? plan.name : snapshotMissingLabel(planId);
+  }
+
+  /** 订阅对象标签：`租户名 · 套餐名`（任一侧缺失只标记该侧，不牵连另一侧） */
+  private async subscriptionLabelOf(subscription: { tenantId: string; planId: string }): Promise<string> {
+    const [tenant, plan] = await Promise.all([this.tenantLabelOf(subscription.tenantId), this.planLabelOf(subscription.planId)]);
+    return `${tenant} · ${plan}`;
+  }
+
   // ---- 套餐（读） ----
 
   @Get('plans')
@@ -179,7 +209,7 @@ export class SaasOpsController {
     this.audit.recordEvent('saas.plan.publish', {
       userId: operator?.id,
       targetId: planId,
-      targetLabel: planId,
+      targetLabel: await this.planLabelOf(planId),
       actorLabel: operator?.username,
       after: { planId, version: version.version, remark: body?.remark ?? null, quotaCount: normalized.length },
       ip: request ? clientIp(request) : undefined,
@@ -201,7 +231,7 @@ export class SaasOpsController {
     this.audit.recordEvent('saas.subscription.create', {
       userId: operator?.id,
       targetId: sub.id,
-      targetLabel: body.tenantId,
+      targetLabel: await this.subscriptionLabelOf(sub),
       actorLabel: operator?.username,
       after: { tenantId: body.tenantId, planCode: body.planCode, planVersion: body.planVersion ?? null, expireAt: body.expireAt ?? null },
       ip: request ? clientIp(request) : undefined,
@@ -213,10 +243,12 @@ export class SaasOpsController {
   @Permissions(PERM.OPS_SAAS_WRITE)
   async cancelSubscription(@Param('id') id: string, @Body() body: { reason?: string }, @CurrentUser() operator?: RequestUser, @Req() request?: Request): Promise<unknown> {
     await this.subscriptions.cancel(id, { reason: body?.reason ?? null });
+    // 标签取「取消后」的订阅行：cancel 已保证行存在（否则先抛 1002），此处仅防御并发硬删
+    const cancelled = await this.store.findSubscriptionById(id);
     this.audit.recordEvent('saas.subscription.cancel', {
       userId: operator?.id,
       targetId: id,
-      targetLabel: id,
+      targetLabel: cancelled ? await this.subscriptionLabelOf(cancelled) : snapshotMissingLabel(id),
       actorLabel: operator?.username,
       reason: body?.reason ?? null,
       after: { reason: body?.reason ?? null },
@@ -355,7 +387,7 @@ export class SaasOpsController {
         this.audit.recordEvent('saas.quota.exceeded', {
           userId: operator?.id,
           targetId: tenantId,
-          targetLabel: tenantId,
+          targetLabel: await this.tenantLabelOf(tenantId),
           actorLabel: operator?.username,
           result: 'denied',
           after: { quotaKey: body.quotaKey, idempotencyKey: body.idempotencyKey },
@@ -505,7 +537,7 @@ export class SaasOpsController {
         this.audit.recordEvent('saas.lifecycle.invalid', {
           userId: operator?.id,
           targetId: tenantId,
-          targetLabel: tenantId,
+          targetLabel: await this.tenantLabelOf(tenantId),
           actorLabel: operator?.username,
           result: 'denied',
           reason: error.message,
@@ -518,7 +550,7 @@ export class SaasOpsController {
     this.audit.recordEvent(LIFECYCLE_EVENTS[body.action], {
       userId: operator?.id,
       targetId: tenantId,
-      targetLabel: tenantId,
+      targetLabel: await this.tenantLabelOf(tenantId),
       actorLabel: operator?.username,
       reason: body?.reason ?? null,
       after: { from: result.from, to: result.to, alreadyApplied: result.alreadyApplied, reason: body?.reason ?? null },

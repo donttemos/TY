@@ -10,6 +10,9 @@
  * @modified 2026-10-14 donttemo assignUserRoles / grantRolePermissions 写库前校验 ID 集合（assertRoleIds / assertPermissionIds），杜绝空串或失效 ID 静默写库导致权限归零
  * @modified 2026-10-15 donttemo E-07：新增 loginByOAuth2（OAuth2 授权码端到端的会话落地——外部认证由 IdP 完成，
  *   本地仅做账号绑定校验 + 会话签发 + 审计；不自动建号，防外部身份自动提权）
+ * @modified 2026-10-21 donttemo M15 P2 观测闭环：登录失败限流丢弃经 onDrop 接入
+ *   fw_auth_audit_dropped_total{path="login",reason} 与周期性汇总日志（丢弃不再静默）；
+ *   AuthServiceDeps 增加可选 auditThrottle（仅测试注入小 maxBuckets 验证容量丢弃走真实路径）
  * @module @fw/auth
  */
 
@@ -18,8 +21,8 @@ import { Logger } from '@fw/logger';
 import type { AuditPage, AuditQuery, AuthOptions, ID, LoginResult, MenuNode, MeResult, RequestUser, TokenPair } from './types.js';
 import type { AuthStore } from './auth-store.js';
 import type { AuditService } from './audit.service.js';
-import { AuditEventThrottle } from './audit-throttle.js';
-import { recordLoginMetric } from './auth-metrics.js';
+import { AuditEventThrottle, type AuditEventThrottleOptions } from './audit-throttle.js';
+import { recordAuditThrottleDrop, recordLoginMetric } from './auth-metrics.js';
 import type { LoginSecurity } from './login-security.js';
 import type { PasswordService } from './password.service.js';
 import type { PermissionService } from './permission.service.js';
@@ -75,6 +78,11 @@ export interface AuthServiceDeps {
   permissions: PermissionService;
   audit: AuditService;
   options: AuthOptions;
+  /**
+   * 登录失败审计限流器选项（测试注入小 maxBuckets 验证「容量丢弃」走真实登录路径；
+   * 生产不传，走默认 5000）。onDrop 由本服务固定接线，此处只取容量参数。
+   */
+  auditThrottle?: AuditEventThrottleOptions;
 }
 
 /**
@@ -84,13 +92,20 @@ export class AuthService {
   /**
    * 登录失败审计限流（ADR-0032 R6）：暴力破解会制造大量 denied 事件，
    * 只保留每（IP+账号）每分钟前 3 条样本，业务侧照常拒绝。
+   * 丢弃（限流超限 / 容量拒建桶）经 onDrop 进 fw_auth_audit_dropped_total 与周期性
+   * 汇总日志——`allow()` 返回 false 后本路径直接 return，观测必须在此接线而非依赖调用方。
    */
-  private readonly loginFailThrottle = new AuditEventThrottle();
+  private readonly loginFailThrottle: AuditEventThrottle;
 
   /**
    * @param deps 依赖集合
    */
-  constructor(private readonly deps: AuthServiceDeps) {}
+  constructor(private readonly deps: AuthServiceDeps) {
+    this.loginFailThrottle = new AuditEventThrottle({
+      maxBuckets: deps.auditThrottle?.maxBuckets,
+      onDrop: (drop) => recordAuditThrottleDrop('login', drop.reason),
+    });
+  }
 
   /**
    * 登录：限流 → 锁定检查 → 口令校验 → 签发双 token → 审计
@@ -114,7 +129,8 @@ export class AuthService {
    * 记录登录失败事件（拒绝态，不记口令）
    *
    * 原因取低基数枚举而非原始 message：错误文案会变，枚举是稳定的取证维度。
-   * 限流只影响「是否落审计」，不影响抛错——用户该看到的错误照旧。
+   * 限流只影响「是否落审计」，不影响抛错——用户该看到的错误照旧；被丢弃的样本
+   * 经限流器 onDrop 进入指标与周期性汇总日志（M15 P2，运维可查询）。
    * @param input 登录入参
    * @param error 失败原因（BizError）
    */

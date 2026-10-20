@@ -11,6 +11,7 @@
  * @created 2026-10-19
  * @modified 2026-10-21 donttemo P0：修正五态 Int 映射不对称——0 归还「存量停用」只读语义，
  *   pending 改占独立编码 5（原写 pending=0 / 读 0=frozen，写 pending 即落成停用且永久卡死）
+ * @modified 2026-10-21 donttemo P1（PRD-015 FR-15-10 收口）：补 findTenantName（tenant 投影扩 name 列）
  * @modified 2026-10-20 donttemo 订阅开通落地为单事务（createSubscriptionWithSnapshot：订阅行 +
  *   全部配额快照行同成同败），移除独立 createSubscription
  * @module example-api/saas
@@ -150,7 +151,7 @@ interface SaasTx {
     upsert(args: { where: { tenantId_quotaKey_windowType_windowStart: { tenantId: string; quotaKey: string; windowType: string; windowStart: Date } }; create: UsageRollupView; update: { totalQuantity: bigint; eventCount: number } }): Promise<unknown>;
   };
   tenant: {
-    findUnique(args: { where: { id: string } }): Promise<{ status: number } | null>;
+    findUnique(args: { where: { id: string } }): Promise<{ status: number; name: string } | null>;
     updateMany(args: { where: { id: string; status: StatusFilter }; data: { status: number } }): Promise<{ count: number }>;
     count(args: { where: { status: StatusFilter } }): Promise<number>;
   };
@@ -453,6 +454,15 @@ export class PrismaSaasStore implements SaasStore {
     if (!row) return null; // 端口契约：null 仅表示「租户不存在」，不与未知编码混淆
     // 存量 0 → frozen（见编码表）；未登记脏值 fail-closed 按 frozen 处理（未知状态绝不放行为可用）
     return INT_TO_STATUS[row.status] ?? 'frozen';
+  }
+
+  /**
+   * 租户名称快照（PRD-015 FR-15-10）：审计写入点把 tenantId 还原为租户名。
+   * 软删行同样返回名称——审计要的是历史可读性；null 仅表示租户根本不存在。
+   */
+  async findTenantName(tenantId: string): Promise<string | null> {
+    const row = await this.tx.tenant.findUnique({ where: { id: tenantId } });
+    return row?.name ?? null;
   }
 
   async conditionalUpdateStatus(tenantId: string, from: LifecycleStatus, to: LifecycleStatus): Promise<boolean> {

@@ -7,6 +7,8 @@
  * @created 2026-10-19
  * @modified 2026-10-20 donttemo 订阅开通收敛为 createSubscriptionWithSnapshot（订阅 + 配额快照单事务），
  *   移除可被误用的单步 createSubscription
+ * @modified 2026-10-21 donttemo P1（PRD-015 FR-15-10 收口）：LifecycleStore 新增 findTenantName
+ *   （租户名称快照查询），供审计写入点把 tenantId 还原为租户名
  * @module @fw/saas
  */
 import type {
@@ -135,6 +137,13 @@ export interface LifecycleStore {
    * 存量停用 0 读作 frozen，未知编码 fail-closed 亦按 frozen 兜底（不得返回 null 冒充不存在）。
    */
   findTenantStatus(tenantId: string): Promise<LifecycleStatus | null>;
+  /**
+   * 租户名称查询（PRD-015 FR-15-10）：审计等只读面把租户 ID 还原为**可读名称快照**，
+   * 杜绝 `target_label` 落成裸 ID（运营把 `t1` 当租户名）。null 仅表示租户不存在；
+   * 软删行仍返回名称——审计要的是历史可读性，不是存在性判定（与 findTenantStatus 的
+   * null 语义分工：那个回答「还在不在/什么状态」，这个回答「当时叫什么」）。
+   */
+  findTenantName(tenantId: string): Promise<string | null>;
   /**
    * UPDATE tenants SET status=:to WHERE id=:id AND status=:from —— 返回 affected === 1。
    * `from='frozen'` 须同时匹配存量停用 0 与规范 3（驱动用「非冻结码的补集」表达最佳），

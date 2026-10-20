@@ -38,6 +38,10 @@
 > 接入 `sort` 白名单（未知字段 / 非法方向 / 超上限一律 `400/1001`，白名单只收视图可见字段）；新增 `audit_module`
 > 字典（审计日志页模块筛选项数据源，取值与各控制器写入的 `module` 同源：`auth` / `user` / `role` / `tenant`）。
 >
+> 变更记录：2026-10-21 donttemo P1 越权修复：§3.7 `GET /audit-logs/:id` 的 `dataScope` 收敛补齐为四档（原实现
+> 只判 `self`，`org` / `org_below` 档的部门管理者可凭列表里看不见的记录 ID 直读详情）；记录操作人不在授权
+> 归属人集合内时与「记录不存在」统一返回 `404/1002`，不泄露存在性。详情与列表共用同一份范围计算。
+>
 > 约定：接口由代码装饰器自动生成 OpenAPI 3.1 文档（`GET /docs`），本文件定义**规范与清单**，实现必须与本文件一致（CI 校验 spec 与路由一致）。
 
 ## 1. 通用约定
@@ -240,15 +244,18 @@
 |---|---|---|---|
 | GET | `/audit-logs` | `audit:read` | 分页查询，支持 `user_id / module / action / target / 时间区间`、M12 W2 契约字段 `trace_id / request_id / family_id / category / event`，以及 M15 新增 `result`（四态，非法值 400）/ `tenant_id`（十进制串，`0`=未知/存量，与 dataScope 取交集）/ `event` 多值（逗号分隔，≤20，用于「按风险筛选」由注册表展开）（精确过滤、可组合）；**过滤参数白名单外字段一律 400**（不静默忽略，OBS-14）。响应新增业务快照字段 `tenantId / summary / targetLabel / actorLabel / reason / auditSource`（additive）。排序见 §1.5 |
 | GET | `/audit-logs/events` | `audit:read` | **事件注册表**（M15/ADR-0032 R1）：返回 `{ version, items }`，`items[]` 含 `code / name / description / category / risk / reviewRequired / guidance / targetType / summaryTemplate / changeFields / deprecated`；`version` 为注册表指纹供前端缓存失效。只读、服务端单源，前端不得另建翻译表。**路由声明必须在 `/audit-logs/:id` 之前**（否则 `events` 会被当作 id） |
-| GET | `/audit-logs/:id` | `audit:read` | 详情，含变更前后值（脱敏） |
+| GET | `/audit-logs/:id` | `audit:read` | 详情，含变更前后值（脱敏）。**`dataScope` 与列表同源收敛**（P1 修复）：`self` 仅本人记录、`org` / `org_below` 要求记录操作人属于可见部门成员集合、`all` 不限；范围外记录与「不存在」统一 **404/1002**（同 code 同 message，不泄露存在性，fail-closed）。系统任务记录（`userId` 为 `null`）不属于任何按人收敛的集合，只有 `all` 档可见 |
 | GET | `/audit-logs/export` | `audit:export` | 异步导出：派发到任务中心并**立即返回 `jobId`**（不等导出完成），进度 / 下载 / 重跑走 §3.11 的 `/jobs/:id/*`；同样受 `dataScope` 收敛（`self` 范围只导自己的记录）；过滤面与列表同源（含 `trace_id / request_id / family_id / category / event`）。CSV 产物与 mock 逐字节同构（UTF-8 BOM + CRLF + 引号转义 + 公式注入防护：`= + - @` / 制表符开头的单元格加单引号前缀，由 `@fw/auth` 的 `escapeCsvCell` 统一编码）；列序为 **M12 十五列位置不变 + M15 八个业务列追加在末尾**：`id,createdAt,userId,module,action,targetType,targetId,ip,traceId,requestId,familyId,category,event,before,after,eventName,summary,targetLabel,actorLabel,reason,result,auditSource,risk`（`eventName` / `risk` 由注册表现算，未登记事件留空，不猜） |
-| GET | `/audit-archives` | `audit:read` | 归档审计分页查询（M10 E-10）：参数与 `/audit-logs` 同形（`user_id / module / action / target / 时间区间 / sort` 白名单同源，M12 契约字段与 M15 `result / tenant_id` 一并对齐——此前仅支持前四类，与「同形」声明不符，M15 修正）；数据范围同样收敛——归档不是越权后门 |
-| GET | `/audit-archives/export` | `audit:export` | 归档审计异步导出（M10 E-10）：与 `/audit-logs/export` 同机制（任务中心类型 `audit.archive.export`，返回 `jobId`），CSV 产物形态逐字节同构；数据范围在派发时收敛固化进 params |
+| GET | `/audit-archives` | `audit:read` | 归档审计分页查询（M10 E-10）：参数与 `/audit-logs` 同形（`user_id / module / action / target / 时间区间 / sort` 白名单同源，M12 契约字段与 M15 `result / tenant_id` 一并对齐——此前仅支持前四类，与「同形」声明不符，M15 修正）；数据范围同样收敛——归档不是越权后门。范围计算自 P1 修复起与在线列表**共用同一份**（`@fw/auth` 的 `resolveDataScopeActors`，此前是手写的第二份，两处漂移会让「在线看不见、归档看得见」成为可能） |
+| GET | `/audit-archives/export` | `audit:export` | 归档审计异步导出（M10 E-10）：与 `/audit-logs/export` 同机制（任务中心类型 `audit.archive.export`，返回 `jobId`），CSV 产物形态逐字节同构；数据范围在派发时收敛固化进 params（与归档列表同源，导出不得比列表看到更多） |
 
 > M15（PRD-015，ADR-0032）起审计记录追加**业务快照**（`summary` / `targetLabel` / `actorLabel` / `reason` /
 > `auditSource` / `tenantId`），并由 `GET /audit-logs/events` 下发事件语义。分层约定：快照落库冻结、
 > 解释元数据（名称/风险/指引/字段中文名）不进库；`result` 新增第四态 `unknown`；`auditSource=interceptor`
-> 仅表示「HTTP 成功返回」，不作为业务完成证据。CSV 业务列在 M15 B4 以**追加**方式写入末尾（既有列序不变），
+> 仅表示「HTTP 成功返回」，不作为业务完成证据。`targetLabel` 是**写入时解析的名称快照**：SaaS 运营事件
+> （套餐发布/订阅开通/取消/配额超限/生命周期迁移）经 `SaasStore.findTenantName` / `findPlanById` 取租户名 /
+> 套餐名（订阅类为「租户名 · 套餐名」），解析不到时写「名称快照缺失（ID: …）」而**不是裸 ID**——运营看到
+> `t1` 会误以为是租户名；存量裸 ID 行不回填。CSV 业务列在 M15 B4 以**追加**方式写入末尾（既有列序不变），
 > 当前版本导出列仍是 M12 形态。
 >
 > M12 W1（PRD-012 OBS-06/OBS-07，ADR-0025）起审计记录携带**统一事件契约**字段：`category` / `event` /

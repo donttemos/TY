@@ -14,6 +14,9 @@
  *   路由刻意声明在 @Get(':id') 之前，否则 'export' 会被当作 id 命中详情分支。
  * @modified 2026-10-20 donttemo M15 安全加固：CSV 单元格编码改走 @fw/auth 的 escapeCsvCell——
  *   新增公式注入防护（= + - @ / 制表符前缀加单引号），存量引号转义与列序不变。
+ * @modified 2026-10-21 donttemo P1 越权修复：detail() 原先只判 selfOnly，org / org_below 档可凭 ID
+ *   直读列表里看不见的记录；改为与 list / export 共用 resolveDataScopeActors 的归属人集合，
+ *   范围外与不存在统一 404（不泄露存在性）
  * @module example-api/auth
  */
 
@@ -30,8 +33,9 @@ import {
   auditRegistryVersion,
   escapeCsvCell,
   findAuditEvent,
+  isActorWithinDataScope,
   listAuditEvents,
-  resolveDataScopeFilter,
+  resolveDataScopeActors,
   type AuditAction,
   type AuditEventDefinition,
   type AuditEventResult,
@@ -192,20 +196,19 @@ export class AuditController {
   ): Promise<PageResult<AuditLogRecord>> {
     // M12 W2 OBS-14：未知过滤参数 400（不静默忽略）
     assertKnownFilterParams(request.query as Record<string, unknown>);
-    const scope = await resolveDataScopeFilter(user, this.org);
+    // 数据范围 → 允许的归属人集合：self 只允许查询本人记录（忽略传入的 user_id）；
+    // org / org_below 展开为部门成员集合（与传入 user_id 取交集）；all 不约束。
+    // 与详情接口共用 resolveDataScopeActors——列表看不见的记录，详情也必须拿不到（P1）。
+    const actors = await resolveDataScopeActors(user, this.org);
     // 排序解析放在数据范围解析之后、查询之前：非法 sort（未知字段 / 非法方向 / 超上限）直接 400（BUG-15）
     const parsedSort = parseSortQuery<AuditLogRecord>(sort, AUDIT_SORT_FIELDS);
-    // 数据范围 → 归属人约束：self 只允许查询本人记录（忽略传入的 user_id）；
-    // org / org_below 展开为部门成员集合（与传入 user_id 取交集）；all 不约束
-    let scopeUserIds: string[] | undefined;
-    if (scope.selfOnly) scopeUserIds = [user.id];
-    else if (scope.departmentIds) scopeUserIds = await this.org.listUserIdsByDepartmentIds(scope.departmentIds);
+    const selfOnly = actors.scope === 'self';
 
     return this.auth.auditLogs({
       page: Number(page),
       pageSize: Number(pageSize),
-      userId: scope.selfOnly ? user.id : userId,
-      userIds: scope.selfOnly ? undefined : scopeUserIds,
+      userId: selfOnly ? user.id : userId,
+      userIds: selfOnly ? undefined : (actors.allowedUserIds ?? undefined),
       module,
       action: action as AuditAction | undefined,
       targetType,
@@ -260,17 +263,16 @@ export class AuditController {
     @Query('tenant_id') tenantId?: string,
   ): Promise<JobView> {
     assertKnownFilterParams(request.query as Record<string, unknown>);
-    const scope = await resolveDataScopeFilter(user, this.org);
+    // 与列表同源的授权范围计算（导出不得比列表看到更多）
+    const actors = await resolveDataScopeActors(user, this.org);
     const parsedSort = parseSortQuery<AuditLogRecord>(sort, AUDIT_SORT_FIELDS);
-    let scopeUserIds: string[] | undefined;
-    if (scope.selfOnly) scopeUserIds = [user.id];
-    else if (scope.departmentIds) scopeUserIds = await this.org.listUserIdsByDepartmentIds(scope.departmentIds);
+    const selfOnly = actors.scope === 'self';
 
     // M10 E-01：完整查询条件固化进 params（JSON 可序列化）——跨实例重跑按它重建同一查询。
     // dataScope 已在此刻收敛为具体 ID（self → userId；org/org_below → userIds），重跑沿用派发时范围。
     const params: Record<string, unknown> = {
-      userId: scope.selfOnly ? user.id : userId,
-      userIds: scope.selfOnly ? undefined : scopeUserIds,
+      userId: selfOnly ? user.id : userId,
+      userIds: selfOnly ? undefined : (actors.allowedUserIds ?? undefined),
       module: module ?? null,
       action: action ?? null,
       targetType: targetType ?? null,
@@ -361,15 +363,20 @@ export class AuditController {
 
   /**
    * 审计详情（字段级变更前后值）
-   * dataScope 与列表同源收敛：self 档只看本人记录，范围外目标一律 404（不泄露存在性，fail-closed）。
+   *
+   * 授权范围与列表同源（`resolveDataScopeActors`）：self → 仅本人；org / org_below → 记录操作人
+   * 必须属于可见部门成员集合；all → 不限。范围外与不存在返回**同一个 404**（不泄露存在性，fail-closed）。
+   *
+   * 修复记录（P1）：此前只判 `scope.selfOnly`，org / org_below 档可凭 ID 直读列表里看不到的记录——
+   * 详情接口的服务端权限边界必须与列表一致，不能只靠前端过滤。
    */
   @Permissions(PERM.AUDIT_READ)
   @Get(':id')
   async detail(@CurrentUser() user: RequestUser, @Param('id') id: string): Promise<AuditLogRecord> {
-    const scope = await resolveDataScopeFilter(user, this.org);
+    const actors = await resolveDataScopeActors(user, this.org);
     const record = await this.admin.findAuditLogById(id);
-    if (!record) throw new BizError(ErrorCode.NOT_FOUND, '审计日志不存在');
-    if (scope.selfOnly && record.userId !== user.id) {
+    // 注意：系统任务记录 userId 为 null，按人收敛的档位一律不可见（isActorWithinDataScope 内判定）
+    if (!record || !isActorWithinDataScope(actors, record.userId)) {
       throw new BizError(ErrorCode.NOT_FOUND, '审计日志不存在');
     }
     return record;

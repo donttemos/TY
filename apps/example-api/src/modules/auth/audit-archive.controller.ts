@@ -9,11 +9,14 @@
  *   排序沿用 AUDIT_SORT_FIELDS 白名单（未知字段 400，与在线表口径一致）。
  * @author donttemo
  * @created 2026-10-15
+ * @modified 2026-10-21 donttemo P1 越权修复配套：列表 / 导出的范围计算改走 @fw/auth 的
+ *   resolveDataScopeActors，与在线审计列表共用同一份归属人集合（原为手写的第二份实现，
+ *   两处漂移会让「在线看不见、归档看得见」成为可能）
  * @module example-api/auth
  */
 
 import { Controller, Get, Inject, Query, Req } from '@nestjs/common';
-import { PERM, Permissions, CurrentUser, resolveDataScopeFilter, DATA_SCOPE_ORG, AuditArchiveService, AuditService, type AuditAction, type AuditEventResult, type AuditLogRecord, type DataScopeOrgPort, type RequestUser } from '@fw/auth';
+import { PERM, Permissions, CurrentUser, resolveDataScopeActors, DATA_SCOPE_ORG, AuditArchiveService, AuditService, type AuditAction, type AuditEventResult, type AuditLogRecord, type DataScopeOrgPort, type RequestUser } from '@fw/auth';
 import { parseSortQuery, type PageResult, type Sort } from '@fw/db';
 import { AUDIT_SORT_FIELDS, assertKnownFilterParams, buildAuditCsv, describeExportFilters, parseAuditEvents, parseAuditResult, parseTenantId } from './audit.controller.js';
 import { JobRunnerRegistry } from '../jobs/job-runner.registry.js';
@@ -94,17 +97,17 @@ export class AuditArchiveController {
   ): Promise<PageResult<AuditLogRecord>> {
     // 与在线列表同一条白名单：未知参数 400，不静默忽略（M12 W2 约定）
     assertKnownFilterParams(request.query as Record<string, unknown>);
-    const scope = await resolveDataScopeFilter(user, this.org);
+    // 数据范围与在线列表共用同一份计算（resolveDataScopeActors）：归档不是越权后门。
+    // 之前这里手写了一遍 scopeUserIds，两处一旦漂移就会出现「在线看不见、归档看得见」的错位。
+    const actors = await resolveDataScopeActors(user, this.org);
     const parsedSort = parseSortQuery<AuditLogRecord>(sort, AUDIT_SORT_FIELDS);
-    let scopeUserIds: string[] | undefined;
-    if (scope.selfOnly) scopeUserIds = [user.id];
-    else if (scope.departmentIds) scopeUserIds = await this.org.listUserIdsByDepartmentIds(scope.departmentIds);
+    const selfOnly = actors.scope === 'self';
 
     return this.archive.page({
       page: Number(page),
       pageSize: Number(pageSize),
-      userId: scope.selfOnly ? user.id : userId,
-      userIds: scope.selfOnly ? undefined : scopeUserIds,
+      userId: selfOnly ? user.id : userId,
+      userIds: selfOnly ? undefined : (actors.allowedUserIds ?? undefined),
       module,
       action: action as AuditAction | undefined,
       targetType,
@@ -151,15 +154,14 @@ export class AuditArchiveController {
   ): Promise<JobView> {
     // 与列表同一条白名单（此前归档导出未校验，未知参数会被静默忽略）
     assertKnownFilterParams(request.query as Record<string, unknown>);
-    const scope = await resolveDataScopeFilter(user, this.org);
+    // 与列表 / 在线导出同一份范围计算（导出不得比列表看到更多）
+    const actors = await resolveDataScopeActors(user, this.org);
     const parsedSort = parseSortQuery<AuditLogRecord>(sort, AUDIT_SORT_FIELDS);
-    let scopeUserIds: string[] | undefined;
-    if (scope.selfOnly) scopeUserIds = [user.id];
-    else if (scope.departmentIds) scopeUserIds = await this.org.listUserIdsByDepartmentIds(scope.departmentIds);
+    const selfOnly = actors.scope === 'self';
 
     const params: Record<string, unknown> = {
-      userId: scope.selfOnly ? user.id : userId,
-      userIds: scope.selfOnly ? undefined : scopeUserIds,
+      userId: selfOnly ? user.id : userId,
+      userIds: selfOnly ? undefined : (actors.allowedUserIds ?? undefined),
       module: module ?? null,
       action: action ?? null,
       targetType: targetType ?? null,

@@ -6,6 +6,7 @@
  * @author donttemo
  * @created 2026-10-19
  * @modified 2026-10-20 donttemo createSubscriptionWithSnapshot 落地「全成/全败」语义 + faultQuotaWriteAt 故障注入
+ * @modified 2026-10-21 donttemo P1（PRD-015 FR-15-10 收口）：补 findTenantName（tenantNames 映射）
  * @module @fw/saas
  */
 import type {
@@ -45,6 +46,8 @@ export class FakeSaasStore implements SaasStore {
   events = new Map<string, UsageEventInput>(); // key: idempotencyKey
   rollups = new Map<string, UsageRollupView>();
   tenantStatus = new Map<string, LifecycleStatus>();
+  /** 租户名（审计名称快照查询用；与 tenantStatus 分工：状态回答「在不在」，名称回答「叫什么」） */
+  tenantNames = new Map<string, string>();
   logs: LifecycleLog[] = [];
 
   private planSeq = 0;
@@ -295,6 +298,10 @@ export class FakeSaasStore implements SaasStore {
   // ---- LifecycleStore ----
   async findTenantStatus(tenantId: string): Promise<LifecycleStatus | null> {
     return this.tenantStatus.get(tenantId) ?? null;
+  }
+
+  async findTenantName(tenantId: string): Promise<string | null> {
+    return this.tenantNames.get(tenantId) ?? null;
   }
   async conditionalUpdateStatus(tenantId: string, from: LifecycleStatus, to: LifecycleStatus): Promise<boolean> {
     if (this.tenantStatus.get(tenantId) !== from) return false;

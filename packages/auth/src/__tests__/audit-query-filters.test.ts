@@ -3,8 +3,10 @@
  * @description MemoryAuthStore 与 PrismaAuthStore 同语义验证：按 traceId / requestId / familyId /
  *   category / event 精确过滤可组合；未知过滤字段在 HTTP 层 400（由控制器 assertKnownFilterParams
  *   收敛，此处锁定存储层过滤语义与组合查询）。
+ *   P1 越权修复配套：数据范围注入的 userIds（org / org_below 部门成员）必须收敛而非被忽略。
  * @author donttemo
  * @created 2026-10-17
+ * @modified 2026-10-21 donttemo P1：补 userIds 归属人集合收敛用例（此前内存实现只认单个 userId）
  * @module @fw/auth
  */
 import { describe, expect, it } from 'vitest';
@@ -73,5 +75,25 @@ describe('M12 W2 · 审计检索面扩展（OBS-14）', () => {
     await store.writeAuditLog(baseRow({ category: 'security', event: 'refresh.replay_detected' }));
     const miss = await store.pageAuditLogs({ page: 1, pageSize: 10, category: 'security', event: 'auth.login' });
     expect(miss.total).toBe(0);
+  });
+
+  it('userIds 归属人集合收敛（org / org_below 注入）：空集合 fail-closed，与 userId 取交集', async () => {
+    const store = new MemoryAuthStore();
+    await store.writeAuditLog(baseRow({ userId: 'u-1' }));
+    await store.writeAuditLog(baseRow({ userId: 'u-2' }));
+    await store.writeAuditLog(baseRow({ userId: 'u-3' }));
+    // 系统任务记录（userId = null）在任何按人收敛的集合之外
+    await store.writeAuditLog(baseRow({ userId: null }));
+
+    const scoped = await store.pageAuditLogs({ page: 1, pageSize: 10, userIds: ['u-1', 'u-2'] });
+    expect(scoped.items.map((row) => row.userId).sort()).toEqual(['u-1', 'u-2']);
+
+    // 空集合 = 无任何可见归属人（绝不退化为全量）
+    expect((await store.pageAuditLogs({ page: 1, pageSize: 10, userIds: [] })).total).toBe(0);
+
+    // userId 与 userIds 同时传入取交集
+    const intersected = await store.pageAuditLogs({ page: 1, pageSize: 10, userId: 'u-2', userIds: ['u-1', 'u-2'] });
+    expect(intersected.items.map((row) => row.userId)).toEqual(['u-2']);
+    expect((await store.pageAuditLogs({ page: 1, pageSize: 10, userId: 'u-3', userIds: ['u-1', 'u-2'] })).total).toBe(0);
   });
 });

@@ -3,14 +3,17 @@
  * @description 覆盖：注册表自检（命名/唯一/模板变量）、摘要三级生成链（枚举值翻译）、
  *   事件写入收口（module/action/category 由注册表补全、auditSource=domain）、
  *   未知事件码的严格/降级两条路径、租户与结果过滤、快照长度裁剪。
+ *   另覆盖限流器的丢弃观测（onDrop 两种原因与旁路安全，M15 P2）。
  * @author donttemo
  * @created 2026-10-20
+ * @modified 2026-10-21 donttemo M15 P2 观测闭环：补 onDrop 回调用例（rate_limited / capacity 与异常安全）
  * @module @fw/auth
  */
 import { describe, expect, it } from 'vitest';
 import { runWithRequestContext } from '@fw/logger';
 import { AuditService } from '../audit.service.js';
 import { AuditEventThrottle } from '../audit-throttle.js';
+import type { AuditThrottleDrop } from '../audit-throttle.js';
 import {
   AUDIT_EVENTS,
   auditEventCodesByRisk,
@@ -350,5 +353,39 @@ describe('审计事件限流器（ADR-0032 R6）', () => {
       throttle.allow(`login:10.0.0.1:acct-${i}`, 3, 60_000, start + i);
     }
     expect(throttle.stats().buckets).toBe(200);
+  });
+
+  it('M15 P2：丢弃经 onDrop 回调可观测，且区分 rate_limited / capacity 两种原因', () => {
+    const drops: AuditThrottleDrop[] = [];
+    const throttle = new AuditEventThrottle({ maxBuckets: 2, onDrop: (drop) => drops.push(drop) });
+    const start = 7_000_000;
+    // ① 窗口超限 → rate_limited（第 max+1 条起，每条丢弃各触发一次）
+    expect(throttle.allow('login:10.0.0.1:admin', 1, 60_000, start)).toBe(true);
+    expect(throttle.allow('login:10.0.0.1:admin', 1, 60_000, start + 1)).toBe(false);
+    expect(throttle.allow('login:10.0.0.1:admin', 1, 60_000, start + 2)).toBe(false);
+    // ② 容量满且无过期桶 → capacity（两个键占满后，第三个新键被拒）
+    expect(throttle.allow('login:10.0.0.2:admin', 1, 60_000, start + 3)).toBe(true);
+    expect(throttle.allow('login:10.0.0.3:admin', 1, 60_000, start + 4)).toBe(false);
+    expect(drops).toEqual([
+      { key: 'login:10.0.0.1:admin', reason: 'rate_limited' },
+      { key: 'login:10.0.0.1:admin', reason: 'rate_limited' },
+      { key: 'login:10.0.0.3:admin', reason: 'capacity' },
+    ]);
+    // 放行路径不触发回调
+    expect(throttle.allow('login:10.0.0.2:admin', 1, 60_000, start + 61_000)).toBe(true);
+    expect(drops).toHaveLength(3);
+  });
+
+  it('M15 P2：onDrop 回调抛错不影响业务路径（观测是旁路，不是主链路）', () => {
+    const throttle = new AuditEventThrottle({
+      onDrop: () => {
+        throw new Error('observer-down');
+      },
+    });
+    const start = 8_000_000;
+    expect(throttle.allow('k', 1, 60_000, start)).toBe(true);
+    // 丢弃时回调炸掉也不能把「拒绝」变成「异常」——业务看到的仍是 false
+    expect(throttle.allow('k', 1, 60_000, start + 1)).toBe(false);
+    expect(throttle.stats().droppedForCapacity).toBe(0);
   });
 });

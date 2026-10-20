@@ -11,6 +11,10 @@
  *      而审计行是不可变事实；把字典冻进行里会导致文案纠错无法回溯、行体积膨胀。
  * @author donttemo
  * @created 2026-10-20
+ * @modified 2026-10-21 donttemo P1（PRD-015 FR-15-10 收口）：新增名称快照缺失标记
+ *   `SNAPSHOT_MISSING_LABEL` / `snapshotMissingLabel`——写入点解析不到目标对象名称时
+ *   显式写「名称快照缺失（ID: …）」，与展示侧（admin-web `ACTOR_SNAPSHOT_MISSING`）同口径，
+ *   杜绝把 ID 当名称落库（运营视角的 target_label 必须是租户名/套餐名/用户名）。
  * @module @fw/auth
  */
 
@@ -633,6 +637,24 @@ export function renderAuditSummary(definition: AuditEventDefinition, vars: Recor
   const text = template.replace(/\{(\w+)\}/g, (_match, key: string) => vars[key] ?? '');
   const trimmed = text.trim();
   return trimmed.length > 0 ? trimmed : definition.name;
+}
+
+/**
+ * 名称快照缺失标记（PRD-015 FR-15-04 / AC-15-02）
+ *
+ * 写入点解析不到目标对象名称时（租户已删除、脏数据引用、并发删除），把这一事实
+ * **显式写进 `target_label`**，附对象 ID 便于追查；绝不让 ID 冒充名称——
+ * 运营在对象列看到 `t1` 会以为是租户名，看到 `名称快照缺失（ID: t1）` 才知道当时就没取到名。
+ * 文案与展示侧（admin-web `ACTOR_SNAPSHOT_MISSING`）保持一致：两侧是同一约定的写入/读取两端。
+ */
+export const SNAPSHOT_MISSING_LABEL = '名称快照缺失';
+
+/**
+ * 名称快照缺失的完整标记（带追查 ID）
+ * @param id 目标对象 ID（缺失时退化为不带 ID 的纯标记）
+ */
+export function snapshotMissingLabel(id?: string | null): string {
+  return id ? `${SNAPSHOT_MISSING_LABEL}（ID: ${id}）` : SNAPSHOT_MISSING_LABEL;
 }
 
 /**

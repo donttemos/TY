@@ -18,6 +18,29 @@
 
 ## [Unreleased]
 
+### Security（M15 P2：审计限流丢弃观测闭环，2026-10-21）
+
+- **丢弃不再静默**：`AuditEventThrottle` 新增 `onDrop` 回调，区分 `rate_limited`（窗口超限）/ `capacity`（容量拒建桶）两种原因；登录失败（`AuthService.recordLoginFailure`）与越权拒绝（`RbacGuard`）两条真实调用路径接线——此前登录路径「限流不允许时直接 return」，既无审计行也无日志，限流器注释声称的「结构化日志兜底」并未落实。
+- **双通道观测**：① `fw_auth_audit_dropped_total{path,reason}` 四条固定序列恒输出（含 0，告警规则可静态引用；OBS-12 基数护栏延续，label 仅低基数 `result`/`reason`/`path`）；② 周期性汇总结构化日志（`module=auth.metrics`，每路径每 60s 最多一条）——指标抓取不可用时的兜底，也让限流器注释里的「兜底」成为事实。汇总**刻意不含维度键原文**（IP/账号/权限串是攻击者可控的高基数数据），逐条记录会把丢弃变成日志放大面；「谁在被打」以保留的前 3 条样本为准。
+- **业务行为零变化**：该拒绝的照常拒绝（错误码不变）、已放行样本完整性不变；观测回调抛错一律吞掉（旁路不得影响主链路）。`AuthServiceDeps` 增加可选 `auditThrottle`（仅测试注入小 `maxBuckets`，使容量丢弃可在真实登录路径取证）。
+- **测试**：新增 `audit-throttle-observability.test.ts` 3 例（登录限流 / 登录容量 / 越权限流三条真实路径：指标计数 + 审计样本数不变 + 汇总日志内容与基数护栏）；`auth-metrics.test.ts` +2（四序列渲染 / 周期日志门限）、`audit-events.test.ts` +2（onDrop 两种原因 / 回调异常安全）。auth 包 **278/278**，`audit-throttle.ts` 覆盖率 100%（语句/分支/函数/行）。
+- **文档**：`docs/45` §4 新序列与口径、ADR-0032 R6 补「丢弃可观测」条款与待定 #4、PRD-015 FR-15-12 行文 + §10 变更记录、`docs/60` 指标开关行 label 口径。
+- **运维口径**：`fw_auth_audit_dropped_total` 持续上涨 = 限流器正在丢审计样本——调大 `maxBuckets` / 加副本 / 处置攻击源，不同 label 组合对应不同动作（`capacity` 看容量，`rate_limited` 看攻击密度）。
+
+### Security（P1：审计详情 dataScope 越权，2026-10-21）
+
+- **问题**：`GET /api/v1/audit-logs/:id` 查到记录后只判 `scope.selfOnly`——`org` / `org_below` 档没有校验记录操作人是否属于授权部门，`all` 档不限（平台管理员的预期行为）。因此持有 `audit:read` 的**部门管理者可凭列表里看不见的记录 ID 直读详情**，详情接口的服务端权限边界与列表不一致；`templates/admin/server` 的同名控制器有相同逻辑。
+- **修复**：新增 `@fw/auth` 的 `resolveDataScopeActors`（四档 → 「允许的归属人集合」，self=`[本人]`、org/org_below=可见部门成员、all=不限、无部门归属按 self 收敛）与纯函数 `isActorWithinDataScope`（`userId` 为 null 的系统任务记录只有 all 档可见）。列表 / 导出 / 详情**共用同一份计算**：详情对范围外记录一律返回 404，且与「记录不存在」**同 code 同 message**（不泄露存在性，fail-closed）。`assertWithinDataScope` 内部同步收敛到该实现（错误码仍 3002，用户详情/写操作行为不变）。
+- **配套**：`MemoryAuthStore.pageAuditLogs` 此前忽略 `userIds`（内存驱动下列表的部门成员收敛实际未生效，与 Prisma 实现语义不一致），现按「空集合 = 空结果 / 与 userId 取交集」收敛；模板服务端控制器同步修复；归档审计控制器（`/audit-archives`，无详情端点、本无同款漏洞）的列表 / 导出也统一到同一计算——它此前是手写的第二份 `scopeUserIds`，两处漂移会让「在线看不见、归档看得见」成为可能。
+- **测试**：新增 `apps/example-api/src/modules/auth/audit-detail-scope.spec.ts`（8 例）——`self / org / org_below / all` 四档详情边界、下级部门与旁支、无部门归属收敛、系统任务记录、**共享库多租户**（A 租户管理者猜 ID 读不到 B 租户记录，正反向）、越权与不存在同响应、以及「列表可见集合 ⇔ 详情可读集合」逐条等价；新增 `audit-archive-scope.spec.ts`（5 例）——**四个端点**（在线列表 / 在线导出 / 归档列表 / 归档导出）对同一用户注入的归属人约束逐个相同（归档侧此前无控制器级用例）；`@fw/auth` 补 `resolveDataScopeActors` / `isActorWithinDataScope`（7 例，含空集合 fail-closed）与 `userIds` 收敛（1 例）。反向验证两处均做过：把详情改回只判 `selfOnly`（复现原缺陷）→ 8 例中 4 例失败；把归档侧改成 self 档也塞 `userIds`（复现漂移）→ 同源用例 5 例中 3 例失败（在线导出用例不受影响，符合预期）；恢复后全绿。
+- **验证**：`@fw/auth` 的 `data-scope` / `audit-query-filters` 两套件 28 例、example-api `modules/auth` 全 8 套件 45 例（含新增详情越权 8 例 + 端点同源 5 例）全绿（`vitest run --no-file-parallelism src/modules/auth` → 45/45；默认并行下两个 SQLite 集成套件在 Windows 上偶发 `EBUSY` / hook 超时，属环境问题）；`tsc --noEmit` 零错；`check:headers` / `check:api-parity` / `check:triway-consistency`（八轴）/ `check:audit-events` / `check:no-raw-throw` 全绿。模板无独立 `node_modules`，以 `tsc.transpileModule` 做语法校验（0 诊断）。**证据性质**：以上均为实现方本机自检（B 级），这批改动尚未提交，因此**没有** CI 记录；已提交部分（`dac84ca`）的 CI 独立核实结果见 PRD-015 §7.2。
+
+### Fixed（M15 P1：SaaS 审计事件 target_label 名称快照收口，2026-10-21）
+
+- **租户 ID 不再冒充对象名称**：`saas-ops.controller.ts` 六处写入点（套餐发布 / 订阅开通 / 订阅取消 / 配额超限 4029 / 生命周期迁移成功 / 非法迁移 4030）此前把 `tenantId` / `planId` / 订阅 ID 直接写进 `target_label`——运营在对象列看到的是 `t1` 而不是租户名，违背 PRD-015 FR-15-10「`target_label` 必须是套餐名/租户名而非 ID」。现改为**写入时解析名称快照**：租户名经新增端口 `SaasStore.findTenantName`（Fake/Prisma 双实现），套餐名经既有 `findPlanById`（与订阅列表 `enrichSubscriptions` 同口径——软删套餐不暴露名称，两侧看到的事实一致）；订阅类事件落「租户名 · 套餐名」，任一侧缺失只标记该侧。
+- **取不到名称时显式声明缺失，不把 ID 当名称**：新增 `@fw/auth` 的 `SNAPSHOT_MISSING_LABEL` / `snapshotMissingLabel(id)`，解析不到（租户不存在 / 脏引用 / 套餐软删）时写「名称快照缺失（ID: …）」——与展示侧 `ACTOR_SNAPSHOT_MISSING`（admin-web）同文案，「缺失是可核验的事实」；也不静默留空让展示层回退成 `targetType:targetId`。存量裸 ID 行不回填（ADR-0032 R8），按历史数据处理。
+- **验证**：`saas-ops.controller.spec.ts` 33 例（+9：六处写入点的名称解析与缺失标记双侧断言，含「只标记缺失一侧」与共享 AUDIT 桩的用例隔离）；`@fw/saas` 37/37（Fake 驱动 `findTenantName` 命中/未登记）；saas 集成 spec 20/20（真实库租户名断言，seed `t1`→「租户一」、不存在→null）；`@fw/auth` 278/278；`check:audit-events` 32 事件 / 42 写入点 / 覆盖矩阵三方一致；example-api `tsc --noEmit` 零错。无新增错误码、无迁移、无 API 契约变更（`target_label` 列语义收口，值域仍是字符串）。
+
 ### Changed（M15：三条 AC 延后取证登记，2026-10-20）
 
 - **AC-15-07 / 15-12 / 15-13 延后取证**（用户决定；PRD-015 §7 已内联每条的具体验收动作）：① **15-07 数据范围回归**——`self/org/org_below/all` 四档 × 列表/详情/归档/导出需多账号 × 真机多租户数据；② **15-12 性能容量**——列表带新过滤 p95 ≤ 基线 1.2 倍需真实数据量与生产级环境；③ **15-13 覆盖矩阵抽样**——七类事件的「真实记录」需运行期触发后查库（集成测试只证明写入点存在）。三条保持未勾选，代码与门禁状态不变（CI 四腿全绿；`check:audit-events` 32 条事件 / 387 个生产文件 CI 常驻）。

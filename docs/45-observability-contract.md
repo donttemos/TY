@@ -56,10 +56,20 @@ fw_auth_refresh_total{result="success|failed"}
 fw_auth_token_verify_failed_total{reason="missing|expired|invalid"}
 fw_security_replay_detected_total{reason="<ReplayReason 枚举>"}
 fw_security_family_revoked_total
+fw_auth_audit_dropped_total{path="login|authz",reason="rate_limited|capacity"}
 ```
 
-**基数护栏（硬约束）**：label 仅允许低基数枚举（`result` / `reason`）；`userId` / `familyId` / `jti` /
+**基数护栏（硬约束）**：label 仅允许低基数枚举（`result` / `reason` / `path`）；`userId` / `familyId` / `jti` /
 `requestId` 禁止入 label（用户/租户维度走审计表，见 §5）——由 `auth-metrics.test.ts` 反向锁定。
+
+**审计限流丢弃可观测（M15 P2，FR-15-12 / ADR-0032 R6）**：登录失败（`AuthService.recordLoginFailure`）与
+越权拒绝（`RbacGuard`）两条路径的限流器丢弃不再静默——`AuditEventThrottle.onDrop` 把每次丢弃
+（`rate_limited` 窗口超限 / `capacity` 容量拒建桶）计入 `fw_auth_audit_dropped_total`（四条固定序列恒输出，
+含 0，告警规则可静态引用），并触发**周期性汇总结构化日志**（`module=auth.metrics`，
+msg=「审计事件限流丢弃周期性汇总」，每路径每 60s 最多一条，ctx 只含 path 与两种原因的区间计数）。
+汇总日志刻意**不含维度键原文**（IP / 账号 / 权限串都是攻击者可控的高基数数据）——「谁在被打」
+以保留下来的前 3 条审计样本为准。该序列回答一个此前答不上来的问题：**审计样本是否正在大量丢失**
+（丢弃数持续上涨 = 限流器在丢审计，需调大上限 / 加副本 / 处置攻击源）。
 
 ## 5. 审计检索键（OBS-14）
 
@@ -95,6 +105,14 @@ M12 十五列位置与顺序不变。`eventName`/`risk` 由注册表现算，未
 历史行（加固前写入）确实没有快照：页面与详情**标注「名称快照缺失（ID: …）」**，绝不拿当前用户列表
 的名称回填——管理员「运营 A」改名「运营 B」后，历史行必须仍显示当时的人，否则是把今天的事实写成昨天的。
 用户已删除 / 回查失败同样留空，不用后来者的名字冒充。
+
+**`target_label` 的写入口径（P1 收口，2026-10-21）**：SaaS 运营事件（套餐发布 / 订阅开通 / 订阅取消 /
+配额超限 / 生命周期迁移含非法）在**写入时刻**经 `SaasStore.findTenantName` / `findPlanById` 把
+租户 ID / 套餐 ID 解析为名称快照——运营在对象列看到 `t1` 会误以为是租户名，看到 ID 也不会去查。
+解析不到（租户不存在 / 脏引用 / 套餐软删）时写 `snapshotMissingLabel(id)`（`@fw/auth`）：
+**「名称快照缺失（ID: …）」**，与展示侧 `ACTOR_SNAPSHOT_MISSING` 同文案、同为「缺失是可核验的事实」；
+绝不让 ID 冒充名称，也不静默留空让展示层回退成 `targetType:targetId`。存量行（修复前写入的裸 ID）
+**不回填**（ADR-0032 R8），按历史数据处理。
 
 ## 6. 排障样例：看到 `replay_detected`，一次拉全链（G12-3）
 
@@ -184,13 +202,13 @@ curl -s http://127.0.0.1:3000/metrics | grep '^fw_security_replay_detected_total
 
 | 事件码 | 风险 | 结果 | 写入点 | 目标对象 | 原因来源 | 备注 |
 |---|---|---|---|---|---|---|
-| `saas.lifecycle.activate`<br>`saas.lifecycle.freeze`<br>`saas.lifecycle.resume`<br>`saas.lifecycle.terminate`<br>`saas.lifecycle.expire`<br>`saas.lifecycle.dispose` | notice~critical | success | `apps/example-api/.../saas-ops.controller.ts`（动作→码显式映射） | 租户 | 运营填写 / 系统生成 | freeze/terminate/dispose 需复核；摘要含状态迁移 |
-| `saas.lifecycle.invalid` | notice | denied | 同上（捕获 4030 后记录再原样抛出） | 租户 | 领域错误文案 | 不改写错误语义，只补留痕 |
+| `saas.lifecycle.activate`<br>`saas.lifecycle.freeze`<br>`saas.lifecycle.resume`<br>`saas.lifecycle.terminate`<br>`saas.lifecycle.expire`<br>`saas.lifecycle.dispose` | notice~critical | success | `apps/example-api/.../saas-ops.controller.ts`（动作→码显式映射） | 租户（`target_label`=租户名） | 运营填写 / 系统生成 | freeze/terminate/dispose 需复核；摘要含状态迁移；名称写入时解析，取不到落缺失标记 |
+| `saas.lifecycle.invalid` | notice | denied | 同上（捕获 4030 后记录再原样抛出） | 租户（`target_label`=租户名） | 领域错误文案 | 不改写错误语义，只补留痕；名称口径同迁移成功 |
 | `saas.plan.create` | notice | success | 同上 | 套餐 | — | `target_label`=套餐名 |
-| `saas.plan.publish` | high | success | 同上 | 套餐 | — | 含版本号与配额项数；发布后版本不可变 |
-| `saas.subscription.create` | notice | success | 同上 | 订阅 | — | 含套餐编码/版本/到期时间 |
-| `saas.subscription.cancel` | high | success | 同上 | 订阅 | 运营填写（必填建议） | 需复核；原因同时落 `reason` 列 |
-| `saas.quota.exceeded` | notice | denied | 同上（4029 分支） | 租户 | 系统生成 | 硬限额拒绝，未扣减用量 |
+| `saas.plan.publish` | high | success | 同上 | 套餐（`target_label`=套餐名） | — | 含版本号与配额项数；发布后版本不可变；名称写入时解析，取不到落缺失标记 |
+| `saas.subscription.create` | notice | success | 同上 | 订阅（`target_label`=租户名 · 套餐名） | — | 含套餐编码/版本/到期时间；两侧名称写入时解析，取不到的一侧落缺失标记 |
+| `saas.subscription.cancel` | high | success | 同上 | 订阅（`target_label`=租户名 · 套餐名） | 运营填写（必填建议） | 需复核；原因同时落 `reason` 列；名称口径同开通 |
+| `saas.quota.exceeded` | notice | denied | 同上（4029 分支） | 租户（`target_label`=租户名） | 系统生成 | 硬限额拒绝，未扣减用量；名称写入时解析，取不到落缺失标记 |
 
 ### 7.4 安全、配置与运维
 

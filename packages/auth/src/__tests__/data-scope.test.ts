@@ -3,18 +3,24 @@
  * @description 覆盖：
  *   - resolveDataScope 纯同步判定（all / self / org 无端口收敛 + pendingScopes）；
  *   - resolveDataScopeFilter 四档完整解析（org=本部门、org_below=部门闭包、无端口/无部门按 self 收敛）；
+ *   - resolveDataScopeActors / isActorWithinDataScope 归属人集合（列表与详情共用的授权口径）；
  *   - assertWithinDataScope 详情越权校验（self 他人 3002、org 范围外 3002、org_below 下级放行）；
  *   - collectDescendantIds 部门闭包（多根 / 防环 / 悬空父 / 去重）。
  * @author donttemo
  * @created 2026-10-14
+ * @modified 2026-10-21 donttemo P1 越权修复：补 resolveDataScopeActors / isActorWithinDataScope 覆盖
+ *   （审计详情原先只判 selfOnly，org / org_below 档形同虚设）
  * @module @fw/auth
  */
 import { describe, expect, it } from 'vitest';
 import { ErrorCode } from '@fw/core';
 import {
   assertWithinDataScope,
+  isActorWithinDataScope,
   resolveDataScope,
+  resolveDataScopeActors,
   resolveDataScopeFilter,
+  type DataScopeActorSet,
   type DataScopeOrgPort,
 } from '../data-scope.js';
 import { collectDescendantIds } from '../org-tree.js';
@@ -171,6 +177,63 @@ describe('assertWithinDataScope · 详情与写操作越权校验', () => {
     await expect(assertWithinDataScope({ id: 'bob', dataScope: 'org_below' }, 'frank')).rejects.toMatchObject({
       code: ErrorCode.FORBIDDEN,
     });
+  });
+});
+
+describe('resolveDataScopeActors · 允许归属人集合（列表与详情共用口径）', () => {
+  it('all：不限（allowedUserIds = null），任何归属人（含系统任务的 null）都可读', async () => {
+    const actors = await resolveDataScopeActors({ id: 'admin', dataScope: 'all' }, ORG);
+    expect(actors).toEqual({ scope: 'all', unrestricted: true, allowedUserIds: null });
+    expect(isActorWithinDataScope(actors, 'anyone')).toBe(true);
+    expect(isActorWithinDataScope(actors, null)).toBe(true);
+  });
+
+  it('self：集合就是本人，他人与系统任务一律不可读', async () => {
+    const actors = await resolveDataScopeActors({ id: 'alice', dataScope: 'self' }, ORG);
+    expect(actors).toEqual({ scope: 'self', unrestricted: false, allowedUserIds: ['alice'] });
+    expect(isActorWithinDataScope(actors, 'alice')).toBe(true);
+    expect(isActorWithinDataScope(actors, 'bob')).toBe(false);
+    // 系统任务记录（userId 为 null）不属于任何按人收敛的集合
+    expect(isActorWithinDataScope(actors, null)).toBe(false);
+    expect(isActorWithinDataScope(actors, undefined)).toBe(false);
+  });
+
+  it('org：集合 = 本部门成员（不含下级部门，不含旁支）', async () => {
+    const carol = await resolveDataScopeActors({ id: 'carol', dataScope: 'org' }, ORG);
+    expect(carol.scope).toBe('org');
+    expect(carol.unrestricted).toBe(false);
+    expect([...(carol.allowedUserIds ?? [])].sort()).toEqual(['bob', 'carol']);
+    expect(isActorWithinDataScope(carol, 'bob')).toBe(true);
+    // dave 在前端组（下级部门）——org 档不含下级
+    expect(isActorWithinDataScope(carol, 'dave')).toBe(false);
+    expect(isActorWithinDataScope(carol, 'grace')).toBe(false);
+  });
+
+  it('org_below：集合 = 部门闭包内的全部成员', async () => {
+    const bob = await resolveDataScopeActors({ id: 'bob', dataScope: 'org_below' }, ORG);
+    expect(bob.scope).toBe('org_below');
+    expect([...(bob.allowedUserIds ?? [])].sort()).toEqual(['bob', 'carol', 'dave', 'erin', 'frank']);
+    expect(isActorWithinDataScope(bob, 'frank')).toBe(true);
+    // grace 在 mkt（旁支，不在 rd 子树内）
+    expect(isActorWithinDataScope(bob, 'grace')).toBe(false);
+  });
+
+  it('org 档用户无部门归属：收敛为 self（集合只有本人，绝不放宽为全量）', async () => {
+    const hank = await resolveDataScopeActors({ id: 'hank', dataScope: 'org' }, ORG);
+    expect(hank).toEqual({ scope: 'self', unrestricted: false, allowedUserIds: ['hank'] });
+    expect(isActorWithinDataScope(hank, 'bob')).toBe(false);
+  });
+
+  it('未注入组织端口：org_below 收敛为 self，范围外目标不可读', async () => {
+    const actors = await resolveDataScopeActors({ id: 'bob', dataScope: 'org_below' });
+    expect(actors).toEqual({ scope: 'self', unrestricted: false, allowedUserIds: ['bob'] });
+    expect(isActorWithinDataScope(actors, 'frank')).toBe(false);
+  });
+
+  it('空集合 fail-closed：{ allowedUserIds: [] } 对任何人都不可读（不退化全量）', () => {
+    const empty: DataScopeActorSet = { scope: 'org', unrestricted: false, allowedUserIds: [] };
+    expect(isActorWithinDataScope(empty, 'bob')).toBe(false);
+    expect(isActorWithinDataScope(empty, null)).toBe(false);
   });
 });
 

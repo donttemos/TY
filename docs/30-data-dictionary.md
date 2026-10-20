@@ -413,7 +413,7 @@ erDiagram
 | `trace_id` | varchar(64) | 否 | NULL | 链路 ID，串联日志 | `idx_audit_trace` |
 | `created_at` | datetime(3) | 是 | — | 操作时间（仅创建，不更新不删除） | `idx_audit_created` |
 | `summary` | varchar(255) | 否 | NULL | 业务摘要快照（M15/ADR-0032：写入时固化，超长截断并以 `…` 标记） | — |
-| `target_label` | varchar(128) | 否 | NULL | 目标对象名称快照（租户名/套餐名/用户名；改名后历史不变） | — |
+| `target_label` | varchar(128) | 否 | NULL | 目标对象名称快照（租户名/套餐名/用户名；改名后历史不变。M15 P1 收口：SaaS 运营事件写入时经 `findTenantName`/`findPlanById` 解析，取不到写「名称快照缺失（ID: …）」而非裸 ID；存量裸 ID 行不回填） | — |
 | `actor_label` | varchar(64) | 否 | NULL | 操作人名称快照（改名后历史不变；写入时刻由 `AuditService.persist` 集中补全：调用方未显式传值时按 `user_id` 回查昵称/账号名，回查失败留 NULL，展示为「名称快照缺失」） | — |
 | `reason` | varchar(255) | 否 | NULL | 操作原因（人工填写或系统生成；系统任务自动生成原因） | — |
 | `audit_source` | varchar(16) | 否 | NULL | 记录来源：`domain`（领域层显式记录）/ `interceptor`（`@Audit` 兜底，仅代表 HTTP 成功返回）/ NULL（未标注） | — |

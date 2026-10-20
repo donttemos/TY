@@ -4,6 +4,7 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-17 donttemo M12 W2（PRD-012 OBS-12）：导出 auth/security 指标段 API
+ * @modified 2026-10-21 donttemo M15 P2 观测闭环：导出审计限流丢弃计数 API（recordAuditThrottleDrop 等）
  * @module @fw/auth
  */
 
@@ -44,17 +45,24 @@ export {
   recordTokenVerifyFailedMetric,
   recordReplayDetectedMetric,
   recordFamilyRevokedMetric,
+  recordAuditThrottleDrop,
   renderAuthMetricsSection,
   isAuthMetricsSectionEnabled,
   resetAuthMetrics,
 } from './auth-metrics.js';
-export type { VerifyFailReason } from './auth-metrics.js';
+export type { AuditThrottlePath, VerifyFailReason } from './auth-metrics.js';
 export type { RotationOutcome } from './refresh-token.service.js';
 export { TokenBlacklist, BLACKLIST_PREFIX, CUTOFF_PREFIX } from './token-blacklist.js';
 export { PermissionService } from './permission.service.js';
 export type { UserAuthContext } from './permission.service.js';
-export { resolveDataScope, resolveDataScopeFilter, assertWithinDataScope } from './data-scope.js';
-export type { DataScopeFilter, DataScopeOrgPort } from './data-scope.js';
+export {
+  resolveDataScope,
+  resolveDataScopeFilter,
+  resolveDataScopeActors,
+  isActorWithinDataScope,
+  assertWithinDataScope,
+} from './data-scope.js';
+export type { DataScopeActorSet, DataScopeFilter, DataScopeOrgPort } from './data-scope.js';
 export { collectDescendantIds } from './org-tree.js';
 export type { OrgTreeNode } from './org-tree.js';
 export { AuditService, sanitizeForAudit } from './audit.service.js';
@@ -69,6 +77,8 @@ export {
   findAuditEvent,
   listAuditEvents,
   renderAuditSummary,
+  SNAPSHOT_MISSING_LABEL,
+  snapshotMissingLabel,
   verifyAuditRegistry,
 } from './audit-events.js';
 export type {
@@ -78,7 +88,7 @@ export type {
   AuditEventRisk,
 } from './audit-events.js';
 export { AuditEventThrottle } from './audit-throttle.js';
-export type { AuditEventThrottleOptions, AuditEventThrottleStats } from './audit-throttle.js';
+export type { AuditEventThrottleOptions, AuditEventThrottleStats, AuditThrottleDrop, AuditThrottleDropReason } from './audit-throttle.js';
 export { AuditArchiveService } from './audit-archive.js';
 export type { AuditArchivePort, AuditArchiveRunOptions, AuditArchiveRunResult } from './audit-archive.js';
 export { AuditInterceptor } from './audit.interceptor.js';

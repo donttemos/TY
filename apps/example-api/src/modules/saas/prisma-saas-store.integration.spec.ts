@@ -56,6 +56,7 @@ async function applyAllMigrationsDdl(): Promise<void> {
  *   CI 矩阵设 SAAS_TEST_DB_URL 直连 service DB（迁移由 CI 步骤预先 deploy）。
  * @author donttemo
  * @created 2026-10-19
+ * @modified 2026-10-21 donttemo P1（PRD-015 FR-15-10 收口）：补 findTenantName 真实库断言
  * @module example-api/saas
  */
 
@@ -226,6 +227,12 @@ describe('PrismaSaasStore 订阅与生命周期（ADR-0029/0031 不变量）', (
     expect(await store.findTenantStatus('t1')).toBe('active');
     // 迁移历史 2 条
     expect((await store.listLifecycleLogs('t1')).map((l) => l.action)).toEqual(['freeze', 'resume']);
+  });
+
+  it('findTenantName：租户名快照查询（PRD-015 FR-15-10，审计 target_label 的数据源）', async () => {
+    expect(await store!.findTenantName('t1')).toBe('租户一');
+    expect(await store!.findTenantName('t2')).toBe('租户二');
+    expect(await store!.findTenantName('no-such-tenant')).toBeNull(); // 端口契约：null 仅表示租户不存在
   });
 
   it('QuotaExceededError 契约：4029/429 + details 三字段', () => {

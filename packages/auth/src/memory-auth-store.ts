@@ -18,6 +18,8 @@
  *   ③ updateUser 定义 patch 语义：业务列白名单（对齐 Prisma 可更新列），未知列报错；
  *   ④ replaceUserRoles / replaceRolePermissions 校验引用存在（对齐 DB 外键，杜绝悬空引用）；
  *   ⑤ 移除 grantRolePermissions 测试便利方法（与 replaceRolePermissions 完全等价，不该出现在生产类面）。
+ * @modified 2026-10-21 donttemo P1 越权修复配套：pageAuditLogs 消费 query.userIds（此前只认单个 userId，
+ *   内存驱动下列表的 org / org_below 部门成员收敛实际未生效，与 Prisma 实现不同语义）
  * @module @fw/auth
  */
 
@@ -470,7 +472,15 @@ export class MemoryAuthStore implements AuthStore {
     const page = Math.max(1, Math.floor(query.page));
     const pageSize = Math.min(PAGE_SIZE_MAX, Math.max(1, Math.floor(query.pageSize)));
     let rows = [...this.auditLogs];
-    if (query.userId) rows = rows.filter((r) => r.userId === query.userId);
+    // 数据范围注入的归属人集合（org / org_below 展开部门成员）；与 userId 同时传入取交集，
+    // 空集合匹配不到任何记录（fail-closed，绝不因「无展开结果」退化为全量）——与 Prisma 实现同语义。
+    // 系统任务记录（userId 为 null）不在任何按人收敛的集合内，故一并排除。
+    if (query.userIds !== undefined) {
+      const allowed = new Set(query.userId ? query.userIds.filter((id) => id === query.userId) : query.userIds);
+      rows = rows.filter((row) => (row.userId ? allowed.has(row.userId) : false));
+    } else if (query.userId) {
+      rows = rows.filter((r) => r.userId === query.userId);
+    }
     if (query.module) rows = rows.filter((r) => r.module === query.module);
     if (query.action) rows = rows.filter((r) => r.action === query.action);
     if (query.targetType) rows = rows.filter((r) => r.targetType === query.targetType);
