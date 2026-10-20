@@ -260,7 +260,7 @@ v0.7.5 之后，审计的**机制层**已经齐备：统一 `AuditService.record
 - [x] AC-15-05 旧数据可展示且不伪造：无 `event` / 未登记 / 字典缺失三种降级均有明确提示与正确回退。—— `audit-display.test.ts` 11 例锁定三级降级链（摘要 → 事件名+对象 → 原始码 → module/action 中文），详情页对旧行显示「历史记录（无业务摘要）」提示且不补写摘要。
 - [ ] AC-15-06 在线查询、归档查询、导出三处对同一事件返回的名称、摘要、结果一致（同码同文案断言）。
 - [ ] AC-15-07 敏感字段持续脱敏；`self/org/org_below/all` 四档范围在列表、详情、归档、导出均不放松（越权一律 403/404）；令牌、密钥、口令不出现在任何视图与产物中。
-- [ ] AC-15-08 三库迁移与适配一致：三库集成用例证明新列存在、往返保真、归档保留新列。
+- [x] AC-15-08 三库迁移与适配一致：三库集成用例证明新列存在、往返保真、归档保留新列。—— **CI 四腿全绿**（run `39447355932`，commit `8fe98a0`）：构建/单测(SQLite)/静态检查 + 集成矩阵 sqlite / postgres / mysql 均 success；三份迁移 `20261020120000_add_audit_business_snapshot` 在各自方言下部署成功，集成用例覆盖新列读写。
 - [ ] AC-15-09 租户维度可用：写入 `tenant_id` 正确；按租户筛选与 `dataScope` 交集正确；存量 0 值标注「未知/存量」。
 - [x] AC-15-10 前端对注册表的缓存与失效生效；未知事件不阻塞渲染；注册表不可用时页面降级可用。—— `useAuditEvents` 模块级缓存 + inflight 合并 + `version` 指纹；`use-audit-events.test.ts` 3 例（并发只发一次请求、按风险取码排除 deprecated、注册表失败降级且下次重试）。
 - [x] AC-15-11 导出 CSV 列序为追加式、内容含业务列与原始列，mock 与实现逐字节同构，smoke 断言同步。—— `audit-csv.spec.ts` 5 例（表头 23 列且前 15 列不变、BOM/CRLF、已登记事件补事件名与风险、未登记留空、引号/换行转义）；mock 与 example-api 同表头，`smoke-mock` 143/143（含 `header=true`），`smoke-admin` 表头断言同批更新。
@@ -301,6 +301,8 @@ v0.7.5 之后，审计的**机制层**已经齐备：统一 `AuditService.record
 
 | 日期 | 变更点 | 影响 |
 |---|---|---|
+| 2026-10-20 | **推送与 CI 收口**：commit `0674f0a`（M15 全量，72 文件）+ `8fe98a0`（修复）。首轮 CI run `39446395221` 挂在第 15 步 C-06 冒烟——`smoke-admin` 的 `audit_module` 六项定数断言漏同步（seed/mock/smoke-mock 已改七项，后端冒烟没改）；修复后 run `39447355932` 四腿全绿（base + sqlite/postgres/mysql）。本次同时验证 `check:audit-events` 在 CI 环境（Node 22.22.2 + strip-types）正常 | AC-15-08 关闭；M15 代码全部入库 |
+
 | 2026-10-20 | **浏览器 E2E（AC-15-01 关闭）**：新增 `scripts/e2e-m15-audit-view.mjs`（复用 M14 的 CDP 骨架，零新依赖），覆盖列表运营视图 / 结果与风险筛选 / 详情业务区与技术折叠 / 导出派发 / 暗色 / 双分辨率，15 项全过并产出 9 张截图。过程中发现并修掉两个演示数据缺陷：① mock 注册表只抄了 12 条事件（页面大半显示「未登记」）→ 改为由 `scripts/gen-audit-events-mock.mjs` 从后端注册表**生成** `mock/audit-events.ts`，门禁新增「生成物是否最新」校验；② mock 拒绝行是「登录成功 + 已拒绝」自相矛盾 → 改为语义匹配的 `auth.login_failed` | 视觉可读性有截图证据；mock 不再是手抄副本，注册表漂移由门禁拦截 |
 
 | 2026-10-20 | **收口：模板同步（templates/admin）**：`server` 侧 12 处 `@Audit` 全部改为领域事件（用户/角色/认证），审计端点补事件注册表 `/audit-logs/events` 与 `result`/`tenant_id`/`event` 多值过滤，Prisma 存储层补租户列与五个快照列的读写与过滤，种子补 `security` 动作；`admin-web` 侧同步 `AuditLogRecord` 新字段、四态结果、`AuditQuery` 新过滤与 `fetchAuditEvents`（模板不含审计页——裁剪范围内本就无该页与菜单，无死入口）。模板无独立 node_modules，未做类型检查，采用 `tsc.transpileModule` 语法校验 + triway 七轴对撞 | 生成项目不再退回「双写 + 不可读审计」；模板审计页仍留白（按 example-api 页面为范式补齐） |

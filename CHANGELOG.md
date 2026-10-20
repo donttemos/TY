@@ -18,6 +18,10 @@
 
 ## [Unreleased]
 
+### Fixed（M15 收口：smoke-admin 字典断言漏同步，2026-10-20）
+
+- `apps/example-api/scripts/smoke-admin.mjs` 的 `audit_module` 断言仍为「六项」，而 M15 已给种子补 `saas`（七项）。首轮 CI run `39446395221` 因此在第 15 步 C-06 冒烟失败、其后矩阵被 skip。**范围固定断言扩键必须三处同改：seed / smoke-mock / smoke-admin**——这次前两处改了，第三处漏了。修复后 run `39447355932` 四腿全绿。
+
 ### Added（M15：审计页浏览器验收 + mock 注册表生成，2026-10-20）
 
 - **浏览器 E2E**：新增 `apps/admin-web/scripts/e2e-m15-audit-view.mjs`（复用 M14 的 CDP 骨架，零新依赖），覆盖列表运营视图、结果/风险筛选、详情业务区与技术折叠、导出派发、暗色与 1280×720 / 1920×1080 无横向溢出，**15/15 通过**，产出 9 张截图与 `report-m15.json`（AC-15-01 关闭）。
