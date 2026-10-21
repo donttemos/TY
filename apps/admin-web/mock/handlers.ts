@@ -39,6 +39,10 @@
  *   收紧口径与 @fw/storage 同源（20MB + 扩展名白名单，400 文案逐字一致），下载逐字节回放
  * @modified 2026-10-20 donttemo M15 安全加固：审计导出 CSV 单元格改走 `mock/csv-cell.ts` 的
  *   `escapeCsvCell`（与 @fw/auth 同源，含 `= + - @`/制表符公式注入防护），空值形态由 `""` 改为空串与后端对齐
+ * @modified 2026-10-21 donttemo P2 平台审计：新增 `/audit-logs/platform`、`/audit-logs/platform/export`、
+ *   `/audit-logs/platform/:id` 三个维护入口（双权限：audit:read|audit:export + system:tenant:ignore，
+ *   与后端 @IgnoreTenant 守卫的「与」关系一致）；跨租户演示行只从 platform 端点返回，
+ *   普通 `/audit-logs*` 行为与产物不变（不伪造普通端点的跨租户能力）
  * @module admin-web/mock
  */
 
@@ -61,7 +65,7 @@ import type {
   MockUploadFile,
   MockUser,
 } from './db';
-import { db as defaultDb } from './db';
+import { db as defaultDb, PLATFORM_AUDIT_LOGS } from './db';
 import { escapeCsvCell } from './csv-cell';
 import { MOCK_AUDIT_EVENTS } from './audit-events';
 
@@ -584,6 +588,101 @@ function applyMockAuditContractFilters<T extends { traceId?: string | null; requ
     rows = rows.filter((a) => (a.event ? codes.has(a.event) : false));
   }
   return rows;
+}
+
+/**
+ * 审计导出 CSV（在线 / 平台维护入口同源）
+ *
+ * 与 example-api 的 `buildAuditCsv` **逐字节同构**：同表头、同 BOM、同 CRLF、同引号转义、
+ * 同公式注入防护（`escapeCsvCell` 两侧同源）；前 15 列位置不变，业务列追加在末尾。
+ * 在线导出与平台导出共用本函数——两条链路只是「数据范围不同」，产物格式不得漂移。
+ */
+function buildMockAuditCsv(rows: MockAuditLog[]): string {
+  const header = [
+    'id', 'createdAt', 'userId', 'module', 'action', 'targetType', 'targetId', 'ip', 'traceId',
+    'requestId', 'familyId', 'category', 'event', 'before', 'after',
+    'eventName', 'summary', 'targetLabel', 'actorLabel', 'reason', 'result', 'auditSource', 'risk',
+  ];
+  // 生成物是 as const（字面量联合），此处按业务键放宽为 string —— 未登记事件码也要能查到「无定义」
+  const eventMeta = new Map<string, { name: string; risk: string }>(
+    MOCK_AUDIT_EVENTS.map((item) => [item.code as string, { name: item.name, risk: item.risk }]),
+  );
+  const lines = rows.map((a) =>
+    [
+      escapeCsvCell(a.id),
+      escapeCsvCell(a.createdAt),
+      escapeCsvCell(a.userId),
+      escapeCsvCell(a.module),
+      escapeCsvCell(a.action),
+      escapeCsvCell(a.targetType),
+      escapeCsvCell(a.targetId),
+      escapeCsvCell(a.ip),
+      escapeCsvCell(a.traceId),
+      escapeCsvCell(a.requestId),
+      escapeCsvCell(a.familyId),
+      escapeCsvCell(a.category),
+      escapeCsvCell(a.event),
+      escapeCsvCell(a.beforeValue),
+      escapeCsvCell(a.afterValue),
+      // 注册表可解释列（mock 只用演示子集；未登记码留空，与后端同语义）
+      escapeCsvCell(eventMeta.get(a.event ?? '')?.name ?? null),
+      escapeCsvCell(a.summary ?? null),
+      escapeCsvCell(a.targetLabel ?? null),
+      escapeCsvCell(a.actorLabel ?? null),
+      escapeCsvCell(a.reason ?? null),
+      escapeCsvCell(a.result ?? null),
+      escapeCsvCell(a.auditSource ?? null),
+      escapeCsvCell(eventMeta.get(a.event ?? '')?.risk ?? null),
+    ].join(','),
+  );
+  return `\uFEFF${[header.join(','), ...lines].join('\r\n')}\r\n`;
+}
+
+/**
+ * 审计行过滤（在线列表 / 在线导出 / 平台列表 / 平台导出共用）
+ *
+ * 与 example-api 的列过滤逐项同源：普通参数（user_id / module / action / 时间区间）+ 契约精确过滤
+ * （result / tenant_id / target_type / target_id / trace_id / request_id / family_id / category / event 多值）。
+ * 排序与分页不在此处——列表要分页、导出要全量，二者只用同一份「行集」定义。
+ */
+function filterMockAuditRows<T extends MockAuditLog>(rows: T[], query: URLSearchParams): T[] {
+  let selected = [...rows];
+  const userId = query.get('user_id');
+  if (userId) selected = selected.filter((a) => a.userId === userId);
+  const module = query.get('module');
+  if (module) selected = selected.filter((a) => a.module === module);
+  const action = query.get('action');
+  if (action) selected = selected.filter((a) => a.action === action);
+  const from = query.get('from');
+  if (from) selected = selected.filter((a) => a.createdAt >= from);
+  const to = query.get('to');
+  if (to) selected = selected.filter((a) => a.createdAt <= to);
+  return applyMockAuditContractFilters(selected, query);
+}
+
+/**
+ * 平台审计行集：在线表 + 跨租户演示行
+ *
+ * mock 没有服务端租户解析，他租户样本不能混进普通端点（那会伪造「普通接口能跨租户」的假象），
+ * 故只在此处合并——「单租户 vs 跨租户」的口径差异在 dev/mock 下同样成立。
+ */
+function platformAuditRows(database: MockDb): MockAuditLog[] {
+  return [...database.auditLogs, ...PLATFORM_AUDIT_LOGS];
+}
+
+/**
+ * 平台维护入口权限校验：业务码 + `system:tenant:ignore` **与关系**（任一缺失即 3002）
+ *
+ * 对应服务端 @IgnoreTenant 守卫：租户维度的放开不替代业务权限，只叠加一道跨租户准入。
+ */
+function requirePlatformAudit(
+  database: MockDb,
+  ctx: AuthContext,
+  code: string,
+): { ok: true } | { ok: false; code: number; message: string } {
+  const business = requirePermission(database, ctx, code);
+  if (!business.ok) return business;
+  return requirePermission(database, ctx, 'system:tenant:ignore');
 }
 
 /**
@@ -1624,6 +1723,78 @@ export async function handleMockRequest(
   }
 
   // ---- 审计域 ----
+  // ---- 平台审计域（跨租户维护入口，P2）----
+  // 普通 /audit-logs 端点不开放租户维度；mock 没有租户解析中间件，故用「双权限」还原服务端语义——
+  // 维护入口必须同时持 audit:read|audit:export 与 system:tenant:ignore（与 @IgnoreTenant 守卫的「与」关系一致）。
+  // 跨租户演示行只从这里返回，普通端点的行集与产物不变。
+  if (path === '/audit-logs/platform' && method === 'GET') {
+    const perm = requirePlatformAudit(database, ctx, 'audit:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const unknown = unknownMockAuditFilterParam(query);
+    if (unknown) {
+      send(res, CODE.BAD_REQUEST, unknown, null, traceId);
+      return { handled: true };
+    }
+    const page = Math.max(1, Number(query.get('page') ?? '1'));
+    const pageSize = Math.min(200, Math.max(1, Number(query.get('pageSize') ?? '20')));
+    const parsedSort = parseMockSort(query.get('sort'), MOCK_AUDIT_SORT_FIELDS);
+    if ('error' in parsedSort) {
+      send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
+      return { handled: true };
+    }
+    const rows = applyMockSort(filterMockAuditRows(platformAuditRows(database), query), parsedSort.items, 'createdAt', 'desc');
+    send(res, CODE.OK, 'ok', paginate(rows, page, pageSize), traceId);
+    return { handled: true };
+  }
+  if (path === '/audit-logs/platform/export' && method === 'GET') {
+    const perm = requirePlatformAudit(database, ctx, 'audit:export');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const unknown = unknownMockAuditFilterParam(query);
+    if (unknown) {
+      send(res, CODE.BAD_REQUEST, unknown, null, traceId);
+      return { handled: true };
+    }
+    const parsedSort = parseMockSort(query.get('sort'), MOCK_AUDIT_SORT_FIELDS);
+    if ('error' in parsedSort) {
+      send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
+      return { handled: true };
+    }
+    const rows = applyMockSort(filterMockAuditRows(platformAuditRows(database), query), parsedSort.items, 'createdAt', 'desc');
+    const job = dispatchJob(database, {
+      type: 'audit.export',
+      title: '平台审计日志导出',
+      ownerId: ctx.user.id,
+      durationMs: 3000,
+      fileName: `platform-audit-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`,
+      artifact: buildMockAuditCsv(rows),
+      simulateFail: query.get('simulate') === 'fail',
+      traceId,
+    });
+    send(res, CODE.OK, 'ok', jobView(job), traceId);
+    return { handled: true };
+  }
+  const platformAuditMatch = /^\/audit-logs\/platform\/([\w-]+)$/.exec(path);
+  if (platformAuditMatch && method === 'GET') {
+    const perm = requirePlatformAudit(database, ctx, 'audit:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const log = platformAuditRows(database).find((a) => a.id === platformAuditMatch[1]);
+    // 与真实后端同口径：范围外与不存在统一 404，不泄露存在性
+    if (!log) {
+      send(res, CODE.NOT_FOUND, '审计记录不存在', null, traceId);
+      return { handled: true };
+    }
+    send(res, CODE.OK, 'ok', log, traceId);
+    return { handled: true };
+  }
   if (path === '/audit-logs' && method === 'GET') {
     const perm = requirePermission(database, ctx, 'audit:read');
     if (!perm.ok) {
@@ -1637,18 +1808,8 @@ export async function handleMockRequest(
       send(res, CODE.BAD_REQUEST, unknownList, null, traceId);
       return { handled: true };
     }
-    let items = [...database.auditLogs];
-    const userId = query.get('user_id');
-    if (userId) items = items.filter((a) => a.userId === userId);
-    const module = query.get('module');
-    if (module) items = items.filter((a) => a.module === module);
-    const action = query.get('action');
-    if (action) items = items.filter((a) => a.action === action);
-    const from = query.get('from');
-    if (from) items = items.filter((a) => a.createdAt >= from);
-    const to = query.get('to');
-    if (to) items = items.filter((a) => a.createdAt <= to);
-    items = applyMockAuditContractFilters(items, query);
+    // 行集过滤与平台入口共用同一份定义（filterMockAuditRows），两条链路只在「数据源」上不同
+    let items = filterMockAuditRows(database.auditLogs, query);
     const parsedSort = parseMockSort(query.get('sort'), MOCK_AUDIT_SORT_FIELDS);
     if ('error' in parsedSort) {
       send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
@@ -1671,18 +1832,7 @@ export async function handleMockRequest(
       send(res, CODE.BAD_REQUEST, unknownExport, null, traceId);
       return { handled: true };
     }
-    let rows = [...database.auditLogs];
-    const userId = query.get('user_id');
-    if (userId) rows = rows.filter((a) => a.userId === userId);
-    const module = query.get('module');
-    if (module) rows = rows.filter((a) => a.module === module);
-    const action = query.get('action');
-    if (action) rows = rows.filter((a) => a.action === action);
-    const from = query.get('from');
-    if (from) rows = rows.filter((a) => a.createdAt >= from);
-    const to = query.get('to');
-    if (to) rows = rows.filter((a) => a.createdAt <= to);
-    rows = applyMockAuditContractFilters(rows, query);
+    let rows = filterMockAuditRows(database.auditLogs, query);
     const parsedSort = parseMockSort(query.get('sort'), MOCK_AUDIT_SORT_FIELDS);
     if ('error' in parsedSort) {
       send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
@@ -1690,55 +1840,16 @@ export async function handleMockRequest(
     }
     rows = applyMockSort(rows, parsedSort.items, 'createdAt', 'desc');
 
-    // 产物快照在派发时固化（与后端「导出时的筛选结果」一致，不随后续新日志漂移）。
-    // CSV 形状与 example-api 的 buildAuditCsv **逐字节同构**：同表头、同 BOM、同 CRLF、
-    // 同引号转义、同公式注入防护（escapeCsvCell 两侧同源，见 mock/csv-cell.ts）——
-    // mock 与真实后端零差异，切真实 API 后下载产物行为不变。
-    // M15 B4：与 example-api buildAuditCsv 逐字节同构——15 列位置不变，业务列追加在末尾
-    const header = [
-      'id', 'createdAt', 'userId', 'module', 'action', 'targetType', 'targetId', 'ip', 'traceId',
-      'requestId', 'familyId', 'category', 'event', 'before', 'after',
-      'eventName', 'summary', 'targetLabel', 'actorLabel', 'reason', 'result', 'auditSource', 'risk',
-    ];
-    // 生成物是 as const（字面量联合），此处按业务键放宽为 string —— 未登记事件码也要能查到「无定义」
-    const eventMeta = new Map<string, { name: string; risk: string }>(
-      MOCK_AUDIT_EVENTS.map((item) => [item.code as string, { name: item.name, risk: item.risk }]),
-    );
-    const lines = rows.map((a) =>
-      [
-        escapeCsvCell(a.id),
-        escapeCsvCell(a.createdAt),
-        escapeCsvCell(a.userId),
-        escapeCsvCell(a.module),
-        escapeCsvCell(a.action),
-        escapeCsvCell(a.targetType),
-        escapeCsvCell(a.targetId),
-        escapeCsvCell(a.ip),
-        escapeCsvCell(a.traceId),
-        escapeCsvCell(a.requestId),
-        escapeCsvCell(a.familyId),
-        escapeCsvCell(a.category),
-        escapeCsvCell(a.event),
-        escapeCsvCell(a.beforeValue),
-        escapeCsvCell(a.afterValue),
-        // 注册表可解释列（mock 只用演示子集；未登记码留空，与后端同语义）
-        escapeCsvCell(eventMeta.get(a.event ?? '')?.name ?? null),
-        escapeCsvCell(a.summary ?? null),
-        escapeCsvCell(a.targetLabel ?? null),
-        escapeCsvCell(a.actorLabel ?? null),
-        escapeCsvCell(a.reason ?? null),
-        escapeCsvCell(a.result ?? null),
-        escapeCsvCell(a.auditSource ?? null),
-        escapeCsvCell(eventMeta.get(a.event ?? '')?.risk ?? null),
-      ].join(','),
-    );
+    // 产物快照在派发时固化（与后端「导出时的筛选结果」一致，不随后续新日志漂移），
+    // CSV 形状与 example-api 的 buildAuditCsv 逐字节同构——统一由 buildMockAuditCsv 生成，
+    // 在线导出与平台导出共用同一实现，产物格式没有第二份定义。
     const job = dispatchJob(database, {
       type: 'audit.export',
       title: '审计日志导出',
       ownerId: ctx.user.id,
       durationMs: 3000,
       fileName: `audit-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`,
-      artifact: `\uFEFF${[header.join(','), ...lines].join('\r\n')}\r\n`,
+      artifact: buildMockAuditCsv(rows),
       simulateFail: query.get('simulate') === 'fail',
       traceId,
     });

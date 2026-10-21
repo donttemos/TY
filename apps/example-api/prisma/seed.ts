@@ -38,6 +38,12 @@
  * @modified 2026-10-16 donttemo M10 E-09：补附件上传权限点 file:create（POST /api/v1/files 守卫，
  *   按「可授予可回收的能力面」口径成码，无菜单——上传是表单内嵌能力而非路由页）并授予 user 角色；
  *   清场追加 upload_files 表
+ * @modified 2026-10-21 donttemo P2 平台审计入口：补「平台审计」菜单（/system/audit-logs/platform，
+ *   需 system:tenant:ignore）——前端审计页新增跨租户模式与独立入口，普通审计菜单不受影响；
+ *   仅 admin（全量授权）等持有跨租户维护码的角色可见，与本仓库「维护入口 = IgnoreTenant + 同码」口径一致；
+ *   同批补「租户审计员」示范角色（tenant_auditor：audit:read + audit:export，dataScope=all，
+ *   刻意不含 system:tenant:ignore）与 acme 租户账号 acmeauditor（tenantId=1）——M15 双租户验收的
+ *   普通租户管理员侧账号，与 admin（legacy + 平台维护）形成对照
  * @module example-api
  */
 
@@ -210,6 +216,10 @@ const MENU_TREE: MenuSeed[] = [
       { name: '租户管理', path: '/system/tenants', component: 'system/tenants', icon: 'office-building', permissionCode: PERM.TENANT_READ, sort: 7 },
       // M9 参数配置页（views/system/configs）：键值列表 / 在线修改 / 变更历史（PRD-009 FR-07）
       { name: '参数配置', path: '/system/configs', component: 'system/configs', icon: 'tool', permissionCode: PERM.CONFIG_READ, sort: 8 },
+      // P2 平台审计页（views/system/audit-logs/platform）：跨租户检索审计记录，仅平台维护账号可见。
+      // 权限码刻意用 system:tenant:ignore（而不是再拆一个 menu 码）：菜单可见性必须与服务端
+      // @IgnoreTenant 守卫的准入条件同源，否则会出现「菜单可见但接口 3002」或「有权限却无入口」。
+      { name: '平台审计', path: '/system/audit-logs/platform', component: 'system/audit-logs/platform', icon: 'view', permissionCode: PERM.TENANT_IGNORE, sort: 9 },
     ],
   },
   // M13 SaaS 运营目录（PRD-013 §2.3）：★ 必须是**顶层目录**且 path 与子页同前缀（/saas）——
@@ -514,6 +524,11 @@ async function main(): Promise<void> {
   const selfUpdaterRole = await prisma.role.create({
     data: { code: 'self_updater', name: '本人数据管理员', remark: 'M8 示范：仅本人数据（self，持 user:update 供详情越权验证）', isSystem: 0, dataScope: 'self', sort: 5 },
   });
+  // M15 验收示范：租户内审计只读角色（dataScope=all，但**不**含 system:tenant:ignore）——
+  // 普通租户管理员能看本租户全部审计，却无法跨租户；与 admin（平台维护）形成 A/B 对照账号。
+  const tenantAuditorRole = await prisma.role.create({
+    data: { code: 'tenant_auditor', name: '租户审计员', remark: 'M15 验收：本租户审计只读（dataScope=all，无跨租户维护）', isSystem: 0, dataScope: 'all', sort: 6 },
+  });
 
   // 4) 授权：admin 全量；user 最小集；M8 三示范角色持 user:read + user:update
   //    （dept_leader 另持 audit:read，供 TC-TNT-004 验证 org_below 档审计收敛）
@@ -527,6 +542,8 @@ async function main(): Promise<void> {
     { roleId: deptLeaderRole.id, codes: [PERM.USER_READ, PERM.USER_UPDATE, PERM.AUDIT_READ, PERM.NOTIFICATION_READ] },
     { roleId: deptMemberRole.id, codes: [PERM.USER_READ, PERM.USER_UPDATE, PERM.NOTIFICATION_READ] },
     { roleId: selfUpdaterRole.id, codes: [PERM.USER_READ, PERM.USER_UPDATE, PERM.NOTIFICATION_READ] },
+    // M15：租户审计员只读审计（列表/详情/导出），刻意不授予任何写权限与跨租户维护码
+    { roleId: tenantAuditorRole.id, codes: [PERM.AUTH_ME, PERM.AUTH_LOGOUT, PERM.AUDIT_READ, PERM.AUDIT_EXPORT] },
   ];
   for (const grant of scopeDemoGrants) {
     for (const code of grant.codes) {
@@ -611,6 +628,19 @@ async function main(): Promise<void> {
       status: 1,
     },
   });
+  // M15 验收：acme 租户审计员（tenantId=1，dataScope=all，仅本租户审计只读）——
+  // 与 admin（legacy + 平台维护码）配对，用于「普通租户管理员 / 平台维护管理员」双账号真机与冒烟对照。
+  const acmeAuditorPassword = 'AcmeAudit@123456';
+  const acmeAuditor = await prisma.user.create({
+    data: {
+      username: 'acmeauditor',
+      tenantId: 1n,
+      passwordHash: await passwords.hash(acmeAuditorPassword),
+      nickname: 'ACME 审计员',
+      email: 'acmeauditor@acme.example.com',
+      status: 1,
+    },
+  });
   // M8 T-M8-02：dedicated 租户管理员（tenantId=3，账号仍在共享库，业务数据走独立库）
   const dedicatedPassword = 'Dedicated@123456';
   await prisma.user.create({
@@ -626,7 +656,7 @@ async function main(): Promise<void> {
 
   // 8) 用户-角色（acmeadmin 与 alice 同权，角色归属第 5 步的 userRole）
   const roleByCode = new Map(
-    [adminRole, userRole, deptLeaderRole, deptMemberRole, selfUpdaterRole].map((role) => [role.code, role.id]),
+    [adminRole, userRole, deptLeaderRole, deptMemberRole, selfUpdaterRole, tenantAuditorRole].map((role) => [role.code, role.id]),
   );
   await prisma.userRole.create({ data: { userId: admin.id, roleId: adminRole.id } });
   await prisma.userRole.create({ data: { userId: alice.id, roleId: userRole.id } });
@@ -635,6 +665,8 @@ async function main(): Promise<void> {
   }
   const acmeUser = await prisma.user.findUnique({ where: { username: 'acmeadmin' } });
   if (acmeUser) await prisma.userRole.create({ data: { userId: acmeUser.id, roleId: userRole.id } });
+  // M15：acme 审计员持 tenant_auditor（audit:read + audit:export，无 system:tenant:ignore）
+  await prisma.userRole.create({ data: { userId: acmeAuditor.id, roleId: tenantAuditorRole.id } });
 
   // 9) M8 T-M8-04：用户-部门分配（is_primary=1 标主部门；selfscope 无部门，用于「无归属收敛 self」验证）
   const deptIdByCode = orgDeptIds;
@@ -658,10 +690,10 @@ async function main(): Promise<void> {
       '[seed] 完成：',
       `演示条目 ${SEED_ITEMS.length} 条`,
       `权限点 ${permIdByCode.size + GENERATED_PERMISSION_CODES.length} 个（框架/业务 ${permIdByCode.size} + 生成器 ${GENERATED_PERMISSION_CODES.length}）`,
-      `角色 5 个（${ROLE.ADMIN}=all / ${ROLE.USER}=self / dept_leader=org_below / dept_member=org / self_updater=self）`,
+      `角色 6 个（${ROLE.ADMIN}=all / ${ROLE.USER}=self / dept_leader=org_below / dept_member=org / self_updater=self / tenant_auditor=all·审计只读）`,
       `菜单 ${menuCounter.count} 项`,
       `部门 ${orgDeptIds.size} 个（总部 → 研发部 → 前端组/后端组；总部 → 市场部）`,
-      `账号 10 个（admin / ${adminPassword}，alice / ${userPassword}）+ orgAccounts 7 个（bob/carol/dave/erin/frank/grace/selfscope）+ acmeadmin / ${acmePassword}（tenantId=1）+ dedicatedadmin / ${dedicatedPassword}（tenantId=3 独立库）`,
+      `账号 11 个（admin / ${adminPassword}，alice / ${userPassword}）+ orgAccounts 7 个（bob/carol/dave/erin/frank/grace/selfscope）+ acmeadmin / ${acmePassword}（tenantId=1）+ acmeauditor / ${acmeAuditorPassword}（tenantId=1 审计只读）+ dedicatedadmin / ${dedicatedPassword}（tenantId=3 独立库）`,
       `租户 4 个（legacy=0 / acme=1 / off=2 停用 / dedicated=3 独立库）`,
     ].join(' '),
   );

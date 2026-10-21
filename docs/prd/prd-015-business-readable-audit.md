@@ -1,4 +1,4 @@
-﻿<!--
+<!--
 @file PRD-015 · 业务可读审计与运营追溯
 @description M15：把审计从「技术操作记录」升级为「运营可读的业务事件」——事件注册表作为唯一语义权威、
   不可变业务快照（摘要/对象名/操作人/原因/来源）、结果四态（success/denied/failed/unknown）、
@@ -269,9 +269,9 @@ v0.7.5 之后，审计的**机制层**已经齐备：统一 `AuditService.record
 | AC-15-04 事件码登记与门禁 | 已实现 | 已完成 | B（门禁可反向证伪） | — |
 | AC-15-05 旧数据降级不伪造 | 已实现 | 已完成 | B | — |
 | AC-15-06 在线 / 归档 / 导出同码同文案 | 已实现 | 待补 | C | 同一事件在三处返回的名称 / 摘要 / 结果对照断言 |
-| AC-15-07 脱敏 + 四档范围不放松 | 已实现 | 部分 | A（单测级，run 104）· 真机 C | 真机四档账号 × 列表 / 详情 / 归档 / 导出；全视图与产物的敏感字样零命中扫描 |
+| AC-15-07 脱敏 + 四档范围不放松 | 已实现 | 部分 | A（单测级，run 104）· 新增真实库 + 双账号冒烟（待推送核实）· 真机部署 C | 归档出口的双账号核对；全视图与产物的敏感字样零命中扫描；真机部署窗口四档取证 |
 | AC-15-08 三库迁移与适配 | 已实现 | 已完成 | A | —（run 100 已独立核实，见 7.2） |
-| AC-15-09 租户维度 | 已实现 | 待补 | C | 写入 `tenant_id`、租户筛选与 `dataScope` 交集、存量 0 标注的端到端核验 |
+| AC-15-09 租户维度 | 已实现 | 部分 | B（本机新增真实库集成 + 双租户冒烟，推送后 A） | 真机部署双账号核对（见 §7.4）；存量 0 标注截图；pg/mysql 方言矩阵未覆盖该用例 |
 | AC-15-10 注册表缓存与降级 | 已实现 | 已完成 | B | — |
 | AC-15-11 导出列序与同构 | 已实现 | 已完成 | B | — |
 | AC-15-12 性能与容量 | 已实现 | 延后 | C | 真机 p95 ≤ 基线 1.2 倍、导出上限与产物限制、注册表下发不与列表耦合 |
@@ -305,6 +305,19 @@ v0.7.5 之后，审计的**机制层**已经齐备：统一 `AuditService.record
 `origin/main`；对应 run 104 四腿全绿（见上表），新增/更新单测 13 例（含两次反向变异验证）随之由
 B 级升为 CI 可核实。AC-15-07 仍不勾选——真机四档取证仍缺（见 §7.3）。
 
+**2026-10-21 P2 双租户自动化取证（新增，推送后按 run 号升 A 级）**：评审指出「租户隔离测试主要是控制器与
+辅助函数层面的测试，PRD-015 仍要求在真实多租户数据下验证行集、导出产物与授权边界」。本次补两层自动化：
+
+| 层级 | 用例 | 覆盖 | 证据形态 |
+|---|---|---|---|
+| 真实库集成 | `apps/example-api/src/modules/auth/audit-tenant-isolation.integration.spec.ts`（10 例，临时 SQLite 全量迁移 + 真实 `PrismaAuthStore` / `PrismaAdminStore`） | 写入侧 `tenant_id` 落库；普通出口真实行集；`tenant_id` 他租户 4001；详情双维度 404；导出产物行集；**任务重跑按 params 重建查询且期间新增他租户行不混入**；维护入口仅在 `ignoreTenant` 上下文跨租户 | vitest 真库用例（CI base 作业常驻） |
+| 真实 HTTP 双账号 | `apps/example-api/scripts/smoke-tenant.mjs` 阶段 E（65/65，含 16 条审计断言） | 多租户启用下 acme 租户审计员（`dataScope=all`、无跨租户码）与 legacy 平台管理员两账号：列表行集、`tenant_id` 放行/4001、详情 404、普通导出产物不含他租户记录、维护入口跨租户检索/收窄/详情、普通账号访问维护入口 3002、平台导出跨租户 | CI base 作业的 M8 多租户冒烟（真实进程 + HTTP + seed 账号） |
+
+配套种子新增 `tenant_auditor` 角色（audit:read/export，`dataScope=all`，**不含** `system:tenant:ignore`）与
+`acmeauditor` 账号（tenantId=1），使「普通租户管理员 vs 平台维护管理员」有稳定的 A/B 对照账号。
+仍**不能**由自动化替代的部分：生产部署窗口的真机取证（真实数据量、部署形态、归档出口、敏感字样产物扫描），
+步骤见 §7.4；因此 AC-15-07 / AC-15-09 仍不勾选。
+
 ### 7.3 逐条明细
 
 - [x] AC-15-01（代码 已实现 / 证据 已完成 · B）运营人员不展开原始 JSON，即可从列表与详情理解重点业务事件（摘要、对象名、原因、结果、变更对照齐备）。—— **浏览器实测 15/15 通过**（`apps/admin-web/scripts/e2e-m15-audit-view.mjs`，2026-10-20，本地 Chrome + CDP + mock）：列表主列为事件/结果/风险/对象/操作人、技术列默认收起、摘要为中文、旧行标注「历史记录」；筛选结果/风险后行内容一致；详情业务区含原因与变更对照、技术详情默认折叠（内容区 0px）展开后可见事件码/请求 ID/原始快照；导出派发成功；暗色与 1280×720 / 1920×1080 无横向溢出。证据：`apps/admin-web/e2e-artifacts/report-m15.json`（**已入库**）；截图 `m15-*.png` **仅存在于本机、未入库**，clone 后不可复核。**边界**：mock 演示数据，非真机多租户验收。
@@ -313,13 +326,45 @@ B 级升为 CI 可核实。AC-15-07 仍不勾选——真机四档取证仍缺�
 - [x] AC-15-04（代码 已实现 / 证据 已完成 · B）事件码全部登记且稳定；未登记码、码表与写入点不一致时 `check:audit-events` 失败（含反向验证：故意加未登记码，CI 必红）。—— `scripts/check-audit-events.mjs` 已接入 CI base 作业；本机实测：正常状态 `OK（32 条 / 覆盖矩阵一致）`，注入 `event: 'saas.plan.publsh'` 后 `RC=1` 并精确报 `apps/example-api/src/__audit_gate_probe.ts:7`，删除探针后恢复绿。**等级说明**：门禁在 CI 常驻，但反向证伪动作只在本地做过，故记 B。
 - [x] AC-15-05（代码 已实现 / 证据 已完成 · B）旧数据可展示且不伪造：无 `event` / 未登记 / 字典缺失三种降级均有明确提示与正确回退。—— `audit-display.test.ts` 11 例锁定三级降级链（摘要 → 事件名+对象 → 原始码 → module/action 中文），详情页对旧行显示「历史记录（无业务摘要）」提示且不补写摘要。
 - [ ] AC-15-06（代码 已实现 / 证据 待补 · C）在线查询、归档查询、导出三处对同一事件返回的名称、摘要、结果一致（同码同文案断言）。**代码**：三处同源——导出复用 `buildAuditCsv`、归档与在线同一 DTO（`AuditLogRecord`）、解释性文案统一由注册表现算。**缺**：同一事件经三条路径（`/audit-logs`、`/audit-archives`、CSV）返回的名称/摘要/结果**对照断言**；现有 `audit-csv.spec.ts` 只锁列与编码，不锁「三处一字不差」。
-- [ ] AC-15-07（代码 已实现 / 证据 部分 · B）敏感字段持续脱敏；`self/org/org_below/all` 四档范围在列表、详情、归档、导出均不放松（越权一律 403/404）；令牌、密钥、口令不出现在任何视图与产物中。**已有（B 级）**：① 单测级四档范围——`apps/example-api/src/modules/auth/audit-detail-scope.spec.ts`（9 例：四档详情边界 + 共享库多租户正反向 + 列表⇔详情逐条等价 + `all` 仍受租户边界约束）、`audit-archive-scope.spec.ts`（5 例：在线列表/在线导出/归档列表/归档导出四端点归属人与租户条件逐个相同 + `user_id` 放大被交集挡住）、`audit-tenant-scope.spec.ts`（9 例：四出口强制当前租户 + 客户端 `tenant_id` 放大 4001 + 详情双维度 + 维护入口全局访问单独验收）；② 写入侧不落敏感值——`audit-no-secrets.test.ts`。**缺（本条仍不勾选）**：真机多账号 × 真实多租户数据的行集与可见字段核对、全视图与导出产物的 `token` / `secret` / `password` 字样零命中扫描（必须扫产物，不能只扫代码）。—— **「四档范围」的代码缺陷已于 2026-10-21 修复（P1，随 `2f710d6` 提交，run 104 四腿全绿）；同日修复第二处（P1 租户分维）**：`dataScope=all` 此前可借 `tenant_id` 参数 / 猜记录 ID 越过租户边界，现四出口与详情均独立强制服务端租户，跨租户只经 `/audit-logs/platform*`、`/audit-archives/platform*` 维护入口（新增单测 15 + 9 例，见 AC-15-09）。
+- [ ] AC-15-07（代码 已实现 / 证据 部分 · B）敏感字段持续脱敏；`self/org/org_below/all` 四档范围在列表、详情、归档、导出均不放松（越权一律 403/404）；令牌、密钥、口令不出现在任何视图与产物中。**已有（B 级）**：① 单测级四档范围——`apps/example-api/src/modules/auth/audit-detail-scope.spec.ts`（9 例：四档详情边界 + 共享库多租户正反向 + 列表⇔详情逐条等价 + `all` 仍受租户边界约束）、`audit-archive-scope.spec.ts`（5 例：在线列表/在线导出/归档列表/归档导出四端点归属人与租户条件逐个相同 + `user_id` 放大被交集挡住）、`audit-tenant-scope.spec.ts`（9 例：四出口强制当前租户 + 客户端 `tenant_id` 放大 4001 + 详情双维度 + 维护入口全局访问单独验收）；② 写入侧不落敏感值——`audit-no-secrets.test.ts`。**缺（本条仍不勾选）**：真机多账号 × 真实多租户数据的行集与可见字段核对、全视图与导出产物的 `token` / `secret` / `password` 字样零命中扫描（必须扫产物，不能只扫代码）。—— **「四档范围」的代码缺陷已于 2026-10-21 修复（P1，随 `2f710d6` 提交，run 104 四腿全绿）；同日修复第二处（P1 租户分维）**：`dataScope=all` 此前可借 `tenant_id` 参数 / 猜记录 ID 越过租户边界，现四出口与详情均独立强制服务端租户，跨租户只经 `/audit-logs/platform*`、`/audit-archives/platform*` 维护入口（新增单测 15 + 9 例，见 AC-15-09）。—— **2026-10-21 P2 补自动化**：`smoke-tenant.mjs` 阶段 E 用两个真实租户账号（acme 审计员 / legacy 平台管理员）在真实 HTTP 上验证列表行集、详情 404、普通导出产物不含他租户记录、维护入口跨租户；`audit-tenant-isolation.integration.spec.ts` 用真实 SQLite 验证真实行集与导出产物（详见 §7.2）。**仍缺**：归档出口的双账号核对、全视图与导出产物的 `token` / `secret` / `password` 字样零命中扫描、真机部署窗口的四档账号取证（§7.4）。
 - [x] AC-15-08（代码 已实现 / 证据 已完成 · A）三库迁移与适配一致：三库集成用例证明新列存在、往返保真、归档保留新列。—— **独立核实**：run `100`（[39447355932](https://github.com/donttemos/TY/actions/runs/39447355932)，commit `8fe98a0`）`completed / success`，四腿（构建单测静态检查 + sqlite/postgres/mysql 集成）均 success；三份迁移 `20261020120000_add_audit_business_snapshot` 在各自方言下部署成功，集成用例覆盖新列读写。核实方式见 §7.2。
-- [ ] AC-15-09（代码 已实现 / 证据 待补 · C）租户维度可用：写入 `tenant_id` 正确；**租户范围与 `dataScope` 分维收敛**（普通请求强制服务端当前租户、客户端 `tenant_id` 只能收窄、`all` 不跨租户、详情校验记录租户、跨租户只经维护入口）；存量 0 值标注「未知/存量」。**代码**：写入取请求上下文 `tenantId`（修复恒 0）；`@fw/auth` 新增 `tenant-scope.ts`（`resolveTenantScope` / `resolveTenantFilter` / `isTenantWithinScope`）与 `data-scope.ts` 分开；`/audit-logs`、`/audit-archives` 及两处导出统一注入服务端租户（客户端他租户 `4001`、导出 params 固化），详情同时校验 `tenantId`；新增维护入口 `/audit-logs/platform*`、`/audit-archives/platform*`（`@IgnoreTenant()` + `system:tenant:ignore`）。**已有（B 级）**：`audit-events.test.ts` 覆盖「租户取自上下文 / 显式优先 / 无上下文落 0」与「`result`+`tenantId` 精确过滤（可组合）」；`tenant-scope.test.ts` 15 例（来源优先级 / legacy `'0'` / 维护入口 / 收窄 4001 / 详情判定）；`audit-tenant-scope.spec.ts` 9 例（四出口强制当前租户、四出口他租户 4001、详情双维度、legacy 无边界、维护入口全局访问与「只放开租户维度」）。**缺**：真实库端到端三条——① 触发一次带租户的写入后 `select tenant_id` 断言；② 同一查询在「有 `tenant_id` 过滤」与「无过滤」下的行集差 = 该租户行；③ 前端对存量 `0` 行的「未知/存量」标注截图；④ 维护入口在真机多租户下的「平台管理员全局检索 / 普通租户 all 用户仍被拦」对照。
+- [ ] AC-15-09（代码 已实现 / 证据 待补 · C）租户维度可用：写入 `tenant_id` 正确；**租户范围与 `dataScope` 分维收敛**（普通请求强制服务端当前租户、客户端 `tenant_id` 只能收窄、`all` 不跨租户、详情校验记录租户、跨租户只经维护入口）；存量 0 值标注「未知/存量」。**代码**：写入取请求上下文 `tenantId`（修复恒 0）；`@fw/auth` 新增 `tenant-scope.ts`（`resolveTenantScope` / `resolveTenantFilter` / `isTenantWithinScope`）与 `data-scope.ts` 分开；`/audit-logs`、`/audit-archives` 及两处导出统一注入服务端租户（客户端他租户 `4001`、导出 params 固化），详情同时校验 `tenantId`；新增维护入口 `/audit-logs/platform*`、`/audit-archives/platform*`（`@IgnoreTenant()` + `system:tenant:ignore`）。**已有（B 级）**：`audit-events.test.ts` 覆盖「租户取自上下文 / 显式优先 / 无上下文落 0」与「`result`+`tenantId` 精确过滤（可组合）」；`tenant-scope.test.ts` 15 例（来源优先级 / legacy `'0'` / 维护入口 / 收窄 4001 / 详情判定）；`audit-tenant-scope.spec.ts` 9 例（四出口强制当前租户、四出口他租户 4001、详情双维度、legacy 无边界、维护入口全局访问与「只放开租户维度」）。**缺**：真实库端到端三条——① 触发一次带租户的写入后 `select tenant_id` 断言；② 同一查询在「有 `tenant_id` 过滤」与「无过滤」下的行集差 = 该租户行；③ 前端对存量 `0` 行的「未知/存量」标注截图；④ 维护入口在真机多租户下的「平台管理员全局检索 / 普通租户 all 用户仍被拦」对照。—— **2026-10-21 P2 自动化补证（真实库 + 双账号）**：① ② ④ 见 `audit-tenant-isolation.integration.spec.ts`（真实 SQLite，10 例：写入侧 `tenant_id` 落库、真实行集、`tenant_id` 他租户 4001、详情双维度 404、导出产物、**重跑按 params 重建且不混入新增他租户行**、维护入口仅在 `ignoreTenant` 上下文跨租户且 dataScope 收敛）与 `smoke-tenant.mjs` 阶段 E（真实 HTTP 双账号 65/65，含普通导出产物不含他租户记录、平台导出跨租户）；③ 前端「未知/存量」标注仍待部署窗口截图；另：真机部署双账号核对（§7.4）与 pg/mysql 方言矩阵未覆盖该用例。
 - [x] AC-15-10（代码 已实现 / 证据 已完成 · B）前端对注册表的缓存与失效生效；未知事件不阻塞渲染；注册表不可用时页面降级可用。—— `useAuditEvents` 模块级缓存 + inflight 合并 + `version` 指纹；`use-audit-events.test.ts` 3 例（并发只发一次请求、按风险取码排除 deprecated、注册表失败降级且下次重试）。
 - [x] AC-15-11（代码 已实现 / 证据 已完成 · B）导出 CSV 列序为追加式、内容含业务列与原始列，mock 与实现逐字节同构，smoke 断言同步。—— `audit-csv.spec.ts` 9 例（表头 23 列且前 15 列不变、BOM/CRLF、已登记事件补事件名与风险、未登记留空、引号/换行转义、公式注入中和）；mock 与 example-api 同表头，`smoke-mock` 143/143（含 `header=true`），`smoke-admin` 表头断言同批更新。
 - [ ] AC-15-12（代码 已实现 / 证据 延后 · C）性能与容量：列表带新过滤 p95 ≤ 基线 1.2 倍；导出上限与任务产物限制不变；注册表下发不随列表请求放大。**代码**：列表过滤走既有索引（`(result, created_at)` 等组合）；导出上限 `EXPORT_MAX_ROWS` 未变；注册表走独立端点 + 前端模块级缓存。**已有（B 级）**：`use-audit-events.test.ts`（并发合并，不随列表放大）；`AuditEventThrottle` 容量硬上限测试（防洪内存有界）。**⏸ 延后取证（2026-10-20 定）**：p95 需要真实数据量与生产级环境，沙箱数字不具代表性；改在**下一个迭代或真机部署窗口**执行：① 以 M14 收口值为基线，真机数据量下对比「带新过滤列表」p95 ≤ 1.2 倍；② 导出上限与产物限制断言不变；③ 以 `/metrics` 请求计数佐证注册表端点不随列表请求增长。
 - [ ] AC-15-13（代码 已实现 / 证据 延后 · C）覆盖矩阵所列事件逐项可验证（至少认证、生命周期、套餐发布、订阅取消、配额覆盖、配置变更、权限拒绝七类有真实记录）。**代码**：七类均有唯一写入点，`docs/45` §7 矩阵逐条登记，B5 门禁四方对撞常驻 CI。**⏸ 延后取证（2026-10-20 定）**：「真实记录」需运行期抽样（触发动作后查库），集成测试只证明写入点存在；改在**下一个迭代或真机部署窗口**执行：按 `docs/45` §7 逐类触发一次动作并落库查询，七类各留一条 DB 查询证据。
+
+### 7.4 真机双租户验收步骤（部署窗口执行，未完成前 AC-15-07/09 不勾选）
+
+> 目标：在**真实部署形态 + 真实多租户数据**下，用两个真实租户账号复核对账——普通租户管理员只能看到
+> 本租户审计，平台维护管理员经显式维护入口才能跨租户，导出产物与任务重跑不得丢失租户限制。
+> 自动化已覆盖同类边界（§7.2），本节补的是部署形态、真实数据量与归档出口。
+
+**前置**
+
+1. `TENANT_ENABLED=true`（三级回退按部署配置），库为 shared 共享库且至少两个启用租户（如 `legacy` / `acme`）。
+2. 账号：普通租户管理员侧用 `acmeauditor / AcmeAudit@123456`（`tenant_auditor` 角色：`audit:read` + `audit:export`，
+   `dataScope=all`，**不含** `system:tenant:ignore`；本轮种子新增）；平台维护侧用 `admin / Admin@123456`
+   （全量权限含 `system:tenant:ignore`）。若线上库未重播种，先在**可清场的验收环境**执行
+   `pnpm --filter example-api exec tsx prisma/seed.ts`（清场重建，**禁止**对生产库执行），或按 UI 建同权角色/账号。
+3. 账号登录后确认权限快照包含新码（权限码在登录快照里，改角色后需重登）。
+
+**取证步骤（每步留命令输出 / 截图 / 产物文件）**
+
+| # | 账号 | 动作 | 期望 |
+|---|---|---|---|
+| 1 | acmeauditor（`X-Tenant-Id: acme`） | `GET /api/v1/audit-logs?page=1&pageSize=50` | 200；逐行 `tenantId === '1'`（`dataScope=all` 不跨租户） |
+| 2 | 同上 | `GET /api/v1/audit-logs?tenant_id=0` | `4001`（HTTP 403，显式跨租户被拒、不静默改写） |
+| 3 | 同上 | 取 legacy 租户一条审计 ID 后 `GET /api/v1/audit-logs/{legacyId}` | `404/1002`（与不存在同口径，不泄露存在性） |
+| 4 | 同上 | `GET /api/v1/audit-logs/export` → 轮询 `GET /api/v1/jobs/{id}/progress` → `GET /api/v1/jobs/{id}/download` | 产物 CSV 含本租户记录 ID、**不含**第 3 步 legacy ID |
+| 5 | admin（`X-Tenant-Id: legacy`） | `GET /api/v1/audit-logs/platform?page=1&pageSize=100`；再 `?tenant_id=1` | 200；结果同时含 `tenantId 0/1`；收窄后全为 `1` |
+| 6 | 同上 | `GET /api/v1/audit-logs/platform/{acmeRowId}`；`GET /api/v1/audit-logs/platform/export` → 下载 | 详情 200 且 `tenantId === '1'`；产物同时含 acme 与 legacy 记录 |
+| 7 | acmeauditor | `GET /api/v1/audit-logs/platform`、`/audit-logs/platform/export` | `403/3002`（缺 `system:tenant:ignore`；维护入口不因租户身份放宽） |
+| 8 | admin | **任务重跑**：在 `JOBS_DRIVER=db|bullmq` 部署下重放同一导出任务（失败重试或跨实例重跑），下载重跑产物 | 重跑产物行集仍只有派发时固化的租户范围，期间他租户新增审计不得混入；可查 `jobs` 表 `params` 确认 `tenantId` 固化值 |
+| 9 | 浏览器 | admin 登录后打开「系统管理 → 平台审计」；acmeauditor 登录后确认**无此菜单** | 页面顶部常驻「查询范围：跨租户（平台维护入口）」横幅、租户列默认可见；普通审计页顶部为「查询范围：单租户（当前租户）」且无租户筛选；acmeauditor 菜单不可见（直输 `/system/audit-logs/platform` 落 403/404） |
+| 10 | admin / acmeauditor | 普通审计详情抽屉「租户」字段 | 存量 `tenantId=0` 行显示「未知/存量」，不冒充某个租户 |
+
+**判定**：1~10 全部符合，且产物文件与截图入库（A 级证据）后，才把 AC-15-07 / AC-15-09 的「证据」改为「已完成」并勾选。
 
 ## 8. 依赖与风险
 
@@ -355,6 +400,7 @@ B 级升为 CI 可核实。AC-15-07 仍不勾选——真机四档取证仍缺�
 
 | 日期 | 变更点 | 影响 |
 |---|---|---|
+| 2026-10-21 | **P2：平台审计前端入口 + 双租户验收自动化（评审 P2 交付）**：① **前端**——`apps/admin-web` 审计视图支持 `crossTenant` 双模式：普通审计页继续走 `/audit-logs*`（服务端强制当前租户），新增「系统管理 → 平台审计」独立入口（`/system/audit-logs/platform`，菜单权限码 `system:tenant:ignore`），走 `/audit-logs/platform*` 维护端点；页面顶部常驻「查询范围：单租户/跨租户」横幅，跨租户模式增加租户列与租户筛选，详情/导出按模式分流；缺 `system:tenant:ignore` 或 `audit:read` 时不渲染数据区（服务端守卫仍为最终防线）。普通端点行为与授权未放宽。② **验收自动化**——新增真实 SQLite 集成 `audit-tenant-isolation.integration.spec.ts`（10 例：写入 `tenant_id`、真实行集、他租户 4001、详情双维度 404、导出产物、**任务重跑按 params 重建且不混入新增他租户行**、维护入口仅 `ignoreTenant` 上下文生效）；`smoke-tenant.mjs` 新增阶段 E（真实 HTTP 双账号 65/65，acmeauditor vs admin 的列表/详情/导出/维护入口对照）；种子新增 `tenant_auditor` 角色与 `acmeauditor` 账号（tenantId=1，无跨租户码）作为稳定 A/B 账号。③ **验收口径**——AC-15-07/09 证据由「单测级 C」升为「真实库 + 双账号自动化（推送后 A 级）」，新增 §7.4 真机部署双租户验收步骤与 10 步取证清单，**仍不勾选**（生产部署窗口取证未做） | 平台运营获得显式、可审计、且不会放宽普通端点的跨租户入口；「租户隔离只有控制器桩」的证据缺口关闭；真机验收有可执行清单而非口头建议 |
 | 2026-10-21 | **P1：审计租户隔离与 `dataScope` 分维（FR-15-06 / FR-15-20）**：修复「`dataScope=all` 被当作跨租户平台权限」的边界缺陷。新增 `@fw/auth` 的 `tenant-scope.ts`（`resolveTenantScope` / `resolveTenantFilter` / `isTenantWithinScope`），与 `data-scope.ts`（归属人维度）分开：普通请求强制服务端当前租户（上下文租户 → 用户档案租户，legacy `'0'` 保留），客户端 `tenant_id` 只能同值、他租户 `4001`；在线列表 / 在线导出 / 归档列表 / 归档导出四出口统一注入，导出 params 派发时固化；详情同时校验记录 `tenantId`（与「不存在」统一 404）。新增跨租户维护入口 `/audit-logs/platform*` 与 `/audit-archives/platform*`（`@IgnoreTenant()` + `system:tenant:ignore`，守卫写 `tenant_bypass` 审计），该入口只放开租户维度、归属人范围照旧收敛；全局访问行为独立于普通端点验收。模板同名控制器同步。测试：`tenant-scope.test.ts` 15 例 + `audit-tenant-scope.spec.ts` 9 例，`audit-detail-scope.spec.ts` / `audit-archive-scope.spec.ts` 同步更新（all 档改为本租户内不限归属人）。无新增错误码 / 迁移；维护入口为 additive 路由 | 共享库跨租户越权路径关闭（猜 ID / `tenant_id` 参数均不可行）；平台级跨租户检索获得显式、可审计的入口；AC-15-07/09 证据补强（真机取证仍待补，保持未勾选） |
 | 2026-10-21 | **P1 加固：名称快照查询异常降级（FR-15-10）**：`saas-ops.controller.ts` 的 `tenantLabelOf` / `planLabelOf` / `subscriptionLabelOf` 名称查询补统一 try/catch——查询成功写真实名称快照；对象不存在 / 名称为空白（软删、脏引用）写 `snapshotMissingLabel(id)`；**查询抛异常（库抖动 / 连接池耗尽 / 驱动缺陷）同样降级为缺失标记且不向外抛**；`cancelSubscription` 中业务成功后的 `findSubscriptionById` 回查同口径防护。动因：名称解析调用点在业务写入成功之后（套餐已发布 / 订阅已取消 / 迁移已生效），异常透出会把已提交操作变成失败响应，客户端重试撞 `active_marker` 唯一冲突、重复取消、重复迁移；4030 / 4029 的 denial 路径还会覆盖原始业务错误——与 AuditService 审计降级同向（旁路不伤主链路）。测试：`saas-ops.controller.spec.ts` 41 例（+8 故障注入：名称查询恒抛时业务照常成功 / 原始错误原样抛出 / 审计落缺失标记），反向验证回退 try/catch → 8 例全红；saas 模块 69/69、example-api `tsc --noEmit` 零错、`check:headers` / `check:audit-events` / `check:no-raw-throw` 全绿。无新增错误码 / 迁移 / 契约变更 | 「业务已提交却返回失败」的旁路覆盖风险关闭；审计可读性不因降级回退成裸 ID |
 | 2026-10-21 | **验收记录与最新提交对齐**：`2f710d6`（M15 P1/P2 收口）已推送 `origin/main`，run 104（[39463134812](https://github.com/donttemos/TY/actions/runs/39463134812)）四腿全绿；§7.1 / §7.2 / §7.3 与本节此前的「P1 修复仍在工作区未提交、不在 run 103 内」表述更新为「已提交 + A 级 CI 证据」，CHANGELOG [Unreleased] 同句同步 | 验收记录与代码 / CI 事实一致；零 AC 状态变化（AC-15-07 仍不勾选，真机取证仍缺） |

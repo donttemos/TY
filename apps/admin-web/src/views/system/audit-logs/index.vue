@@ -12,6 +12,10 @@
  * @modified 2026-10-20 donttemo M15 B3：列表运营视图 + 详情分层 + 结果/风险/租户筛选 + 旧数据降级
  * @modified 2026-10-20 donttemo M15 安全加固：操作人列改走 actorText（缺快照时显式标注），
  *   不再用当前用户列表的用户名回填历史行——改名会让历史记录显示错误的人
+ * @modified 2026-10-21 donttemo P2：页面支持 `crossTenant` 双模式——同一份运营视图承载
+ *   普通审计（单租户，`/audit-logs*`）与平台审计（跨租户，`/audit-logs/platform*`）。
+ *   顶部常驻「查询范围」标识，平台模式增加租户列/租户筛选，并仅向 `system:tenant:ignore`
+ *   持有者开放（普通入口不放宽：前端入口收敛 + 服务端独立校验双保险）
  * @module admin-web/views
 -->
 
@@ -25,6 +29,7 @@ import * as userApi from '@/api/user';
 import { fetchTenants } from '@/api/tenant';
 import { useAuditEvents } from '@/composables/useAuditEvents';
 import { useJobCenterStore } from '@/composables/useJobCenter';
+import { useUserStore } from '@/store/user';
 import { BizError, describeBizError } from '@/utils/biz-error';
 import type { CrudColumn, SearchField, SearchModel } from '@/components/CrudTable/types';
 import type { AuditEventDefinition, AuditLogRecord, AuditQuery, UserListItem } from '@/api/types';
@@ -42,10 +47,32 @@ import {
   targetText,
 } from './audit-display';
 
+/**
+ * 查询模式（P2 平台审计）
+ *
+ * - `false`（默认）：普通审计页，数据源 `/audit-logs*`，服务端强制当前租户；
+ * - `true`：平台审计页（`views/system/audit-logs/platform`），数据源 `/audit-logs/platform*`，
+ *   服务端 `@IgnoreTenant()` + `system:tenant:ignore` 开放租户维度（归属人范围照旧收敛）。
+ *
+ * 模式不是「前端开关放宽普通接口」：两条链路服务端权限边界不同，前端只负责入口收敛与展示口径。
+ */
+const props = withDefaults(defineProps<{ crossTenant?: boolean }>(), { crossTenant: false });
+
+const user = useUserStore();
+/** 普通审计权限：列表/详情需 audit:read（服务端同一权限码） */
+const canRead = computed(() => user.hasPermission('audit:read'));
+/** 跨租户维护权限：平台审计入口的另一把钥匙（服务端 @IgnoreTenant 守卫同码） */
+const canCrossTenant = computed(() => user.hasPermission('system:tenant:ignore'));
+/** 当前页面是否允许渲染数据区（平台模式两码同时要求；服务端仍独立校验） */
+const allowed = computed(() => canRead.value && (!props.crossTenant || canCrossTenant.value));
+
+/** 列表数据源：模式决定端点，绝不在普通端点上附加跨租户参数 */
+const listEndpoint = computed(() => (props.crossTenant ? '/audit-logs/platform' : '/audit-logs'));
+
 /** 事件注册表（名称/风险/字段中文名的唯一来源） */
 const auditEvents = useAuditEvents();
 
-const columns: CrudColumn[] = [
+const baseColumns: CrudColumn[] = [
   { prop: 'summary', label: '事件', minWidth: 380, slot: 'event' },
   { prop: 'result', label: '结果', width: 96, align: 'center', slot: 'result' },
   { prop: 'risk', label: '风险', width: 92, align: 'center', slot: 'risk' },
@@ -58,6 +85,17 @@ const columns: CrudColumn[] = [
   { prop: 'ip', label: 'IP', width: 130, defaultHidden: true },
   { prop: 'traceId', label: 'traceId', minWidth: 160, defaultHidden: true },
 ];
+
+/**
+ * 列定义：跨租户模式在「对象」之后插入租户列（默认可见）——同一条事件发生在哪个租户
+ * 是平台检索的第一判据，收起会让运营误读；普通模式记录恒属当前租户，不展示该列。
+ */
+const columns = computed<CrudColumn[]>(() => {
+  if (!props.crossTenant) return baseColumns;
+  const next = [...baseColumns];
+  next.splice(4, 0, { prop: 'tenantId', label: '租户', width: 150, slot: 'tenant' });
+  return next;
+});
 
 /** 查询区（>3 项自动折叠为「展开」） */
 const searchForm = ref<SearchField[]>([
@@ -78,6 +116,7 @@ const tenantOptions = ref<{ label: string; value: string }[]>([]);
 
 onMounted(async () => {
   void auditEvents.load();
+  if (!allowed.value) return;
   try {
     const result = await userApi.fetchUsers({ pageSize: 100 });
     userOptions.value = result.items.map((user: UserListItem) => ({
@@ -89,6 +128,9 @@ onMounted(async () => {
   } catch {
     // 用户列表拉取失败：筛选退化为不可选，不阻塞列表
   }
+  // 租户筛选只在跨租户模式有意义：普通页面的租户维度由服务端强制为当前租户
+  // （客户端选他租户会被 4001），列一份可选项反而误导运营，故不加载。
+  if (!props.crossTenant) return;
   try {
     const tenants = await fetchTenants({ pageSize: 100 });
     tenantOptions.value = tenants.items.map((tenant) => ({ label: tenant.name, value: tenant.id }));
@@ -102,8 +144,19 @@ onMounted(async () => {
 /** 事件下拉随注册表到达后填充（注册表失败时保持空，仍可按其他条件筛选） */
 const eventOptions = computed(() => auditEvents.eventOptions.value);
 const searchFields = computed<SearchField[]>(() =>
-  searchForm.value.map((field) => (field.prop === 'event' ? { ...field, options: eventOptions.value } : field)),
+  searchForm.value
+    // 普通审计页不提供租户筛选：该维度由服务端强制为当前租户，跨租户检索走平台审计页
+    .filter((field) => props.crossTenant || field.prop !== 'tenant_id')
+    .map((field) => (field.prop === 'event' ? { ...field, options: eventOptions.value } : field)),
 );
+
+/** 租户列/筛选的显示名：'0' 按契约读作「未知/存量」，其余查下拉映射，查不到时才回退裸 ID */
+function tenantText(tenantId: string | null | undefined): string {
+  const id = tenantId ?? '0';
+  if (id === '0') return '未知/存量';
+  const hit = tenantOptions.value.find((tenant) => tenant.value === id);
+  return hit ? hit.label : `租户 ${id}`;
+}
 
 /**
  * 查询条件变换：风险等级不落库，按注册表展开成事件码集合（ADR-0032 R9）
@@ -167,7 +220,8 @@ async function openDetail(row: AuditLogRecord): Promise<void> {
   detailVisible.value = true;
   detailLoading.value = true;
   try {
-    detail.value = await auditApi.fetchAuditLog(row.id);
+    // 模式决定详情端点：平台页走 platform 维护入口，普通页仍受服务端租户边界约束
+    detail.value = props.crossTenant ? await auditApi.fetchPlatformAuditLog(row.id) : await auditApi.fetchAuditLog(row.id);
   } catch (err) {
     // 详情拉取失败时回退行内数据
     detail.value = row;
@@ -214,7 +268,8 @@ async function handleExport(payload: { search: SearchModel; sort: string | null 
   try {
     const query: AuditQuery = { ...(payload.search as AuditQuery) };
     if (payload.sort) query.sort = payload.sort;
-    const job = await auditApi.exportAuditLogs(query);
+    // 导出端点与列表同模式：平台页导出跨租户结果，普通页导出仍只含当前租户
+    const job = props.crossTenant ? await auditApi.exportPlatformAuditLogs(query) : await auditApi.exportAuditLogs(query);
     jobCenter.track(job);
     ElMessage.success('导出任务已派发，可在底部任务条查看进度');
   } catch (err) {
@@ -227,42 +282,66 @@ async function handleExport(payload: { search: SearchModel; sort: string | null 
 
 <template>
   <div class="fw-page">
-    <CrudTable
-      api="/audit-logs"
-      :columns="columns"
-      :search-form="searchFields"
-      :transform-search="toQuery"
-      permission="audit"
-      exportable
-      @export="handleExport"
-    >
-      <!-- 事件摘要：业务摘要优先，旧行显式标注来源（不编造） -->
-      <template #cell-event="{ row }">
-        <div class="fw-audit-event">
-          <span class="fw-audit-event-text">{{ titleOf(asAudit(row)) }}</span>
-          <el-tag v-if="titleKindOf(asAudit(row)) === 'legacy'" size="small" type="info" effect="plain">历史记录</el-tag>
-          <el-tag v-else-if="titleKindOf(asAudit(row)) === 'unregistered'" size="small" type="warning" effect="plain">未登记事件</el-tag>
-        </div>
-      </template>
-      <template #cell-result="{ row }">
-        <el-tag size="small" :type="resultMeta(asAudit(row).result).tagType" effect="light">{{ resultMeta(asAudit(row).result).label }}</el-tag>
-      </template>
-      <template #cell-risk="{ row }">
-        <el-tag v-if="riskMeta(definitionOf(asAudit(row)))" size="small" :type="riskMeta(definitionOf(asAudit(row)))!.tagType" effect="plain">
-          {{ riskMeta(definitionOf(asAudit(row)))!.label }}
-        </el-tag>
-        <span v-else class="fw-text-weak">—</span>
-      </template>
-      <template #cell-target="{ row }">{{ targetText(asAudit(row)) }}</template>
-      <!-- 操作人只认写入时固化的名称快照；缺快照时标注「名称快照缺失（ID: …）」，不用当前用户名回填 -->
-      <template #cell-user="{ row }">{{ actorText(asAudit(row)) }}</template>
-      <template #cell-createdAt="{ row }">{{ formatTime(row.createdAt) }}</template>
-      <template #cell-module="{ row }">{{ row.module }}</template>
-      <template #cell-action="{ row }">{{ row.action }}</template>
-      <template #actions-extra="{ row }">
-        <el-button link type="primary" @click="openDetail(asAudit(row))">详情</el-button>
-      </template>
-    </CrudTable>
+    <!-- 查询范围常驻标识（P2）：单租户 / 跨租户必须一眼可辨，避免运营把两类查询结果混读 -->
+    <el-alert
+      class="fw-audit-scope"
+      :type="crossTenant ? 'warning' : 'info'"
+      :closable="false"
+      show-icon
+      :title="crossTenant ? '查询范围：跨租户（平台维护入口）' : '查询范围：单租户（当前租户）'"
+      :description="crossTenant
+        ? '本页可检索全部租户的审计记录，仅对持有 system:tenant:ignore 的平台维护账号开放；每次访问都会由服务端写入 tenant_bypass 豁免审计。'
+        : '仅显示当前登录账号所属租户的审计记录（服务端强制，dataScope=all 也不跨租户）；如需跨租户检索，请使用「平台审计」。'"
+    />
+
+    <!-- 入口收敛：平台模式缺 system:tenant:ignore 时不渲染数据区（服务端同样会拒绝，非唯一防线） -->
+    <el-result
+      v-if="!allowed"
+      icon="warning"
+      title="无权访问平台审计"
+      sub-title="平台审计仅向持有 system:tenant:ignore（跨租户维护）且持 audit:read 的账号开放。普通审计页不受影响。"
+    />
+
+    <template v-else>
+      <CrudTable
+        :api="listEndpoint"
+        :columns="columns"
+        :search-form="searchFields"
+        :transform-search="toQuery"
+        permission="audit"
+        exportable
+        @export="handleExport"
+      >
+        <!-- 事件摘要：业务摘要优先，旧行显式标注来源（不编造） -->
+        <template #cell-event="{ row }">
+          <div class="fw-audit-event">
+            <span class="fw-audit-event-text">{{ titleOf(asAudit(row)) }}</span>
+            <el-tag v-if="titleKindOf(asAudit(row)) === 'legacy'" size="small" type="info" effect="plain">历史记录</el-tag>
+            <el-tag v-else-if="titleKindOf(asAudit(row)) === 'unregistered'" size="small" type="warning" effect="plain">未登记事件</el-tag>
+          </div>
+        </template>
+        <template #cell-result="{ row }">
+          <el-tag size="small" :type="resultMeta(asAudit(row).result).tagType" effect="light">{{ resultMeta(asAudit(row).result).label }}</el-tag>
+        </template>
+        <template #cell-risk="{ row }">
+          <el-tag v-if="riskMeta(definitionOf(asAudit(row)))" size="small" :type="riskMeta(definitionOf(asAudit(row)))!.tagType" effect="plain">
+            {{ riskMeta(definitionOf(asAudit(row)))!.label }}
+          </el-tag>
+          <span v-else class="fw-text-weak">—</span>
+        </template>
+        <template #cell-target="{ row }">{{ targetText(asAudit(row)) }}</template>
+        <!-- 租户列（仅跨租户模式）：'0' 按契约标注「未知/存量」，不冒充某个租户 -->
+        <template #cell-tenant="{ row }">{{ tenantText(asAudit(row).tenantId) }}</template>
+        <!-- 操作人只认写入时固化的名称快照；缺快照时标注「名称快照缺失（ID: …）」，不用当前用户名回填 -->
+        <template #cell-user="{ row }">{{ actorText(asAudit(row)) }}</template>
+        <template #cell-createdAt="{ row }">{{ formatTime(row.createdAt) }}</template>
+        <template #cell-module="{ row }">{{ row.module }}</template>
+        <template #cell-action="{ row }">{{ row.action }}</template>
+        <template #actions-extra="{ row }">
+          <el-button link type="primary" @click="openDetail(asAudit(row))">详情</el-button>
+        </template>
+      </CrudTable>
+    </template>
 
     <!-- 审计详情：业务区在前，技术详情折叠 -->
     <el-drawer v-model="detailVisible" title="审计详情" size="640px">
@@ -293,6 +372,8 @@ async function handleExport(payload: { search: SearchModel; sort: string | null 
             <el-descriptions-item label="事件">{{ detailDefinition?.name ?? detail.event ?? '—' }}</el-descriptions-item>
             <el-descriptions-item label="操作人">{{ actorText(detail) }}</el-descriptions-item>
             <el-descriptions-item label="操作对象">{{ targetText(detail) }}</el-descriptions-item>
+            <!-- 跨租户模式下「哪个租户」是业务第一判据；单租户模式逐行重复同一值没有信息量 -->
+            <el-descriptions-item v-if="crossTenant" label="所属租户">{{ tenantText(detail.tenantId) }}</el-descriptions-item>
             <el-descriptions-item label="记录来源">{{ sourceText(detail) }}</el-descriptions-item>
             <el-descriptions-item label="操作原因" :span="2">{{ detail.reason ?? '未填写' }}</el-descriptions-item>
             <el-descriptions-item v-if="detailDefinition?.description" label="事件说明" :span="2">
@@ -337,6 +418,10 @@ async function handleExport(payload: { search: SearchModel; sort: string | null 
 </template>
 
 <style scoped>
+.fw-audit-scope {
+  margin-bottom: 12px;
+}
+
 .fw-audit-event {
   display: flex;
   align-items: center;

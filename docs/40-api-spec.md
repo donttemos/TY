@@ -268,6 +268,12 @@
 > 守卫写 `tenant_bypass` 豁免审计）；该入口只放开租户维度，归属人范围仍按 `dataScope` 收敛。
 > 全局 / 按任意租户检索的行为只在这些 `platform*` 端点上成立，与普通审计端点分开验收。
 >
+> **管理后台入口（2026-10-21 P2）**：平台审计视图 `/system/audit-logs/platform`（菜单权限码
+> `system:tenant:ignore`，页面另要求 `audit:read`）调用本节 `platform*` 端点；普通审计页
+> `/system/audit-logs` 仍只调用普通端点、不提供跨租户开关与租户筛选。两页顶部常驻「单租户 /
+> 跨租户」范围标识，**前端入口收敛不是安全边界**——服务端守卫（`@IgnoreTenant` + 权限码）仍是
+> 最终判定，普通端点不因存在平台页而放宽。
+>
 > M15（PRD-015，ADR-0032）起审计记录追加**业务快照**（`summary` / `targetLabel` / `actorLabel` / `reason` /
 > `auditSource` / `tenantId`），并由 `GET /audit-logs/events` 下发事件语义。分层约定：快照落库冻结、
 > 解释元数据（名称/风险/指引/字段中文名）不进库；`result` 新增第四态 `unknown`；`auditSource=interceptor`

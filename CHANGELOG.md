@@ -1,4 +1,4 @@
-﻿# 变更日志
+# 变更日志
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
@@ -18,6 +18,13 @@
 
 ## [Unreleased]
 
+### Added（P2：平台审计前端入口 + 双租户验收自动化，2026-10-21）
+
+- **前端平台审计视图**：`apps/admin-web` 审计页支持 `crossTenant` 双模式——普通审计页仍走 `/audit-logs*`（服务端强制当前租户），新增「系统管理 → 平台审计」独立入口（`/system/audit-logs/platform`，菜单权限码 `system:tenant:ignore`）走 `/audit-logs/platform*` 维护端点。页面顶部常驻「查询范围：单租户（当前租户）/ 跨租户（平台维护入口）」横幅；跨租户模式默认显示租户列与租户筛选，详情/导出按模式分流；普通模式不再渲染无法使用的租户筛选（该维度由服务端强制为当前租户）。平台页缺 `system:tenant:ignore` 或 `audit:read` 时不渲染数据区（服务端守卫仍为最终防线）；**普通端点行为与授权未放宽**。mock 补 `/audit-logs/platform*` 三个端点（业务码 + `system:tenant:ignore` 双权限，与后端 `@IgnoreTenant` 守卫同构）与跨租户演示行，普通端点行集/产物不变。
+- **双租户验收自动化**：新增 `apps/example-api/src/modules/auth/audit-tenant-isolation.integration.spec.ts`（真实 SQLite 临时库 + 真实 `PrismaAuthStore`/`PrismaAdminStore`，10 例：写入侧 `tenant_id` 落库、普通出口真实行集、客户端他租户 `4001`、详情双维度 `404`、导出产物行集、**任务重跑按派发时固化的 params 重建且期间新增他租户行不混入**、维护入口仅 `ignoreTenant` 上下文跨租户且 dataScope 仍收敛）；`smoke-tenant.mjs` 新增阶段 E（真实 HTTP 双账号对照：`acmeauditor`（tenant 1，`dataScope=all`，无跨租户码）vs `admin`（legacy，平台维护码），覆盖列表 / 详情 / 普通导出 / 维护入口检索与导出 / 越权 `3002`，65/65）。配套种子新增 `tenant_auditor` 角色与 `acmeauditor` 账号（tenantId=1，`audit:read` + `audit:export`，无 `system:tenant:ignore`）作为稳定 A/B 对照账号。
+- **验收口径**：PRD-015 AC-15-07 / AC-15-09 证据由「控制器与辅助函数单测级（C）」升级为「真实库 + 双账号 HTTP 自动化（本机 B，推送后 CI 可核实 → A）」，并新增 §7.4「真机双租户验收步骤」10 步取证清单；两条 AC **仍不勾选**（生产部署窗口的归档出口、敏感字样产物扫描、存量 0 标注截图未完成）。`docs/50` 新增 TC-TNT-009。
+- **验证（本机）**：admin-web 268/268 + `vue-tsc` 零错；example-api `tsc --noEmit` 零错、新增集成 spec 10/10；`smoke-mock` 152/152；`smoke-tenant` 65/65（含新增 16 条审计断言）。无新增错误码 / 迁移 / 破坏性契约变更。
+
 ### Security（P1：审计租户隔离与 dataScope 分维，2026-10-21）
 
 - **问题**：`dataScope` 只回答「能看**谁**的数据」，租户边界回答「能看**哪个租户**的数据」，二者是正交维度。此前四个审计出口（`/audit-logs`、`/audit-logs/export`、`/audit-archives`、`/audit-archives/export`）把 `tenant_id` 当普通可选过滤参数，详情只校验操作人范围、不校验记录 `tenantId`。共享库下，**某租户内 `dataScope=all` 的用户并非平台级身份**，却可显式指定 `tenant_id=<其他租户>` 或直接猜记录 ID 越过租户边界——`all` 解除了归属人限制，被误当成跨租户平台权限。
@@ -25,7 +32,7 @@
 - **跨租户维护入口（显式授权，全局访问单独测试）**：新增 `GET /audit-logs/platform`、`/audit-logs/platform/export`、`/audit-logs/platform/:id`、`/audit-archives/platform`、`/audit-archives/platform/export`，整组标 `@IgnoreTenant()`——守卫额外要求 `system:tenant:ignore`（缺失 `3002`）并把豁免写审计（`tenant_bypass`）。只有该入口的请求上下文带 `ignoreTenant` 标志时才放开租户维度（可再按 `tenant_id` 收窄）；归属人（`dataScope`）维度照旧收敛。普通端点即使调用方持有 `system:tenant:ignore` + `dataScope=all` 也不会跨租户（守卫不会在普通路由写豁免标志）。
 - **一致性**：`templates/admin/server` 同名控制器同步租户分维逻辑（模板为裁剪子集，不含维护入口，注释指向 example-api 范式）。
 - **测试**：新增 `packages/auth/src/__tests__/tenant-scope.test.ts`（15 例：来源优先级 / legacy `'0'` / 维护入口 / 收窄 4001 / 详情判定）；新增 `apps/example-api/src/modules/auth/audit-tenant-scope.spec.ts`（9 例：四出口强制与 4001、详情双维度、legacy 无边界、维护入口全局访问，以及「维护入口只放开租户维度、归属人照旧收敛」）；更新 `audit-detail-scope.spec.ts`（`all` 改为「本租户内不限归属人」，跨租户与 `tenant_id=0` 存量行 404；列表桩补租户收敛）与 `audit-archive-scope.spec.ts`（四出口 `tenantId` 同源断言）。
-- **前端/接入注意**：平台级审计页应在调用方持有 `system:tenant:ignore` 时改用 `platform*` 端点；本次只交付后端入口（admin-web 仍走普通端点，单租户 / mock 行为不变，共享库多租户下的页面接入为后续项）。
+- **前端/接入注意**：平台级审计页应在调用方持有 `system:tenant:ignore` 时改用 `platform*` 端点；本次只交付后端入口（admin-web 仍走普通端点，单租户 / mock 行为不变）。共享库多租户下的页面接入已在同批 P2 交付：见上方「平台审计前端入口 + 双租户验收自动化」。
 - **验证**：`@fw/auth` 293/293；example-api 全仓 231/231（`vitest run --no-file-parallelism`，24 套件；默认并行下两个 SQLite 集成套件在 Windows 上偶发 hook 超时，串行全绿，属环境问题）；`tsc --noEmit` 零错（auth / example-api）；门禁八项全绿（headers 710 文件 / api-parity / triway 八轴 / audit-events 32 事件 42 写入点 / no-raw-throw / helm 65 / config / template 语法校验）。无新增错误码、无迁移、无破坏性契约变更（维护入口为 additive 路由）。
 
 ### Security（M15 P2：审计限流丢弃观测闭环，2026-10-21）

@@ -16,12 +16,22 @@
  *      及 org 范围外 / org_below 旁支 / self 他人的详情越权拦截（403+3002）。
  *      部门树：总部 → 研发部(rd) → 前端组(rd-fe：alice/dave/erin) / 后端组(rd-be：frank)；总部 → 市场部(mkt：grace)。
  *      org_below(研发部) 期望集合含前端组与后端组成员，即 {alice,bob,carol,dave,erin,frank}。
+ *   E. 审计租户隔离（PRD-015 AC-15-07/09）：多租户启用下用**两个真实租户账号**验证——
+ *      acmeauditor（acme 租户，audit:read/export，dataScope=all，无 system:tenant:ignore）作为
+ *      「普通租户管理员」，admin（legacy + 平台维护码）作为「平台维护管理员」：
+ *      E1 普通列表只含当前租户行；E2 tenant_id 只能同值（他租户 4001）；E3 详情跨租户 404；
+ *      E4 导出产物不含他租户记录；E5 维护入口可跨租户检索/收窄/读详情；E6 普通账号访问维护入口 3002；
+ *      E7 平台导出产物跨租户。导出任务**跨实例重跑**不丢租户限制由集成用例
+ *      `audit-tenant-isolation.integration.spec.ts`（jobRunnerRegistry 工厂 + 真实库）取证，HTTP 层无法触发。
  *   说明：@fw/db 的 tenantScoped fail-closed 与 @fw/auth 的 @IgnoreTenant 审计由框架单测覆盖
  *      （db/repository-suite、auth/rbac.guard.test），本脚本聚焦 HTTP 层端到端行为。
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-14 donttemo M8 T-M8-02 新增阶段 C（dedicated 独立库路由端到端验证）
  * @modified 2026-10-14 donttemo M8 T-M8-04 新增阶段 D（数据权限四档 + 详情越权校验）
+ * @modified 2026-10-21 donttemo P2 新增阶段 E（审计租户隔离双账号验收，PRD-015 AC-15-07/09）：
+ *   补齐「多租户仅有单测、没有双账号 HTTP 端到端」的缺口；配套种子新增 tenant_auditor 角色与
+ *   acmeauditor 账号（tenantId=1，无跨租户维护码）
  * @module example-api
  */
 
@@ -430,11 +440,159 @@ async function phaseDataScope() {
   }
 }
 
+/**
+ * 等待异步任务终态（导出派发后轮询 /jobs/:id/progress）
+ * @returns 进度视图（succeeded / failed）或 null（超时）
+ */
+async function waitJob(jobId, token, tenantCode) {
+  const headers = { authorization: `Bearer ${token}`, 'x-tenant-id': tenantCode };
+  let progress = null;
+  for (let i = 0; i < 80; i += 1) {
+    const res = await call(`/api/v1/jobs/${jobId}/progress`, { headers });
+    progress = res.body?.data ?? null;
+    if (progress && (progress.status === 'succeeded' || progress.status === 'failed')) return progress;
+    await sleep(100);
+  }
+  return progress;
+}
+
+/** 下载任务产物为 UTF-8 文本（CSV） */
+async function downloadJobText(jobId, token, tenantCode) {
+  const res = await fetch(`${BASE}/api/v1/jobs/${jobId}/download`, {
+    headers: { authorization: `Bearer ${token}`, 'x-tenant-id': tenantCode },
+  });
+  return { status: res.status, text: Buffer.from(await res.arrayBuffer()).toString('utf8') };
+}
+
+/**
+ * 阶段 E：双租户审计隔离（PRD-015 AC-15-07 / AC-15-09 的 HTTP 端到端取证）
+ *
+ * 用两个**真实租户账号**对照验证：
+ * - acmeauditor（tenantId=1，audit:read/export，dataScope=all，**无** system:tenant:ignore）=
+ *   普通租户管理员：本租户审计可见、`tenant_id` 不能放大、详情不跨租户、导出产物不含他租户行；
+ * - admin（tenantId=0 legacy + 全量权限含 system:tenant:ignore）= 平台维护管理员：
+ *   platform* 维护入口才可跨租户检索/收窄/读详情/导出，普通接口仍受租户边界。
+ *
+ * 「导出任务重跑不丢租户限制」是任务中心跨实例重建（jobRunnerRegistry 工厂）语义，
+ * HTTP 层对 succeeded 任务无法触发重跑——由 `audit-tenant-isolation.integration.spec.ts`
+ * 用真实库 + 工厂重建覆盖。
+ */
+async function phaseAuditTenantIsolation() {
+  console.log('\n=== 阶段 E：双租户审计隔离（PRD-015 AC-15-07/09）===');
+  const server = await startServer({
+    TENANT_ENABLED: 'true',
+    TENANT_BASE_DOMAIN: 'example.com',
+    TENANT_ORDER: 'subdomain,header,jwt',
+  });
+  const acmeHeaders = (token) => ({ authorization: `Bearer ${token}`, 'x-tenant-id': 'acme' });
+  const legacyHeaders = (token) => ({ authorization: `Bearer ${token}`, 'x-tenant-id': 'legacy' });
+  try {
+    // E0 两个真实租户账号登录（acmeauditor 为新增的租户审计员示范账号）
+    const auditorLogin = await login('acmeauditor', 'AcmeAudit@123456', { 'x-tenant-id': 'acme' });
+    check('E0 acme 租户审计员登录成功（普通租户管理员侧）', isOk(auditorLogin.status), `[http=${auditorLogin.status}]`);
+    const auditorToken = auditorLogin.body?.data?.accessToken;
+    const adminLogin = await login('admin', 'Admin@123456', { 'x-tenant-id': 'legacy' });
+    check('E0 legacy 平台维护管理员登录成功', isOk(adminLogin.status), `[http=${adminLogin.status}]`);
+    const adminToken = adminLogin.body?.data?.accessToken;
+
+    // E1 普通列表：只含当前租户（登录审计异步落盘，短轮询等首个租户 1 行）
+    let auditorList = null;
+    for (let i = 0; i < 15; i += 1) {
+      auditorList = await call('/api/v1/audit-logs?page=1&pageSize=100', { headers: acmeHeaders(auditorToken) });
+      if ((auditorList.body?.data?.total ?? 0) > 0) break;
+      await sleep(200);
+    }
+    const auditorRows = auditorList?.body?.data?.items ?? [];
+    check('E1 普通租户账号可见本租户审计（非空）', auditorList?.status === 200 && auditorRows.length > 0,
+      `[http=${auditorList?.status} total=${auditorList?.body?.data?.total}]`);
+    const auditorTenants = [...new Set(auditorRows.map((row) => row.tenantId))];
+    check('E1 普通列表行集只含当前租户（tenantId 全为 1，dataScope=all 不跨租户）',
+      auditorRows.length > 0 && auditorRows.every((row) => row.tenantId === '1'),
+      `[tenants=${auditorTenants.join(',')}]`);
+
+    // E2 客户端 tenant_id：同值放行 / 他租户 4001（不能靠 query 越过租户边界）
+    const sameTenant = await call('/api/v1/audit-logs?tenant_id=1&page=1&pageSize=100', { headers: acmeHeaders(auditorToken) });
+    check('E2 指定本租户 tenant_id 放行', sameTenant.status === 200, `[http=${sameTenant.status}]`);
+    const crossTenantParam = await call('/api/v1/audit-logs?tenant_id=0', { headers: acmeHeaders(auditorToken) });
+    // 4001 在错误码表映射为 HTTP 403（与租户守卫拦截同码同语义），断言双接受以稳定覆盖
+    check('E2 指定他租户 tenant_id → 4001（显式跨租户尝试被看见）',
+      (crossTenantParam.status === 400 || crossTenantParam.status === 403) && crossTenantParam.body?.code === 4001,
+      `[http=${crossTenantParam.status} code=${crossTenantParam.body?.code}]`);
+
+    // E3 详情：本租户可读 / 他租户 404（与不存在同口径，不泄露存在性）
+    const adminList = await call('/api/v1/audit-logs?page=1&pageSize=100', { headers: legacyHeaders(adminToken) });
+    const legacyRows = (adminList.body?.data?.items ?? []).filter((row) => row.tenantId === '0');
+    check('E3 平台管理员在普通接口内仍只看到本租户审计（legacy 行存在）',
+      adminList.status === 200 && legacyRows.length > 0 && (adminList.body?.data?.items ?? []).every((row) => row.tenantId === '0'),
+      `[total=${adminList.body?.data?.total}]`);
+    const ownRow = auditorRows[0];
+    const legacyRow = legacyRows[0];
+    const ownDetail = await call(`/api/v1/audit-logs/${ownRow?.id}`, { headers: acmeHeaders(auditorToken) });
+    check('E3 本租户记录详情可读', ownDetail.status === 200 && ownDetail.body?.data?.id === ownRow?.id,
+      `[http=${ownDetail.status}]`);
+    const crossDetail = await call(`/api/v1/audit-logs/${legacyRow?.id}`, { headers: acmeHeaders(auditorToken) });
+    check('E3 他租户记录详情 → 404/1002（记录真实存在，拒绝来自租户维度）',
+      crossDetail.status === 404 && crossDetail.body?.code === 1002,
+      `[http=${crossDetail.status} code=${crossDetail.body?.code}]`);
+
+    // E4 普通导出：产物只含本租户行，不含他租户记录 ID
+    const exportDispatch = await call('/api/v1/audit-logs/export', { headers: acmeHeaders(auditorToken) });
+    const exportJobId = exportDispatch.body?.data?.id;
+    const exportProgress = exportJobId ? await waitJob(exportJobId, auditorToken, 'acme') : null;
+    const exportArtifact = exportJobId ? await downloadJobText(exportJobId, auditorToken, 'acme') : { status: 0, text: '' };
+    check('E4 普通租户导出任务 succeeded',
+      exportDispatch.body?.code === 0 && exportProgress?.status === 'succeeded',
+      `[job=${exportJobId} status=${exportProgress?.status}]`);
+    check('E4 导出产物含本租户记录、不含他租户记录',
+      exportArtifact.text.includes(ownRow?.id ?? '__missing__') && !exportArtifact.text.includes(legacyRow?.id ?? '__missing__'),
+      `[own=${exportArtifact.text.includes(ownRow?.id ?? '__missing__')} cross=${exportArtifact.text.includes(legacyRow?.id ?? '__missing__')}]`);
+
+    // E5 维护入口：平台维护管理员可跨租户检索 / 收窄 / 读详情
+    const platform = await call('/api/v1/audit-logs/platform?page=1&pageSize=100', { headers: legacyHeaders(adminToken) });
+    const platformRows = platform.body?.data?.items ?? [];
+    const platformTenants = new Set(platformRows.map((row) => row.tenantId));
+    check('E5 维护入口可跨租户检索（结果同时含 legacy 与 acme 租户行）',
+      platform.status === 200 && platformTenants.has('0') && platformTenants.has('1'),
+      `[tenants=${[...platformTenants].join(',')}]`);
+    const platformNarrow = await call('/api/v1/audit-logs/platform?tenant_id=1&page=1&pageSize=100', { headers: legacyHeaders(adminToken) });
+    const narrowedRows = platformNarrow.body?.data?.items ?? [];
+    check('E5 维护入口可按 tenant_id 收窄（普通端点会 4001 的维度）',
+      platformNarrow.status === 200 && narrowedRows.length > 0 && narrowedRows.every((row) => row.tenantId === '1'),
+      `[total=${platformNarrow.body?.data?.total}]`);
+    const platformDetail = await call(`/api/v1/audit-logs/platform/${ownRow?.id}`, { headers: legacyHeaders(adminToken) });
+    check('E5 维护入口可读他租户记录详情', platformDetail.status === 200 && platformDetail.body?.data?.tenantId === '1',
+      `[http=${platformDetail.status}]`);
+
+    // E6 普通租户账号访问维护入口 → 3002（租户维度放开不替代业务权限，且需跨租户码）
+    const deniedPlatform = await call('/api/v1/audit-logs/platform', { headers: acmeHeaders(auditorToken) });
+    check('E6 普通租户账号访问平台维护入口 → 403/3002',
+      deniedPlatform.status === 403 && deniedPlatform.body?.code === 3002,
+      `[http=${deniedPlatform.status} code=${deniedPlatform.body?.code}]`);
+    const deniedPlatformExport = await call('/api/v1/audit-logs/platform/export', { headers: acmeHeaders(auditorToken) });
+    check('E6 普通租户账号访问平台导出 → 403/3002',
+      deniedPlatformExport.status === 403 && deniedPlatformExport.body?.code === 3002,
+      `[code=${deniedPlatformExport.body?.code}]`);
+
+    // E7 平台导出：产物跨租户（含 acme 与 legacy 两侧记录）
+    const platformExport = await call('/api/v1/audit-logs/platform/export', { headers: legacyHeaders(adminToken) });
+    const platformJobId = platformExport.body?.data?.id;
+    const platformProgress = platformJobId ? await waitJob(platformJobId, adminToken, 'legacy') : null;
+    const platformArtifact = platformJobId ? await downloadJobText(platformJobId, adminToken, 'legacy') : { status: 0, text: '' };
+    check('E7 平台导出任务 succeeded 且产物跨租户',
+      platformExport.body?.code === 0 && platformProgress?.status === 'succeeded'
+      && platformArtifact.text.includes(ownRow?.id ?? '__missing__') && platformArtifact.text.includes(legacyRow?.id ?? '__missing__'),
+      `[status=${platformProgress?.status} acme=${platformArtifact.text.includes(ownRow?.id ?? '__missing__')} legacy=${platformArtifact.text.includes(legacyRow?.id ?? '__missing__')}]`);
+  } finally {
+    await stopServer(server);
+  }
+}
+
 async function main() {
   await phaseEnabled();
   await phaseDisabled();
   await phaseDedicated();
   await phaseDataScope();
+  await phaseAuditTenantIsolation();
   const failed = results.filter((r) => !r.ok);
   console.log(`\n结果：${results.length - failed.length}/${results.length} 通过`);
   if (failed.length > 0) {

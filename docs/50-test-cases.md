@@ -135,6 +135,7 @@
 | TC-TNT-003 | 隔离级别 | shared 写入后查库 | 自动带 `tenant_id`；dedicated 走独立库 | P0 |
 | TC-TNT-004 | 数据权限四档 | 四种 `dataScope` 各查列表 | 返回范围正确 | P0 |
 | TC-TNT-008 | 审计租户分维（P1，2026-10-21） | 共享库下 A 租户 `dataScope=all` 用户：① 传 `tenant_id=<B>` 查审计列表 / 导出；② 直接请求 B 租户审计记录 ID；③ 同一请求改走 `/audit-logs/platform*` 维护入口 | ①② 一律拒绝（列表 / 导出 `4001`，详情 `404/1002`，不返回 B 租户数据）；③ 仅当守卫校验 `system:tenant:ignore` 并写 `tenant_bypass` 审计后放行，且归属人范围仍按 `dataScope` 收敛 | P0 |
+| TC-TNT-009 | 平台审计双租户验收（P2，2026-10-21） | 多租户启用下两个真实账号：acmeauditor（tenant 1，dataScope=all，无跨租户码）与 admin（legacy，平台维护码）分别查列表 / 详情 / 导出；admin 走 `/audit-logs/platform*`；普通账号访问维护入口 | 普通账号行集与导出产物只含本租户、他租户 `tenant_id` → `4001`、他租户详情 `404`；维护入口跨租户可检索 / 收窄 / 导出且普通账号 `3002`；导出任务重跑（params 固化重建）不混入期间新增他租户行。自动化：`audit-tenant-isolation.integration.spec.ts` + `smoke-tenant.mjs` 阶段 E；前端「系统管理 → 平台审计」入口仅 `system:tenant:ignore` 持有者可见且横幅显式标注单租户 / 跨租户 | P0 |
 | TC-TNT-005 | transport 切换 | `in-process` → `redis` | 调用方代码不改，调用成功 | P0 |
 | TC-TNT-006 | 链路贯通 | 跨 2 个服务的请求 | 同一 traceId 在追踪系统可见完整链路 | P1 |
 | TC-TNT-007 | Helm 部署 | 部署后滚动更新 | 探针通过，无中断，HPA 生效 | P1 |

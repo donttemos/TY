@@ -55,7 +55,8 @@
 | `/system/roles` | 角色与权限 | `role:read` | 动态 | M5 |
 | `/system/menus` | 菜单管理 | `menu:read` | 动态 | M5 |
 | `/system/dict` | 字典管理 | `dict:read` | 动态 | M5 |
-| `/system/audit` | 审计日志 | `audit:read` | 动态 | M5 |
+| `/system/audit-logs` | 审计日志（单租户：仅当前租户，无租户筛选） | `audit:read` | 动态 | M5 / M15 |
+| `/system/audit-logs/platform` | 平台审计（跨租户维护入口；顶部常驻单租户 / 跨租户范围标识，租户列与租户筛选默认可见） | `system:tenant:ignore` + `audit:read`（服务端双重要求） | 动态 | M15（P2） |
 | `/system/queue` | 队列管理 | `system:queue:list` | 动态 | M7 |
 | `/system/tenants` | 租户管理 | `tenant:read` | 动态 | M8 |
 | `/saas/plans` | 套餐管理（版本/配额抽屉） | `ops:saas:read` | 动态 | M13 |

@@ -20,7 +20,7 @@
 | [PRD-012](./prd-012-observability-error-contract.md) | M12 | 统一可观测契约与运维暴露（W1 统一 Error/Audit Contract → W2 Observability 贯穿 → W3 Maintenance/Health 暴露） | M1–M11（重点 M1、M3、M8、M10、M11.3/11.5） | P1 | 草案（2026-10-17） |
 | [PRD-013](./prd-013-saas-operations-foundation.md) | M13 | SaaS 运营基础落地与可复现开发环境（主线 A 套餐/订阅/配额/用量/生命周期/运营端/账单，细化 PRD-011 S-01~S-07；主线 B 工具链冻结与开发环境文档四件套） | M1–M12（重点 M8、M12） | P0 | 已发布 v0.7.0（2026-10-19） |
 | [PRD-014](./prd-014-admin-web-productization.md) | M14 | Admin Web 产品化与 SaaS 运营体验升级（B1 正确性修复 → B2 运营 API 闭环 → B3 页面产品化 → B4 看板与运营首页） | M13（重点 M12 契约、M13 领域服务与运营 API） | P1 | 草案（2026-10-19） |
-| [PRD-015](./prd-015-business-readable-audit.md) | M15 | 业务可读审计与运营追溯（B1 契约与注册表 → B2 事件覆盖 → B3 运营视图 → B4 查询归档导出同口径 → B5 门禁验证） | M12 审计/错误/ID 契约、M13 SaaS 领域、M14 页面范式 | P1 | 草案（2026-10-20） |
+| [PRD-015](./prd-015-business-readable-audit.md) | M15 | 业务可读审计与运营追溯（B1 契约与注册表 → B2 事件覆盖 → B3 运营视图 → B4 查询归档导出同口径 → B5 门禁验证） | M12 审计/错误/ID 契约、M13 SaaS 领域、M14 页面范式 | P1 | 已交付 B1~B5（验收取证进行中：AC 15-02/03/06/07/09/12/13 未勾选；2026-10-21 P2 补平台审计前端入口 + 双租户验收自动化） |
 
 ## 待规划 PRD（尚未排期）
 

@@ -34,6 +34,8 @@ export const KNOWN_SYSTEM_PATHS: readonly string[] = [
   '/system/menus',
   '/system/dict',
   '/system/audit-logs',
+  // 平台审计（跨租户维护入口，P2）：仅 system:tenant:ignore 持有者的菜单下发该路径
+  '/system/audit-logs/platform',
   '/system/queue',
   '/order/list',
   '/demo-items',

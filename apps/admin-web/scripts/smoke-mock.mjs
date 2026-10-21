@@ -534,6 +534,60 @@ async function main() {
       csvDownload.status === 200 && csvHasBom && csvHasHeader && csvLines >= 2,
       `status=${csvDownload.status} bytes=${csvDownloadBytes.length} bom=${csvHasBom} header=${csvHasHeader} lines=${csvLines} head=${JSON.stringify(csvDownloadText.slice(0, 72))}`);
 
+    // ---- P2 平台审计（/audit-logs/platform*，跨租户维护入口）----
+    // 与普通端点的差异必须能在 mock 下复现：普通行集 / 产物不含他租户演示行，platform 才有。
+    const platformList = await api('GET', '/audit-logs/platform?page=1&pageSize=50', { token: newAccess });
+    const platformItems = platformList.body?.data?.items ?? [];
+    const platformTotal = platformList.body?.data?.total ?? 0;
+    const normalNow = await api('GET', '/audit-logs?page=1&pageSize=1', { token: newAccess });
+    const normalTotal = normalNow.body?.data?.total ?? 0;
+    check('GET /audit-logs/platform 行集 = 普通行集 + 跨租户演示行（含他租户与 tenant 0）',
+      platformList.body?.code === 0 && platformTotal === normalTotal + 3
+      && platformItems.some((a) => a.tenantId === '3') && platformItems.some((a) => a.tenantId === '0'),
+      `platform=${platformTotal} normal=${normalTotal}`);
+    const platformNarrow = await api('GET', '/audit-logs/platform?tenant_id=3', { token: newAccess });
+    const narrowItems = platformNarrow.body?.data?.items ?? [];
+    check('platform 可按 tenant_id 收窄（普通端点会 4001 的维度，维护入口合法）',
+      platformNarrow.body?.code === 0 && narrowItems.length === 1 && narrowItems.every((a) => a.tenantId === '3'),
+      `total=${platformNarrow.body?.data?.total}`);
+    const platformDetail = await api('GET', '/audit-logs/platform/a-platform-0001', { token: newAccess });
+    check('GET /audit-logs/platform/:id 可读跨租户记录', platformDetail.body?.code === 0 && platformDetail.body?.data?.tenantId === '3', `code=${platformDetail.body?.code}`);
+    const normalCrossDetail = await api('GET', '/audit-logs/a-platform-0001', { token: newAccess });
+    check('同一记录走普通 /audit-logs/:id → 404（普通端点不因入口换名而跨租户）',
+      normalCrossDetail.status === 404 && normalCrossDetail.body?.code === 1002, `http=${normalCrossDetail.status}`);
+
+    // 平台导出：派发 → 轮询 → 产物含跨租户行；普通导出产物不含（两条链路产物同格式、不同范围）
+    const platformExportDispatch = await api('GET', '/audit-logs/platform/export', { token: newAccess });
+    const platformExportId = platformExportDispatch.body?.data?.id;
+    let platformProgress = null;
+    for (let i = 0; i < 60 && (!platformProgress || (platformProgress.status !== 'succeeded' && platformProgress.status !== 'failed')); i += 1) {
+      const progress = await api('GET', `/jobs/${platformExportId}/progress`, { token: newAccess });
+      platformProgress = progress.body?.data ?? null;
+      if (platformProgress && (platformProgress.status === 'succeeded' || platformProgress.status === 'failed')) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const platformCsvResponse = await fetch(`${BASE}/jobs/${platformExportId}/download`, { headers: { Authorization: `Bearer ${newAccess}` } });
+    const platformCsvText = Buffer.from(await platformCsvResponse.arrayBuffer()).toString('utf8');
+    check('platform 导出任务 succeeded 且产物含跨租户行（普通产物不含）',
+      platformExportDispatch.body?.code === 0 && platformProgress?.status === 'succeeded'
+      && platformCsvText.includes('a-platform-0001') && platformCsvText.includes(',risk\r\n')
+      && !csvDownloadText.includes('a-platform-0001'),
+      `status=${platformProgress?.status} platformHas=${platformCsvText.includes('a-platform-0001')} normalHas=${csvDownloadText.includes('a-platform-0001')}`);
+
+    // 双权限与入口可见性：alice 无 audit:read / system:tenant:ignore → 3002；菜单不下发
+    const alicePlatformList = await api('GET', '/audit-logs/platform', { token: aliceToken });
+    check('alice 无 audit:read → 平台审计 3002', alicePlatformList.body?.code === 3002, `code=${alicePlatformList.body?.code}`);
+    const alicePlatformExport = await api('GET', '/audit-logs/platform/export', { token: aliceToken });
+    check('alice 无 audit:export → 平台审计导出 3002', alicePlatformExport.body?.code === 3002, `code=${alicePlatformExport.body?.code}`);
+    const adminMenus = await api('GET', '/auth/menus', { token: newAccess });
+    const platformMenu = (adminMenus.body?.data ?? []).find((m) => m.path === '/system')?.children?.find((m) => m.path === '/system/audit-logs/platform');
+    check('平台审计菜单：component / 权限码 system:tenant:ignore 与后端 seed 同形',
+      platformMenu?.component === 'system/audit-logs/platform' && platformMenu?.permissionCode === 'system:tenant:ignore',
+      platformMenu ? `component=${platformMenu.component}` : '未找到');
+    const aliceMenus = await api('GET', '/auth/menus', { token: aliceToken });
+    const alicePlatformMenu = (aliceMenus.body?.data ?? []).find((m) => m.path === '/system')?.children?.find((m) => m.path === '/system/audit-logs/platform');
+    check('平台审计菜单不对无 system:tenant:ignore 的账号下发（入口不可见）', alicePlatformMenu === undefined);
+
     // ---- M10 E-13 站内信 / 通知中心（mock 与 example-api §3.14 同构）----
     const notifList = await api('GET', '/notifications', { token: newAccess });
     const notifItems = notifList.body?.data?.items ?? [];

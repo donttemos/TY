@@ -18,6 +18,9 @@
  *   表与 @fw/storage 语义：元数据行 + 内存字节，下载逐字节回放）与 file:create 权限点（授予 user 角色）
  * @modified 2026-10-20 donttemo M15 安全加固：审计种子补 `actorLabel`（有事件码的行 = M15 后由
  *   recordEvent 落库，必有名称快照；无事件码的旧行刻意留空，用于验证「名称快照缺失」展示）
+ * @modified 2026-10-21 donttemo P2 平台审计：补「平台审计」菜单（/system/audit-logs/platform，
+ *   需 system:tenant:ignore）与跨租户演示行 `platformAuditLogs`——mock 没有租户解析中间件，
+ *   故他租户行只从 platform 端点返回，普通 /audit-logs 行为不变（不伪造普通端点的跨租户能力）
  * @module admin-web/mock
  */
 
@@ -416,6 +419,9 @@ const MENUS: MockMenu[] = [
   { id: 'm-system-tenants', parentId: 'm-system', name: '租户管理', path: '/system/tenants', component: 'system/tenants', icon: 'office-building', permissionCode: 'tenant:read', visible: true, sort: 7 },
   // M9 参数配置页（views/system/configs）：与后端 seed 同形（PRD-009 FR-07）
   { id: 'm-system-configs', parentId: 'm-system', name: '参数配置', path: '/system/configs', component: 'system/configs', icon: 'tool', permissionCode: 'system:config:read', visible: true, sort: 8 },
+  // P2 平台审计页（views/system/audit-logs/platform）：与后端 seed 同形——菜单可见性 =
+  // 服务端 @IgnoreTenant 守卫的准入码，mock 下只有 admin（全量授权）能看到入口
+  { id: 'm-system-platform-audit', parentId: 'm-system', name: '平台审计', path: '/system/audit-logs/platform', component: 'system/audit-logs/platform', icon: 'view', permissionCode: 'system:tenant:ignore', visible: true, sort: 9 },
   // 刻意保留的 mock-only 演示菜单：仅存在于 dev（mock 有 /orders 端点与 demo/orders 视图可跑通），
   // 生产 seed 已整支移除该分支（后端无 /api/v1/orders，挂菜单必然死链）—— 属**有意**的 dev/prod 差异。
   { id: 'm-order', parentId: '0', name: '订单中心', path: '/order', component: 'layout/blank', icon: 'shopping', permissionCode: 'order:read', visible: true, sort: 3 },
@@ -586,6 +592,92 @@ function seedAuditLogs(): MockAuditLog[] {
   }
   return logs;
 }
+
+/**
+ * 平台审计跨租户演示行（P2 平台审计视图）
+ *
+ * mock 没有租户解析中间件：若把这些行塞进 `database.auditLogs`，普通审计页（真实后端只返回
+ * 当前租户）也会显示他租户记录，等于伪造普通端点的跨租户能力。故跨租户样本只由
+ * `/audit-logs/platform*` 返回——「单租户 / 跨租户」两种口径的差异在 mock 下同样可复现。
+ * 其中一条 `tenantId: '0'` 用于验证「未知/存量」标注（契约：0 不属于任何普通租户，仅维护入口可见）。
+ */
+export const PLATFORM_AUDIT_LOGS: MockAuditLog[] = (() => {
+  const base = Date.UTC(2026, 9, 14, 6, 0, 0);
+  const row = (
+    index: number,
+    tenantId: string,
+    fields: Pick<MockAuditLog, 'module' | 'action' | 'event' | 'targetType' | 'targetId' | 'targetLabel' | 'summary' | 'reason'> & {
+      beforeValue?: unknown;
+      afterValue?: unknown;
+      userId?: string;
+      actorLabel?: string;
+    },
+  ): MockAuditLog => ({
+    id: `a-platform-${String(index).padStart(4, '0')}`,
+    userId: fields.userId ?? 'u-admin',
+    module: fields.module,
+    action: fields.action,
+    category: 'tenant',
+    event: fields.event,
+    result: 'success',
+    familyId: null,
+    jti: null,
+    requestId: null,
+    targetType: fields.targetType,
+    targetId: fields.targetId,
+    beforeValue: fields.beforeValue ?? null,
+    afterValue: fields.afterValue ?? null,
+    ip: '10.0.0.11',
+    userAgent: 'Mozilla/5.0 (mock)',
+    traceId: `trace-platform-${String(index).padStart(4, '0')}`,
+    createdAt: new Date(base + index * 1_800_000).toISOString(),
+    tenantId,
+    summary: fields.summary,
+    targetLabel: fields.targetLabel,
+    actorLabel: fields.actorLabel ?? '平台运营',
+    reason: fields.reason,
+    auditSource: 'domain',
+  });
+  return [
+    row(1, '3', {
+      module: 'saas',
+      action: 'update',
+      event: 'saas.lifecycle.freeze',
+      targetType: 'tenant',
+      targetId: '3',
+      targetLabel: '独立库租户',
+      summary: '将租户「独立库租户」由正常变更为冻结（原因：合规复核）',
+      beforeValue: { from: 'active', to: 'frozen' },
+      afterValue: { from: 'active', to: 'frozen' },
+      reason: '合规复核',
+    }),
+    row(2, '5', {
+      module: 'saas',
+      action: 'update',
+      event: 'saas.lifecycle.resume',
+      targetType: 'tenant',
+      targetId: '5',
+      targetLabel: '已冻结演示租户',
+      summary: '将租户「已冻结演示租户」由冻结变更为正常',
+      beforeValue: { from: 'frozen', to: 'active' },
+      afterValue: { from: 'frozen', to: 'active' },
+      userId: 'u-dave',
+      actorLabel: '运营专员',
+    }),
+    row(3, '0', {
+      module: 'auth',
+      action: 'login',
+      event: 'auth.login_failed',
+      targetType: 'user',
+      targetId: 'u-bob',
+      targetLabel: 'bob',
+      summary: '用户「bob」登录失败（原因：口令错误）',
+      reason: '口令错误',
+      userId: 'u-bob',
+      actorLabel: 'bob',
+    }),
+  ];
+})();
 
 /**
  * 租户基线（N-01，与 example-api seed 的 seedTenants() 同构）：
