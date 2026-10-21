@@ -17,6 +17,9 @@
  * @modified 2026-10-21 donttemo P1 订阅创建入参校验：空 / 纯空白 / 非字符串 tenantId → 1001，
  *   未知租户 → 1002，planCode 空白 → 1001；被拒请求不得查库、不得触达领域服务、不得落审计。
  *   名称快照用例同步补 findTenantStatus（存在性由状态端点回答，名称缺失是另一回事）。
+ * @modified 2026-10-21 donttemo P1 业务一致性：订阅创建补生命周期状态规则——terminated → 4030
+ *   （终态无迁出，不得留下「生效订阅 + 终止租户」），pending/active/grace/frozen 放行且不触发
+ *   隐式迁移；存在性与状态共用同一次 findTenantStatus 读取（调用次数锁定）。
  * @author donttemo
  * @created 2026-10-20
  * @module example-api/saas
@@ -353,12 +356,59 @@ describe('SaasOpsController POST /saas/tenant-subscriptions 入参校验（P1：
     )) as { id: string; tenantId: string };
 
     expect(store.findTenantStatus).toHaveBeenCalledWith('t1');
+    expect(store.findTenantStatus).toHaveBeenCalledTimes(1); // 存在性与状态共用同一次读取
     expect(subscriptions.create).toHaveBeenCalledWith({ tenantId: 't1', planCode: 'default', planVersion: undefined, expireAt: null });
     expect(sub).toMatchObject({ id: 'sub-new', tenantId: 't1' });
     expect(AUDIT.recordEvent).toHaveBeenCalledWith(
       'saas.subscription.create',
       expect.objectContaining({ targetLabel: '示例企业 · 基础版', after: expect.objectContaining({ tenantId: 't1', planCode: 'default' }) }),
     );
+  });
+});
+
+describe('SaasOpsController POST /saas/tenant-subscriptions 生命周期状态规则（P1 业务一致性）', () => {
+  /** 订阅领域服务桩：只记录调用参数，不落库 */
+  function makeSubscriptions() {
+    return { create: vi.fn(async (input: { tenantId: string }) => ({ id: 'sub-new', tenantId: input.tenantId, status: 'active' })) };
+  }
+
+  function makeCreateController(store: SaasStore, subscriptions: ReturnType<typeof makeSubscriptions>) {
+    return new SaasOpsController(store, makePlans() as never, subscriptions as never, {} as never, {} as never, {} as never, AUDIT as never);
+  }
+
+  it('terminated → 4030（终态无迁移出口）：不调领域服务、不落审计，details 带 from/action', async () => {
+    const subscriptions = makeSubscriptions();
+    const store = makeStore({ findTenantStatus: vi.fn(async () => 'terminated') });
+    await expect(
+      makeCreateController(store, subscriptions).createSubscription({ tenantId: 't-term', planCode: 'default' } as never, undefined as never),
+    ).rejects.toMatchObject({
+      code: ErrorCode.LIFECYCLE_TRANSITION_INVALID,
+      http: 409,
+      details: [
+        { field: 'from', message: 'terminated' },
+        { field: 'action', message: 'activate' },
+      ],
+    });
+    // 拒绝发生在领域调用之前：不会留下「生效订阅 + 终止租户」的矛盾数据
+    expect(subscriptions.create).not.toHaveBeenCalled();
+    expect(AUDIT.recordEvent).not.toHaveBeenCalled();
+  });
+
+  it.each(['pending', 'active', 'grace', 'frozen'] as const)('%s → 放行开通（frozen 的续订+恢复是合法流程，开通不做隐式迁移）', async (status) => {
+    const subscriptions = makeSubscriptions();
+    const store = makeStore({ findTenantStatus: vi.fn(async () => status) });
+    const r = (await makeCreateController(store, subscriptions).createSubscription({ tenantId: 't1', planCode: 'default' } as never, undefined as never)) as { id: string };
+    expect(r).toMatchObject({ id: 'sub-new' });
+    expect(subscriptions.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('frozen 放行后不触发生命周期迁移（状态写权唯一归属 TenantLifecycleService）', async () => {
+    const subscriptions = makeSubscriptions();
+    const store = makeStore({ findTenantStatus: vi.fn(async () => 'frozen') });
+    // lifecycle 点位是空桩：一旦被调用即 TypeError，能通过就证明未发生隐式 resume
+    await expect(
+      makeCreateController(store, subscriptions).createSubscription({ tenantId: 't1', planCode: 'default' } as never, undefined as never),
+    ).resolves.toMatchObject({ id: 'sub-new' });
   });
 });
 

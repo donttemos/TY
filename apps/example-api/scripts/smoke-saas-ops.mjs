@@ -16,7 +16,7 @@
  *   S10 POST lifecycle resume → 业务恢复 200
  *   S11 GET  /metrics 含 fw_saas_quota_exceeded_total / fw_saas_lifecycle_transitions_total{action=freeze}
  *        / fw_saas_tenant_suspended_rejected_total（NFR-13-5 指标段）
- *   S12 POST lifecycle terminate → 业务请求仍 4031（terminated）
+ *   S12 POST lifecycle terminate → 业务请求仍 4031（terminated）；S12.1 再开订阅 → 409/4030（终态无迁出）
  *   S13 GET  lifecycle/logs 动作序列含 freeze/resume/terminate（审计留痕）
  *   S14 M14 B2 新端点：POST /saas/plans（重复 → 1003）→ POST versions（版本 +1、配额字典未登记 → 1002）
  *        → GET /saas/tenant-subscriptions 列表过滤与 planCode 补全 → GET subscriptions/history
@@ -232,6 +232,14 @@ async function main() {
     const terminate = await call(`/api/v1/saas/tenants/${tenantId}/lifecycle`, { method: 'POST', body: { action: 'terminate', reason: '冒烟注销' } }, auth.admin);
     check('S12 terminate 成功', isOk(terminate.status) && terminate.body.data?.to === 'terminated', `http=${terminate.status}`);
     check('S12 终止后迁移历史可见（业务 4031 语义由 S9 覆盖）', true, '');
+
+    // S12.1 终止态不可再开通订阅（P1 业务一致性）：terminated 是终态（迁移表只有 dispose），
+    // 开通只会留下「生效订阅 + 终止租户」的矛盾数据。该租户此刻仍挂着 S4 的生效订阅，
+    // 因此 4030 必须**优先于**「一租户一生效」的 1003——顺序错了说明校验放到了领域层之后。
+    const terminatedSub = await call('/api/v1/saas/tenant-subscriptions', { method: 'POST', body: { tenantId, planCode: 'default' } }, auth.admin);
+    check('S12.1 终止租户开通订阅 → 409/4030（终态无迁出，先于 1003）',
+      terminatedSub.status === 409 && terminatedSub.body.code === 4030,
+      `http=${terminatedSub.status} code=${terminatedSub.body.code}`);
 
     // S13 迁移历史（acme：freeze/resume；冒烟租户：terminate）
     const acmeLogs = await call(`/api/v1/saas/tenants/1/lifecycle/logs`, {}, auth.admin);

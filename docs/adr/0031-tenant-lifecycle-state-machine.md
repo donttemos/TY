@@ -42,6 +42,7 @@
 2. **幂等 = 状态条件更新**：`UPDATE tenants SET status=:to ... WHERE id=:id AND status=:from`；affected rows = 0 → 重读判定（已是目标态则返回幂等成功标记 `alreadyApplied: true`，否则 4030）。
 3. **双保险**：任务执行外加 `@fw/cache` 分布式锁（`lifecycle:sweep` 单键），多实例部署下避免重复扫描浪费；锁不可用时条件更新仍保证正确性——**正确性不依赖锁**。
 4. **到期扫描任务**：分布式定时（复用 @fw/scheduler db 驱动），扫描 `expireAt` 过期且 `status=active` 的订阅 → grace；grace 截止已过且 `status=grace` → frozen。每次循环只处理批次上限，失败单条记录不中断整批；进程重启无内存态、自然续跑（AC-13-08）。
+5. **运营写操作的状态前置（2026-10-21 补充）**：`@LifecycleExempt()` 只豁免「运营面在冻结/终止态仍可被调用」，**不等于**允许对终态租户产生权益变更。任何隐含迁移意图的运营写操作（典型：为租户开通订阅，等价于请求 `terminated -[activate]-> active`）必须在接口边界先校验状态，`terminated` 一律 `4030` 且先于同资源的其它冲突码；`frozen` 放行但**不做隐式迁移**（`frozen -resume-> active` 由运营显式调用，前置条件「新订阅」由该写操作提供）。控制器据此实现见 `saas-ops.controller.ts::createSubscription`。
 
 ## 3. 冻结/终止的作用点与白名单
 

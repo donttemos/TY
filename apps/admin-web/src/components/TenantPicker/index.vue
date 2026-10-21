@@ -8,6 +8,9 @@
  * @modified 2026-10-21 donttemo P2 审计：新增可选 `fetcher` 远程搜索注入——平台审计页改走受控的
  *   `/audit-logs/platform/tenant-options`（audit:read + system:tenant:ignore，四列最小投影），
  *   不再要求平台审计角色持有 `tenant:read`，也不受管理面列表「只取第一页 100 条」的限制
+ * @modified 2026-10-21 donttemo P2 并发修复：远程搜索加请求序号保护——连打不同关键词时，
+ *   较早发出的慢响应不得覆盖新关键词的候选（此前会把选项写回成旧关键词结果，筛选入口与
+ *   当前输入不一致）；过期响应的错误也不弹 toast。
  * @module admin-web/components
 -->
 
@@ -44,6 +47,17 @@ const emit = defineEmits<{
 const options = ref<TenantPickerOption[]>([]);
 const searching = ref(false);
 
+/**
+ * 远程搜索请求序号（只允许**最后发出的那一次**写回候选）。
+ *
+ * 远程搜索是竞态高发面：连续输入不同关键词时，较早发出的慢请求可能晚于新请求返回，
+ * 一旦无保护地写回 `options`，候选就会与当前关键词不一致（用户看到「acme」的候选却
+ * 搜的是「globex」）。这里用单调递增序号做「后发先至」判定，过期响应整段丢弃——
+ * 不覆盖候选、不改 loading、不弹过期请求的错误文案。
+ * 不做 AbortController：请求层未暴露 signal，序号判定已足够保证「展示与最后一次输入一致」。
+ */
+let searchSeq = 0;
+
 /** 默认远程搜索：复用 /tenants 管理面（keyword 匹配编码 / 名称） */
 async function defaultFetcher(keyword: string): Promise<TenantPickerOption[]> {
   const page = await fetchTenants({ keyword: keyword || undefined, page: 1, pageSize: 20 });
@@ -52,14 +66,18 @@ async function defaultFetcher(keyword: string): Promise<TenantPickerOption[]> {
 
 /** 远程搜索：keyword 空时取第一页（提供常见租户候选）；审计页可注入受控查询 */
 async function onSearch(keyword: string): Promise<void> {
+  const seq = ++searchSeq;
   searching.value = true;
   try {
-    options.value = await (props.fetcher ?? defaultFetcher)(keyword);
+    const next = await (props.fetcher ?? defaultFetcher)(keyword);
+    if (seq !== searchSeq) return; // 过期响应：已有更新的搜索在途/已返回，丢弃
+    options.value = next;
   } catch (e) {
+    if (seq !== searchSeq) return; // 过期请求的失败同样不打扰用户
     // 搜索失败静默保留既有候选（错误文案由请求层 toast；选择器不应阻断页面）
     if (e instanceof BizError) describeBizError(e);
   } finally {
-    searching.value = false;
+    if (seq === searchSeq) searching.value = false;
   }
 }
 

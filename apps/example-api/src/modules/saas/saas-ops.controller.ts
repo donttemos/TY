@@ -45,6 +45,10 @@
  * @modified 2026-10-21 donttemo P1：订阅创建补边界校验——tenantId/planCode 空白 → 1001、
  *   租户不存在 → 1002（真机验收复现过 `{"tenantId":""}` 建出 `tenant_id=''` 的订阅行）；
  *   通过校验后以 trim 归一值调用领域服务并写入审计快照。
+ * @modified 2026-10-21 donttemo P1 业务一致性：订阅创建补**生命周期状态**校验——terminated 租户
+ *   拒绝开通（4030，details 带 from/action），避免「生效订阅 + 终止租户」的矛盾数据（终态无迁出）；
+ *   frozen/grace/pending 仍放行（frozen 的「续订再恢复」是 ADR-0031 §2.2 合法前置），
+ *   开通本身不做隐式迁移。存在性与状态共用同一次 findTenantStatus 读取。
  * @module example-api/saas
  */
 
@@ -249,11 +253,20 @@ export class SaasOpsController {
    * 并建出 `tenant_id=''` 的订阅行）：
    * ① tenantId 非空白 → 否则 1001（空串/纯空白一律拒绝，不做「兜底成 0 号租户」的猜测）；
    * ② planCode 非空白 → 否则 1001（避免把空 code 当业务参数传进领域层）；
-   * ③ 租户存在 → 否则 1002（`findTenantStatus` 的 null 即「租户不存在」，见 LifecycleStore 端口约定）。
+   * ③ 租户存在 → 否则 1002（`findTenantStatus` 的 null 即「租户不存在」，见 LifecycleStore 端口约定）；
+   * ④ 租户**未终止** → terminated 一律 4030（见下）。
    *
    * 为什么要在边界查存在性：订阅行会绑定 active_marker（一租户一生效的唯一键）并生成配额快照，
    * 挂到不存在的租户上会产出无法归属的权益数据，且该租户日后建档时会「莫名已有生效订阅」。
    * 领域层另有一道非空不变量（SubscriptionService.create），两层各自独立。
+   *
+   * 为什么还要拒绝 terminated（ADR-0031 §2.2）：terminated 是终态，迁移表只有 `dispose`、没有任何
+   * 迁出路径。类级 `@LifecycleExempt()` 又让运营面绕过 4031，于是「存在性检查 + 无状态检查」会留下
+   * **生效订阅挂在终止租户上**的数据——租户仍终止、业务请求继续 4031，且没有合法迁移能把它恢复。
+   * 拒绝码复用 4030（与「terminated 不可被启用」同一口径），details 保留 `from/action` 便于定位。
+   * frozen / grace / pending 均放行：ADR-0031 §2.2 的 `frozen -resume-> active` 前置条件正是
+   * 「存在有效订阅（新订阅）」，即「先续订、再恢复」是合法流程；但开通本身**不做隐式迁移**
+   * （状态写权唯一归属 TenantLifecycleService），运营随后显式 `resume` 即可，两种状态因此区别处理。
    */
   @Post('tenant-subscriptions')
   @Permissions(PERM.OPS_SAAS_WRITE)
@@ -266,8 +279,20 @@ export class SaasOpsController {
     if (!planCode) {
       throw new BizError(ErrorCode.BAD_REQUEST, 'planCode 必填（不能为空或纯空白）');
     }
-    if ((await this.store.findTenantStatus(tenantId)) === null) {
+    const tenantStatus = await this.store.findTenantStatus(tenantId);
+    if (tenantStatus === null) {
       throw new BizError(ErrorCode.NOT_FOUND, `租户不存在：${tenantId}`);
+    }
+    // 终止态是终态：开通订阅会被误读成「复活」意图，而 terminated 在迁移表里没有迁出（ADR-0031 §2.2）
+    if (tenantStatus === 'terminated') {
+      throw new BizError(
+        ErrorCode.LIFECYCLE_TRANSITION_INVALID,
+        `租户已终止（terminated 为终态，无迁移出口），不能开通订阅：${tenantId}`,
+        [
+          { field: 'from', message: 'terminated' },
+          { field: 'action', message: 'activate' },
+        ],
+      );
     }
     const sub = await this.subscriptions.create({
       tenantId,

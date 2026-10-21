@@ -18,6 +18,20 @@
 
 ## [Unreleased]
 
+### Fixed（P1：SaaS 订阅开通未限制终止态，可留下「生效订阅 + 终止租户」矛盾数据，2026-10-21）
+
+- **问题**（业务一致性评审）：`POST /saas/tenant-subscriptions` 只校验租户**存在性**（`findTenantStatus` 返回 null 才拒绝），`active/frozen/terminated` 一律继续开通。而 ADR-0031 的迁移表里 `terminated` 是**终态**（只有 `dispose`，无任何迁出），控制器类上的 `@LifecycleExempt()` 又让运营面绕过 4031 —— 于是管理员可为已终止租户建出一条生效订阅：租户仍终止、业务请求继续 4031，且没有任何合法迁移能恢复。订阅与租户状态自此不一致。
+- **修复（接口边界，状态规则显式化）**：存在性与状态**共用同一次 `findTenantStatus` 读取**；`terminated` → `409/4030`（`LIFECYCLE_TRANSITION_INVALID`，与「terminated 不可被启用」同一口径），details 带 `from=terminated / action=activate`，文案「租户已终止（terminated 为终态，无迁移出口），不能开通订阅」。`frozen / grace / pending` 仍放行——ADR-0031 §2.2 的 `frozen -resume-> active` 前置条件正是「存在有效订阅（新订阅）」，即「先续订、再恢复」是合法流程；**开通本身不做隐式迁移**（状态写权唯一归属 `TenantLifecycleService`），运营随后显式 `resume`，两种状态因此区别处理。判定先于「一租户一生效」冲突，终止租户永远得到 4030 而不是 1003。
+- **测试**：`saas-ops.controller.spec.ts` 33→53 例（terminated → 4030 且不触达领域服务/不落审计、details 断言；`pending/active/grace/frozen` 参数化放行；frozen 放行不触发隐式迁移；存在性读取调用次数锁定为 1）。**缺陷复现**：去掉状态判定后该用例立即变红（1 failed / 52 passed）。
+- **mock 与冒烟对齐**：`apps/admin-web/mock/handlers.ts` 的同一端点补 terminated → 4030（状态取迁移日志末条，与 lifecycle/status 同源；同样先于 1003），避免 dev 能开通、真机 4030 的假绿；`smoke-saas-ops.mjs` 新增 **S12.1**（终止租户再开通 → `409/4030`，且该租户此刻仍挂着生效订阅，用于锁定「4030 优先于 1003」的顺序）。
+- **契约**：无新增错误码（复用 4030）、无迁移；`docs/40-api-spec.md` §3.21 该端点行补齐状态规则与码值。
+
+### Fixed（P2：TenantPicker 远程搜索无请求顺序保护，旧关键词慢响应会覆盖新候选，2026-10-21）
+
+- **问题**（评审登记的低优先级项）：`TenantPicker.onSearch` 直接把 `await fetcher(keyword)` 的结果写回 `options`，没有任何序号或取消机制。连续输入不同关键词时，较早发出的慢请求可能晚于新请求返回并**覆盖**候选，导致租户筛选下拉与当前输入不一致。不放宽后端权限，但筛选入口会展示错误候选。
+- **修复**：`onSearch` 引入单调递增 `searchSeq`，只有「最后发出的那一次」可以写回候选；过期响应整段丢弃——不覆盖 `options`、不改 `loading`、不弹过期请求的错误 toast。未用 `AbortController`：请求层未暴露 `signal`，序号判定已足以保证「展示与最后一次输入一致」（注释中写明该取舍）。
+- **测试**：`tenant-picker.test.ts` 6→9 例（延迟可控 Promise 构造乱序：旧慢响应晚到不覆盖新候选；过期请求失败不改候选且不抛出；`loading` 只由最后一次搜索收尾）。**缺陷复现**：分别去掉写回保护与 loading 收尾保护，对应用例 1 failed / 2 failed 立即变红。
+
 ### Fixed（P1：seed 清场遗漏租户级 SaaS 数据，reseed 后新租户继承旧租户历史，2026-10-21）
 
 - **问题**（真机验收 docs/64 §5 #4 登记项）：`prisma/seed.ts` 的 `truncate()` 只清业务/鉴权表，**不清 SaaS 表**。`tenants` 每次 reseed 都会重建，ID 从头分配，而 `tenant_subscriptions` / `tenant_quotas` / `tenant_quota_windows` / `usage_events` / `usage_rollups` / `tenant_lifecycle_logs` / `audit_log_archives` 的旧行保留 → 新租户**继承同 ID 旧租户的历史**：刚建的租户「已有生效订阅」（`active_marker` 唯一键被占，开通直接 `409/1003`）、新建租户用量已超限、归档审计出现不属于自己的行。这是数据归属错误，不是展示问题。

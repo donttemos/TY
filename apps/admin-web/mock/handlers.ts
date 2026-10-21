@@ -47,6 +47,9 @@
  *   `/audit-archives/platform`、`/audit-archives/platform/export` 四个端点（与在线同构、同权限、
  *   普通入口不跨租户）与 `/audit-logs/platform/tenant-options` 受控租户选项查询（租户筛选不再取
  *   管理面第一页 100 条，也不要求 tenant:read）
+ * @modified 2026-10-21 donttemo P1 业务一致性：`POST /saas/tenant-subscriptions` 补终止态拒绝
+ *   （terminated → 4030，先于「已有生效订阅」1003），与后端 createSubscription 的状态规则同语义，
+ *   避免 dev 下能为终止租户开通订阅而真机 4030 的「本机过、真机挂」
  * @module admin-web/mock
  */
 
@@ -3183,6 +3186,17 @@ async function handleSaasRoutes(
     const planCode = String(body.planCode ?? 'default');
     if (!tenantId) {
       send(res, 1001, '参数错误', null, traceId, [{ field: 'tenantId', message: '必填' }]);
+      return { handled: true };
+    }
+    // 与真实后端同语义（P1 业务一致性）：terminated 是终态（迁移表只有 dispose），不允许再开通订阅。
+    // 判定先于「已有生效订阅」冲突：终止租户即使还挂着生效订阅，也应得到 4030 而不是 1003。
+    // mock 无 tenants.status 派生列，生命周期状态取迁移日志末条（与 lifecycle/status 端点同源）。
+    const tenantStatus = saas.lifecycleLogs.filter((l) => l.tenantId === tenantId).slice(-1)[0]?.toStatus ?? null;
+    if (tenantStatus === 'terminated') {
+      send(res, CODE.LIFECYCLE_TRANSITION_INVALID, '租户已终止（terminated 为终态，无迁移出口），不能开通订阅', null, traceId, [
+        { field: 'from', message: 'terminated' },
+        { field: 'action', message: 'activate' },
+      ]);
       return { handled: true };
     }
     if (saas.subscriptions.some((s) => s.tenantId === tenantId && s.status === 'active')) {
