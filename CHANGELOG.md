@@ -18,6 +18,13 @@
 
 ## [Unreleased]
 
+### Added（P2：历史审计追溯 + 平台审计租户筛选受控查询，2026-10-21）
+
+- **在线 / 归档双来源**：审计视图新增来源切换——普通模式 `/audit-logs*` ↔ `/audit-archives*`，平台模式 `/audit-logs/platform*` ↔ `/audit-archives/platform*`；范围提示改为「租户范围 + 数据来源」双维横幅。归档表无独立详情端点，详情由列表行快照渲染（归档记录不可变）；归档导出与在线导出共用 `buildAuditCsv`（表头逐字节一致）。修复「平台审计页只能查在线表、历史审计追溯未交付」的缺口——平台维护人员现可在管理后台直接检索归档冷数据。
+- **租户筛选受控查询**：新增 `GET /audit-logs/platform/tenant-options`（`@IgnoreTenant` + `audit:read`，与 platform* 维护入口同一把钥匙，**不要求 `tenant:read`**），只返回 `id/code/name/status` 四列最小投影，支持 `keyword` 远程搜索 / `ids` 批量解析（≤100）/ 分页，停用租户仍返回（历史审计追溯不断链）。前端租户筛选改为远程搜索 + 行内 `tenantId` 批量名称解析（新增 `useAuditTenantDirectory`：去重 / 分批 ≤100 / 失败不阻塞列表、回退「租户 <id>」），不再调用要求 `tenant:read` 的管理面 `/tenants`，也不受「只取第一页 100 条」限制；平台审计角色因此**无需 tenant:read**，也看不到连接串等管理面字段。
+- **自动化**：真实库集成 `audit-tenant-isolation.integration.spec.ts` 扩至 18 例（新增归档 5 例：普通/平台归档行集、4001、导出、重跑不混入新增他租户行、在线/归档 CSV 表头逐字节一致；租户选项 3 例：keyword/ids/分页）；新增 `audit-platform-tenant-options.spec.ts` 5 例（路由元数据仅 audit:read、keyword 截断、ids 非法 400、ids 优先）；`smoke-tenant` 阶段 E 扩至 E8~E12（79/79，含归档出口同权限边界 + 平台归档跨租户）；`smoke-mock` 扩 12 条（164/164）；admin-web 新增平台页来源切换 9 例、租户目录 5 例、TenantPicker 2 例、CrudTable loaded/filters 2 例。
+- **验证（本机）**：admin-web **280/280**（36 套件）+ `vue-tsc` 零错；example-api `tsc --noEmit` 零错、受影响 spec **46/46**（含 18 例真实 SQLite 集成）；`smoke-mock` **164/164**；六门禁全绿（file-headers / api-parity / triway 八轴 / audit-events / no-raw-throw / no-raw-sql）。`smoke-tenant` 本地沙箱 C 段受限于 schema engine 写盘被吞（CLI 假成功、文件 0 字节，非代码缺陷），以 CI 四腿冒烟为准。无新增错误码 / 迁移 / 破坏性契约变更（租户选项为 additive 维护端点）。
+
 ### Security（M15 真机验收：cs.donttemo.top 部署 + 端到端取证，2026-10-21）
 
 - **部署**：真机由 `c192885`（pre-M15）升级至 `2f30084`（origin/main，含平台审计前端与双租户验收自动化，CI run 107 四腿全绿）。按 docs/62 手册路径：PG 备份 → 服务器 git 凭据与常驻 clone（`/opt/fw/shared/repo`，此前缺失本次自建）→ `bare-metal-deploy.sh`（PRISMA_SCHEMA=pg，WEB_SYNC_DIR=站点目录）→ 94s 完成（install 16.5s / generate 358ms / 15 包构建 / 前端 1928 模块含 platform chunk）→ 应用迁移 `20261020120000_add_audit_business_snapshot` → 软链切换 + 重启 → 健康检查通过（未触发回滚）→ reseed（6 角色四档 dataScope + tenant_auditor / 21 账号 / 4 租户）。

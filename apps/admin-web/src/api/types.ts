@@ -305,10 +305,34 @@ export interface AuditEventDefinition {
   deprecated?: { since: string; replacedBy?: string };
 }
 
-/** 事件注册表响应（含 version 供前端缓存失效） */
+/** 审计事件注册表响应（含 version 供前端缓存失效） */
 export interface AuditEventRegistry {
   version: string;
   items: AuditEventDefinition[];
+}
+
+/**
+ * 平台审计租户选项（受控最小投影；`GET /audit-logs/platform/tenant-options`）
+ *
+ * 与租户管理面 `TenantView` 的区别：只含审计筛选所需的 id / code / name / status，
+ * 平台审计角色无需 `tenant:read` 即可解析「记录属于哪个租户」。
+ */
+export interface AuditTenantOption {
+  id: ID;
+  code: string;
+  name: string;
+  /** 租户状态（0 停用 / 1 正常 / …）：历史审计可能属于已停用租户 */
+  status: number;
+}
+
+/** 平台审计租户选项查询（keyword 模糊搜索 / ids 批量解析） */
+export interface AuditTenantOptionQuery {
+  /** 名称 / 编码模糊匹配（远程搜索用） */
+  keyword?: string;
+  /** 逗号分隔的租户 ID（列表行 → 名称解析，≤100） */
+  ids?: string;
+  page?: number;
+  pageSize?: number;
 }
 
 /** 登录设备 / 会话 */

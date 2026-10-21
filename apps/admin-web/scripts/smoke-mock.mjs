@@ -588,6 +588,84 @@ async function main() {
     const alicePlatformMenu = (aliceMenus.body?.data ?? []).find((m) => m.path === '/system')?.children?.find((m) => m.path === '/system/audit-logs/platform');
     check('平台审计菜单不对无 system:tenant:ignore 的账号下发（入口不可见）', alicePlatformMenu === undefined);
 
+    // ---- P2 归档审计（在线 / 归档切换的数据源）----
+    const archiveList = await api('GET', '/audit-archives?page=1&pageSize=50', { token: newAccess });
+    const archiveItems = archiveList.body?.data?.items ?? [];
+    check('GET /audit-archives 返回归档冷数据（与在线表不同的数据集）',
+      archiveList.body?.code === 0 && archiveItems.length > 0 && archiveItems.every((a) => a.id.startsWith('ar-')),
+      `total=${archiveList.body?.data?.total}`);
+    const archivePlatform = await api('GET', '/audit-archives/platform?page=1&pageSize=50', { token: newAccess });
+    const archivePlatformItems = archivePlatform.body?.data?.items ?? [];
+    check('GET /audit-archives/platform 含跨租户归档行（普通归档不含）',
+      archivePlatform.body?.code === 0
+      && archivePlatformItems.some((a) => a.id === 'ar-platform-0001' && a.tenantId === '3')
+      && !archiveItems.some((a) => a.id.startsWith('ar-platform-')),
+      `platform=${archivePlatform.body?.data?.total} normal=${archiveList.body?.data?.total}`);
+    const archiveNarrow = await api('GET', '/audit-archives/platform?tenant_id=3', { token: newAccess });
+    const archiveNarrowItems = archiveNarrow.body?.data?.items ?? [];
+    check('平台归档可按 tenant_id 收窄（与平台在线同语义）',
+      archiveNarrow.body?.code === 0 && archiveNarrowItems.length === 1 && archiveNarrowItems.every((a) => a.tenantId === '3'),
+      `total=${archiveNarrow.body?.data?.total}`);
+    const aliceArchive = await api('GET', '/audit-archives', { token: aliceToken });
+    check('alice 无 audit:read → 归档 3002', aliceArchive.body?.code === 3002, `code=${aliceArchive.body?.code}`);
+    const aliceArchivePlatform = await api('GET', '/audit-archives/platform', { token: aliceToken });
+    check('普通账号访问平台归档 → 3002（与平台在线同权限）', aliceArchivePlatform.body?.code === 3002, `code=${aliceArchivePlatform.body?.code}`);
+
+    /** 轮询任务至终态并下载 CSV 文本（归档导出复用） */
+    const waitAndDownload = async (jobId) => {
+      let progress = null;
+      for (let i = 0; i < 60; i += 1) {
+        const res = await api('GET', `/jobs/${jobId}/progress`, { token: newAccess });
+        progress = res.body?.data ?? null;
+        if (progress && (progress.status === 'succeeded' || progress.status === 'failed')) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      const response = await fetch(`${BASE}/jobs/${jobId}/download`, { headers: { Authorization: `Bearer ${newAccess}` } });
+      return { progress, text: Buffer.from(await response.arrayBuffer()).toString('utf8') };
+    };
+
+    const archiveExportDispatch = await api('GET', '/audit-archives/export', { token: newAccess });
+    const archiveExportId = archiveExportDispatch.body?.data?.id;
+    const archiveExportResult = await waitAndDownload(archiveExportId);
+    check('归档导出任务 succeeded 且产物只含归档行（表头与在线产物一致）',
+      archiveExportDispatch.body?.code === 0 && archiveExportDispatch.body?.data?.type === 'audit.archive.export'
+      && archiveExportResult.progress?.status === 'succeeded'
+      && archiveExportResult.text.includes('ar-0001') && !archiveExportResult.text.includes('ar-platform-0001')
+      && archiveExportResult.text.split('\r\n')[0] === csvDownloadText.split('\r\n')[0],
+      `status=${archiveExportResult.progress?.status} has=${archiveExportResult.text.includes('ar-0001')}`);
+
+    const platformArchiveExportDispatch = await api('GET', '/audit-archives/platform/export', { token: newAccess });
+    const platformArchiveExportResult = await waitAndDownload(platformArchiveExportDispatch.body?.data?.id);
+    check('平台归档导出产物含跨租户归档行',
+      platformArchiveExportDispatch.body?.code === 0 && platformArchiveExportResult.progress?.status === 'succeeded'
+      && platformArchiveExportResult.text.includes('ar-platform-0001'),
+      `status=${platformArchiveExportResult.progress?.status}`);
+
+    // ---- P2 平台审计租户选项（受控查询：租户筛选不再依赖 tenant:read / 第一页 100 条）----
+    const tenantOptions = await api('GET', '/audit-logs/platform/tenant-options?page=1&pageSize=100', { token: newAccess });
+    const tenantOptionItems = tenantOptions.body?.data?.items ?? [];
+    check('GET /audit-logs/platform/tenant-options 返回最小投影（id/code/name/status）',
+      tenantOptions.body?.code === 0 && tenantOptionItems.length >= 2
+      && tenantOptionItems.every((item) => ['code', 'id', 'name', 'status'].every((key) => key in item)),
+      `total=${tenantOptions.body?.data?.total}`);
+    const tenantKeywordOptions = await api('GET', '/audit-logs/platform/tenant-options?keyword=acme', { token: newAccess });
+    const keywordItems = tenantKeywordOptions.body?.data?.items ?? [];
+    check('租户选项支持 keyword 远程搜索（命中 acme）',
+      tenantKeywordOptions.body?.code === 0 && keywordItems.length === 1 && keywordItems[0].code === 'acme',
+      `n=${keywordItems.length}`);
+    const tenantIdsOptions = await api('GET', '/audit-logs/platform/tenant-options?ids=3,0&page=1&pageSize=100', { token: newAccess });
+    check('租户选项支持 ids 批量解析（列表行 → 名称，含 legacy 0）',
+      tenantIdsOptions.body?.code === 0
+      && JSON.stringify((tenantIdsOptions.body?.data?.items ?? []).map((item) => item.id).sort()) === JSON.stringify(['0', '3']),
+      `ids=${(tenantIdsOptions.body?.data?.items ?? []).map((item) => item.id).join(',')}`);
+    const tenantPagedOptions = await api('GET', '/audit-logs/platform/tenant-options?page=2&pageSize=1', { token: newAccess });
+    check('租户选项可分页（page/pageSize/hasMore 元信息齐备）',
+      tenantPagedOptions.body?.code === 0 && tenantPagedOptions.body?.data?.page === 2
+      && tenantPagedOptions.body?.data?.items?.length === 1 && typeof tenantPagedOptions.body?.data?.hasMore === 'boolean',
+      `page=${tenantPagedOptions.body?.data?.page}`);
+    const aliceTenantOptions = await api('GET', '/audit-logs/platform/tenant-options', { token: aliceToken });
+    check('普通账号访问平台租户选项 → 3002', aliceTenantOptions.body?.code === 3002, `code=${aliceTenantOptions.body?.code}`);
+
     // ---- M10 E-13 站内信 / 通知中心（mock 与 example-api §3.14 同构）----
     const notifList = await api('GET', '/notifications', { token: newAccess });
     const notifItems = notifList.body?.data?.items ?? [];

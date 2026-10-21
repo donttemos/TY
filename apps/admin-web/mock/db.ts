@@ -21,6 +21,9 @@
  * @modified 2026-10-21 donttemo P2 平台审计：补「平台审计」菜单（/system/audit-logs/platform，
  *   需 system:tenant:ignore）与跨租户演示行 `platformAuditLogs`——mock 没有租户解析中间件，
  *   故他租户行只从 platform 端点返回，普通 /audit-logs 行为不变（不伪造普通端点的跨租户能力）
+ * @modified 2026-10-21 donttemo P2 归档审计：新增 `auditArchives`（冷数据演示行）与
+ *   `PLATFORM_ARCHIVE_AUDIT_LOGS`（归档维护入口的跨租户样本）——在线/归档切换与
+ *   「归档不是越权后门」在 mock 下同样可复现
  * @module admin-web/mock
  */
 
@@ -309,6 +312,8 @@ export interface MockDb {
   dictCategories: MockDictCategory[];
   dictItems: MockDictItem[];
   auditLogs: MockAuditLog[];
+  /** 归档审计（P2：`/audit-archives*` 数据源；与在线表同构的冷数据，详情走列表快照） */
+  auditArchives: MockAuditLog[];
   orders: MockOrder[];
   queue: MockQueueState;
   sessions: MockSession[];
@@ -680,6 +685,116 @@ export const PLATFORM_AUDIT_LOGS: MockAuditLog[] = (() => {
 })();
 
 /**
+ * 归档审计冷数据（P2：`/audit-archives*` 数据源）
+ *
+ * 在线表迁出的历史行：与在线行**同构**（同一 DTO / 同一注册表解释 / 同一 CSV 列序），
+ * 只是时间更早、不再变化。演示「在线/归档切换」时能明显看出归档是另一份历史数据集。
+ */
+function seedAuditArchives(): MockAuditLog[] {
+  const base = Date.UTC(2026, 8, 20, 1, 0, 0); // 2026-09-20 起，早于在线演示数据
+  const rows: MockAuditLog[] = [];
+  const plan: Array<{ action: MockAuditLog['action']; module: string; event: string }> = [
+    { action: 'login', module: 'auth', event: 'auth.login' },
+    { action: 'create', module: 'user', event: 'user.create' },
+    { action: 'update', module: 'user', event: 'user.update' },
+    { action: 'delete', module: 'user', event: 'user.delete' },
+    { action: 'grant', module: 'role', event: 'auth.role_assign' },
+    { action: 'logout', module: 'auth', event: 'auth.logout' },
+  ];
+  plan.forEach((item, index) => {
+    const i = index + 1;
+    rows.push({
+      id: `ar-${String(i).padStart(4, '0')}`,
+      userId: i % 3 === 0 ? 'u-alice' : 'u-admin',
+      module: item.module,
+      action: item.action,
+      category: 'admin',
+      event: item.event,
+      result: 'success',
+      familyId: null,
+      jti: null,
+      requestId: null,
+      targetType: item.module === 'role' ? 'role' : 'user',
+      targetId: item.module === 'role' ? 'r-user' : 'u-bob',
+      beforeValue: item.action === 'update' ? { status: 1 } : null,
+      afterValue: item.action === 'update' ? { status: 0 } : null,
+      ip: '127.0.0.1',
+      userAgent: 'Mozilla/5.0 (mock-archive)',
+      traceId: `trace-archive-${String(i).padStart(4, '0')}`,
+      createdAt: new Date(base + i * 86_400_000).toISOString(),
+      tenantId: '1',
+      summary: `归档演示：${item.event}`,
+      targetLabel: item.module === 'role' ? '普通用户' : 'bob',
+      actorLabel: i % 3 === 0 ? 'Alice' : '平台管理员',
+      reason: item.action === 'delete' ? '归档演示' : null,
+      auditSource: 'domain',
+    });
+  });
+  return rows;
+}
+
+/**
+ * 平台归档审计的跨租户演示行（仅 `/audit-archives/platform*` 返回）
+ *
+ * 与在线平台行同口径：他租户与 legacy `0` 样本只从维护入口出现，普通归档端点行为不变。
+ */
+export const PLATFORM_ARCHIVE_AUDIT_LOGS: MockAuditLog[] = (() => {
+  const base = Date.UTC(2026, 8, 25, 3, 0, 0);
+  const make = (
+    index: number,
+    tenantId: string,
+    fields: Pick<MockAuditLog, 'module' | 'action' | 'event' | 'targetType' | 'targetId' | 'targetLabel' | 'summary' | 'reason'>,
+  ): MockAuditLog => ({
+    id: `ar-platform-${String(index).padStart(4, '0')}`,
+    userId: 'u-admin',
+    module: fields.module,
+    action: fields.action,
+    category: 'tenant',
+    event: fields.event,
+    result: 'success',
+    familyId: null,
+    jti: null,
+    requestId: null,
+    targetType: fields.targetType,
+    targetId: fields.targetId,
+    beforeValue: null,
+    afterValue: null,
+    ip: '10.0.0.11',
+    userAgent: 'Mozilla/5.0 (mock-archive)',
+    traceId: `trace-archive-platform-${String(index).padStart(4, '0')}`,
+    createdAt: new Date(base + index * 3_600_000).toISOString(),
+    tenantId,
+    summary: fields.summary,
+    targetLabel: fields.targetLabel,
+    actorLabel: '平台运营',
+    reason: fields.reason,
+    auditSource: 'domain',
+  });
+  return [
+    make(1, '3', {
+      module: 'saas',
+      action: 'update',
+      event: 'saas.lifecycle.freeze',
+      targetType: 'tenant',
+      targetId: '3',
+      targetLabel: '独立库租户',
+      summary: '归档演示：将租户「独立库租户」由正常变更为冻结（原因：合规复核）',
+      reason: '合规复核',
+    }),
+    make(2, '0', {
+      module: 'auth',
+      action: 'login',
+      event: 'auth.login_failed',
+      targetType: 'user',
+      targetId: 'u-bob',
+      targetLabel: 'bob',
+      summary: '归档演示：用户「bob」登录失败（原因：口令错误）',
+      reason: '口令错误',
+    }),
+  ];
+})();
+
+/**
  * 租户基线（N-01，与 example-api seed 的 seedTenants() 同构）：
  * legacy（id '0'）：存量单租户数据归属租户，停用 / 迁移一律被服务端拒绝；
  * acme（id '1'）：第二个租户；off（id '2'）：停用租户（fail-closed 演示）；
@@ -805,6 +920,7 @@ export function createDb(): MockDb {
     dictCategories: DICT_CATEGORIES.map((c) => ({ ...c })),
     dictItems: DICT_ITEMS.map((d) => ({ ...d })),
     auditLogs: seedAuditLogs(),
+    auditArchives: seedAuditArchives(),
     orders: seedOrders(),
     queue: seedQueue(),
     tenants: seedTenants(),

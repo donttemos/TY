@@ -7,11 +7,22 @@
  * @modified 2026-10-15 donttemo N-02：新增 exportAuditLogs（GET /audit-logs/export，需 audit:export）
  * @modified 2026-10-21 donttemo P2：新增平台审计三条（/audit-logs/platform*）——跨租户维护入口，
  *   服务端额外要求 `system:tenant:ignore`（@IgnoreTenant）；普通三条端点保持不变，仍受租户边界约束
+ * @modified 2026-10-21 donttemo P2 补齐历史审计追溯：新增归档审计四条（普通 / 平台 × 列表 / 导出，
+ *   `/audit-archives*`）与平台审计租户选项受控查询（`/audit-logs/platform/tenant-options`）。
+ *   归档表无独立详情端点——列表 DTO 即完整只读快照，详情由行数据渲染，不为不可变冷数据新增读端点。
  * @module admin-web/api
  */
 
 import { request } from '@/utils/request';
-import type { AuditEventRegistry, AuditLogRecord, AuditQuery, JobView, PageResult } from './types';
+import type {
+  AuditEventRegistry,
+  AuditLogRecord,
+  AuditQuery,
+  AuditTenantOption,
+  AuditTenantOptionQuery,
+  JobView,
+  PageResult,
+} from './types';
 
 /** 审计日志分页查询 */
 export function fetchAuditLogs(query: AuditQuery = {}): Promise<PageResult<AuditLogRecord>> {
@@ -62,4 +73,42 @@ export function fetchPlatformAuditLog(id: string): Promise<AuditLogRecord> {
 /** 平台审计导出（跨租户维护入口，需 audit:export + system:tenant:ignore） */
 export function exportPlatformAuditLogs(query: AuditQuery = {}): Promise<JobView> {
   return request.get<JobView>('/audit-logs/platform/export', { params: query });
+}
+
+/**
+ * 归档审计分页查询（冷数据追溯，`GET /audit-archives`）
+ *
+ * 归档表与在线表同构：数据范围 / 租户范围与在线列表**同源收敛**（普通请求仍强制当前租户），
+ * 过滤参数与在线列表同形。归档不是越权后门，也不是「另一个更宽松的查询入口」。
+ */
+export function fetchArchiveAuditLogs(query: AuditQuery = {}): Promise<PageResult<AuditLogRecord>> {
+  return request.get<PageResult<AuditLogRecord>>('/audit-archives', { params: query });
+}
+
+/** 归档审计异步导出（普通出口；产物与在线导出逐字节同构） */
+export function exportArchiveAuditLogs(query: AuditQuery = {}): Promise<JobView> {
+  return request.get<JobView>('/audit-archives/export', { params: query });
+}
+
+/** 平台归档审计：跨租户冷数据检索（维护入口，`GET /audit-archives/platform`） */
+export function fetchPlatformArchiveAuditLogs(query: AuditQuery = {}): Promise<PageResult<AuditLogRecord>> {
+  return request.get<PageResult<AuditLogRecord>>('/audit-archives/platform', { params: query });
+}
+
+/** 平台归档审计导出（维护入口，需 audit:export + system:tenant:ignore） */
+export function exportPlatformArchiveAuditLogs(query: AuditQuery = {}): Promise<JobView> {
+  return request.get<JobView>('/audit-archives/platform/export', { params: query });
+}
+
+/**
+ * 平台审计租户选项（受控查询，P2 评审补口）
+ *
+ * 为什么不用管理面 `GET /tenants`：后者要求 `tenant:read`（专职审计角色会被迫获得租户管理面读取权），
+ * 且只取第一页 100 条时租户更多就无法筛选 / 名称退化。本端点与 platform* 维护入口同一把钥匙
+ * （`system:tenant:ignore` + `audit:read`），只返回 id/code/name/status。
+ *
+ * 两种用法：`keyword`（远程搜索）/ `ids`（列表行 → 名称批量解析，逗号分隔 ≤100）。
+ */
+export function fetchAuditTenantOptions(query: AuditTenantOptionQuery = {}): Promise<PageResult<AuditTenantOption>> {
+  return request.get<PageResult<AuditTenantOption>>('/audit-logs/platform/tenant-options', { params: query });
 }

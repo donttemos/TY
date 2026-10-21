@@ -21,6 +21,10 @@
  *   普通请求强制使用服务端解析出的当前租户（客户端 tenant_id 只能收窄、与他租户不一致即 4001），
  *   详情同时校验记录 tenantId。dataScope=all 只解除归属人限制，不再隐含跨租户能力；跨租户检索只走
  *   `@IgnoreTenant()` + system:tenant:ignore 的维护入口（/audit-logs/platform*）
+ * @modified 2026-10-21 donttemo P2 补齐历史审计追溯：① 新增平台审计租户选项受控查询
+ *   `GET /audit-logs/platform/tenant-options`（audit:read + system:tenant:ignore，只暴露
+ *   id/code/name/status 四列最小投影）——前端租户筛选不再依赖 tenant:read 的管理面 `/tenants`，
+ *   也不会因只取第一页 100 条而漏掉后续租户；② 与归档控制器共用同一套租户选项（在线/归档切换）。
  * @module example-api/auth
  */
 
@@ -51,9 +55,9 @@ import {
   type DataScopeOrgPort,
   type RequestUser,
 } from '@fw/auth';
-import { ADMIN_STORE } from '../admin/admin-store.js';
+import { ADMIN_STORE, TENANT_OPTION_IDS_MAX, TENANT_OPTION_PAGE_MAX } from '../admin/admin-store.js';
 import { clientIp } from './auth.controller.js';
-import type { AdminStore } from '../admin/admin-store.js';
+import type { AdminStore, TenantOptionView } from '../admin/admin-store.js';
 import { JobRunnerRegistry } from '../jobs/job-runner.registry.js';
 import { JobCenterService, type JobView } from '../jobs/job-center.service.js';
 import type { JobArtifact, JobReporter } from '../jobs/job-center.port.js';
@@ -444,6 +448,53 @@ export class AuditController {
     @Query('tenant_id') tenantId?: string,
   ): Promise<JobView> {
     return this.export(user, operator, request, userId, module, action, targetType, targetId, from, to, sort, traceId, requestId, familyId, category, event, result, tenantId);
+  }
+
+  /**
+   * 跨租户维护入口：平台审计租户选项（受控查询，P2 评审补口）
+   *
+   * 为什么不在前端复用管理面 `GET /tenants`：
+   * 1. 它要求 `tenant:read`——专职审计角色会为了「按租户筛审计」被迫获得租户管理面的读取权限；
+   * 2. 管理面视图字段过宽（连接串 / 套餐 / 到期等），审计筛选只需要「ID → 名称」；
+   * 3. 前端此前只取第一页 100 条，租户数更多时下拉框与行内名称都会退化。
+   *
+   * 本端点与 `platform*` 维护入口同一把钥匙（`@IgnoreTenant` + `audit:read`，守卫写 `tenant_bypass`），
+   * 只返回 `id / code / name / status` 四列最小投影。两种用法：
+   * - `keyword`：租户筛选下拉的远程搜索（名称 / 编码模糊匹配）；
+   * - `ids`：审计列表行 → 租户名称的批量解析（逗号分隔，≤100）。
+   *
+   * 停用租户必须返回：历史审计记录可能属于已停用租户，不返回会让「按租户追溯」断链。
+   * 路由顺序：必须声明在 `platform/:id` 之前，否则 `tenant-options` 会被当成记录 ID。
+   */
+  @IgnoreTenant()
+  @Permissions(PERM.AUDIT_READ)
+  @Get('platform/tenant-options')
+  platformTenantOptions(
+    @Query('keyword') keyword?: string,
+    @Query('ids') ids?: string,
+    @Query('page') page = '1',
+    @Query('pageSize') pageSize = '20',
+  ): Promise<PageResult<TenantOptionView>> {
+    const parsedPage = Math.max(1, Math.floor(Number(page) || 1));
+    const parsedPageSize = Math.min(TENANT_OPTION_PAGE_MAX, Math.max(1, Math.floor(Number(pageSize) || 20)));
+    let parsedIds: string[] | undefined;
+    if (ids !== undefined) {
+      parsedIds = ids
+        .split(',')
+        .map((value) => value.trim())
+        .filter((value) => /^\d+$/.test(value))
+        .slice(0, TENANT_OPTION_IDS_MAX);
+      if (parsedIds.length === 0) {
+        throw new BizError(ErrorCode.BAD_REQUEST, 'ids 非法：需为逗号分隔的十进制租户 ID');
+      }
+    }
+    const trimmedKeyword = keyword?.trim();
+    return this.admin.listTenantOptions({
+      keyword: parsedIds === undefined && trimmedKeyword ? trimmedKeyword.slice(0, 64) : undefined,
+      ids: parsedIds,
+      page: parsedPage,
+      pageSize: parsedPageSize,
+    });
   }
 
   /**

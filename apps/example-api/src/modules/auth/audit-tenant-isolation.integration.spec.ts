@@ -22,18 +22,20 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PrismaClient } from '@prisma/client';
-import { AuditService, type AuditLogRecord, type AuditQuery, type DataScopeOrgPort, type RequestUser } from '@fw/auth';
+import { AuditArchiveService, AuditService, type AuditLogRecord, type AuditQuery, type DataScopeOrgPort, type RequestUser } from '@fw/auth';
 import { BizError, ErrorCode } from '@fw/core';
 import { runWithRequestContext } from '@fw/logger';
 import type { Request } from 'express';
 import { AuditController } from './audit.controller.js';
+import { AuditArchiveController } from './audit-archive.controller.js';
 import { PrismaAuthStore } from './prisma-auth-store.js';
 import { PrismaAdminStore } from '../admin/admin-store.js';
+import { PrismaAuditArchiveStore } from './audit-archive-store.js';
 import type { JobCenterService } from '../jobs/job-center.service.js';
 import type { JobRunnerRegistry } from '../jobs/job-runner.registry.js';
 import { applyAllSqliteMigrations } from '../../testing/apply-sqlite-migrations.js';
 
-/** 共享库里的两个真实租户 + legacy 存量租户（同一张 audit_log 表，靠 tenant_id 区分） */
+/** 共享库里的两个真实租户 + legacy 存量租户（同一张审计 / 归档表，靠 tenant_id 区分） */
 const TENANT_A = '17';
 const TENANT_B = '18';
 const LEGACY = '0';
@@ -45,6 +47,7 @@ let prisma: PrismaClient | null = null;
 let store: PrismaAuthStore | null = null;
 let admin: PrismaAdminStore | null = null;
 let audit: AuditService | null = null;
+let archive: AuditArchiveService | null = null;
 
 /** 请求桩（控制器只关心 query / headers / ip） */
 const REQUEST = { query: {}, headers: {}, ip: '127.0.0.1' } as unknown as Request;
@@ -75,6 +78,38 @@ function createHarness(): {
     { auditLogs: (query: AuditQuery) => store!.pageAuditLogs(query) } as never,
     store as unknown as DataScopeOrgPort,
     admin as never,
+    {
+      create: async (input: CapturedJob) => {
+        jobs.push(input);
+        return { id: `job-${jobs.length}` };
+      },
+    } as unknown as JobCenterService,
+    {
+      register: (type: string, factory: (params: Record<string, unknown>) => CapturedJob['runner']) => {
+        factories.set(type, factory);
+      },
+    } as unknown as JobRunnerRegistry,
+    { recordEvent: () => undefined } as never,
+  );
+  return { controller, jobs, factories };
+}
+
+/**
+ * 归档控制器测试装置（与在线同款）
+ *
+ * 归档查询走 `AuditArchiveService` → `PrismaAuditArchiveStore` 的**真实归档表**，任务中心只做捕获，
+ * 保证「在线/归档两套出口」的权限边界与产物格式都能在真实数据上对照。
+ */
+function createArchiveHarness(): {
+  controller: AuditArchiveController;
+  jobs: CapturedJob[];
+  factories: Map<string, (params: Record<string, unknown>) => CapturedJob['runner']>;
+} {
+  const jobs: CapturedJob[] = [];
+  const factories = new Map<string, (params: Record<string, unknown>) => CapturedJob['runner']>();
+  const controller = new AuditArchiveController(
+    archive as never,
+    store as unknown as DataScopeOrgPort,
     {
       create: async (input: CapturedJob) => {
         jobs.push(input);
@@ -126,6 +161,41 @@ async function seed(): Promise<void> {
       },
     });
     index += 1;
+  }
+
+  // 平台审计租户选项的真实数据源（含 legacy '0'；停用租户的历史审计仍需可按租户追溯）
+  await prisma!.tenant.createMany({
+    data: [
+      { id: LEGACY, code: 'legacy', name: '存量单租户', status: 1 },
+      { id: TENANT_A, code: 'tenant-a', name: '租户A', status: 1 },
+      { id: TENANT_B, code: 'tenant-b', name: '租户B', status: 0 },
+    ],
+  });
+
+  // 归档表数据（与在线表同构：两租户 + legacy 系统行）——归档出口也必须受租户边界约束
+  const archiveRows = [
+    { id: 'ar-a-1', tenantId: BigInt(TENANT_A), userId: 'u-a', module: 'user', action: 'create' },
+    { id: 'ar-a-sys', tenantId: BigInt(TENANT_A), userId: null, module: 'system', action: 'export' },
+    { id: 'ar-b-1', tenantId: BigInt(TENANT_B), userId: 'u-b', module: 'user', action: 'create' },
+    { id: 'ar-legacy', tenantId: BigInt(LEGACY), userId: null, module: 'system', action: 'login' },
+  ];
+  let archiveIndex = 0;
+  for (const row of archiveRows) {
+    await prisma!.auditLogArchive.create({
+      data: {
+        ...row,
+        category: 'admin',
+        event: row.action === 'export' ? 'audit.export' : 'user.create',
+        result: 'success',
+        ip: '10.0.0.2',
+        userAgent: 'it-archive',
+        traceId: `trace-${row.id}`,
+        createdAt: new Date(Date.UTC(2026, 7, 1) + archiveIndex * 60_000),
+        actorLabel: row.userId ?? null,
+        auditSource: 'domain',
+      },
+    });
+    archiveIndex += 1;
   }
 }
 
@@ -209,6 +279,37 @@ async function captureError(promise: Promise<unknown>): Promise<BizError> {
   throw new Error('应抛出 BizError');
 }
 
+// ---------- 归档出口（P2：在线 / 归档切换的服务端对照） ----------
+
+/** 调普通归档列表 / 导出（与在线出口同参数） */
+function callArchiveList(controller: AuditArchiveController, requester: RequestUser, tenantId?: string): Promise<unknown> {
+  return controller.list(requester, REQUEST, '1', '200', undefined, ...FILTER_PAD, tenantId);
+}
+
+function callArchiveExport(controller: AuditArchiveController, requester: RequestUser, tenantId?: string): Promise<unknown> {
+  return controller.export(requester, requester.id, REQUEST, undefined, ...FILTER_PAD, tenantId);
+}
+
+/** 调平台归档列表 / 导出（维护入口） */
+function callPlatformArchiveList(controller: AuditArchiveController, requester: RequestUser, tenantId?: string): Promise<unknown> {
+  return controller.platformList(requester, REQUEST, '1', '200', undefined, ...FILTER_PAD, tenantId);
+}
+
+function callPlatformArchiveExport(controller: AuditArchiveController, requester: RequestUser, tenantId?: string): Promise<unknown> {
+  return controller.platformExport(requester, requester.id, REQUEST, undefined, ...FILTER_PAD, tenantId);
+}
+
+/** 真实库 ground truth：归档表按 where 条件查 ID */
+async function dbArchiveIds(where: { tenantId?: bigint; userId?: string }): Promise<string[]> {
+  const rows = await prisma!.auditLogArchive.findMany({ where, select: { id: true }, orderBy: { id: 'asc' } });
+  return rows.map((row) => row.id).sort();
+}
+
+/** 取 CSV 表头（BOM 去掉后的第一行） */
+function csvHeader(content: string): string {
+  return content.replace(/^\uFEFF/, '').split('\r\n')[0] ?? '';
+}
+
 beforeAll(async () => {
   fs.rmSync(DB_FILE, { force: true });
   fs.closeSync(fs.openSync(DB_FILE, 'w'));
@@ -218,6 +319,7 @@ beforeAll(async () => {
   store = new PrismaAuthStore(prisma as never);
   admin = new PrismaAdminStore(prisma as never);
   audit = new AuditService(store as never);
+  archive = new AuditArchiveService(new PrismaAuditArchiveStore(prisma as never));
   await seed();
 }, 60_000);
 
@@ -353,5 +455,108 @@ describe('AC-15-09 维护入口：显式授权下的跨租户行为（且只放�
     const result = await asTenant(TENANT_A, () => callPlatformList(h.controller, ADMIN_A));
     expect(idsOf(result)).toEqual(await dbIds({ tenantId: BigInt(TENANT_A) }));
     expect(idsOf(result)).not.toContain('log-b-1');
+  });
+});
+
+describe('P2 归档出口：与在线同权限边界、同租户约束、同产物格式（真实归档表）', () => {
+  it('普通归档列表：只返回当前租户归档行（真实库），tenant_id 他租户 4001', async () => {
+    const h = createArchiveHarness();
+    const scoped = await asTenant(TENANT_A, () => callArchiveList(h.controller, ADMIN_A));
+    expect(idsOf(scoped)).toEqual(await dbArchiveIds({ tenantId: BigInt(TENANT_A) }));
+    expect(idsOf(scoped)).not.toContain('ar-b-1');
+    expect(idsOf(scoped)).not.toContain('ar-legacy');
+
+    const error = await asTenant(TENANT_A, () => captureError(callArchiveList(h.controller, ADMIN_A, TENANT_B)));
+    expect(error.code).toBe(ErrorCode.TENANT_INVALID);
+  });
+
+  it('普通归档导出：产物只含本租户归档行；params 固化租户；期间新增他租户归档行在重跑时不得混入', async () => {
+    const h = createArchiveHarness();
+    await asTenant(TENANT_A, () => callArchiveExport(h.controller, ADMIN_A));
+    const job = h.jobs[0]!;
+    expect(job.params.tenantId).toBe(TENANT_A);
+    const firstRun = artifactIds((await job.runner(() => undefined)).content);
+    expect(firstRun).toEqual(await dbArchiveIds({ tenantId: BigInt(TENANT_A) }));
+
+    await prisma!.auditLogArchive.create({
+      data: { id: 'ar-b-rerun', tenantId: BigInt(TENANT_B), userId: 'u-b', module: 'user', action: 'create', result: 'success', createdAt: new Date() },
+    });
+    const factory = h.factories.get('audit.archive.export');
+    expect(factory).toBeDefined();
+    const rerun = artifactIds((await factory!(job.params)(() => undefined)).content);
+    expect(rerun).toEqual(firstRun);
+    expect(rerun).not.toContain('ar-b-rerun');
+  });
+
+  it('在线 / 归档导出产物列序一致（同一份 CSV 定义，两种数据源不产生第二套表头）', async () => {
+    const online = createHarness();
+    await asTenant(TENANT_A, () => callExport(online.controller, ADMIN_A));
+    const onlineCsv = (await online.jobs[0]!.runner(() => undefined)).content;
+
+    const archived = createArchiveHarness();
+    await asTenant(TENANT_A, () => callArchiveExport(archived.controller, ADMIN_A));
+    const archiveCsv = (await archived.jobs[0]!.runner(() => undefined)).content;
+
+    expect(csvHeader(archiveCsv)).toBe(csvHeader(onlineCsv));
+    expect(archiveCsv.startsWith('\uFEFF')).toBe(true);
+  });
+
+  it('平台归档维护入口：仅 ignoreTenant 上下文跨租户，可按 tenant_id 收窄；普通上下文仍只本租户', async () => {
+    const h = createArchiveHarness();
+    await asCrossTenant(TENANT_A, async () => {
+      const all = await callPlatformArchiveList(h.controller, ADMIN_A);
+      expect(idsOf(all)).toEqual(await dbArchiveIds({}));
+      const narrowed = await callPlatformArchiveList(h.controller, ADMIN_A, TENANT_B);
+      expect(idsOf(narrowed)).toEqual(await dbArchiveIds({ tenantId: BigInt(TENANT_B) }));
+    });
+
+    // 无 ignoreTenant 标志（普通请求）直接调 platform* 方法：租户维度不放开
+    const normal = await asTenant(TENANT_A, () => callPlatformArchiveList(h.controller, ADMIN_A));
+    expect(idsOf(normal)).toEqual(await dbArchiveIds({ tenantId: BigInt(TENANT_A) }));
+    expect(idsOf(normal)).not.toContain('ar-b-1');
+  });
+
+  it('平台归档导出：params.tenantId = null，产物含多租户归档行', async () => {
+    const h = createArchiveHarness();
+    await asCrossTenant(TENANT_A, () => callPlatformArchiveExport(h.controller, ADMIN_A));
+    const job = h.jobs[0]!;
+    expect(job.params.tenantId).toBeNull();
+    const ids = artifactIds((await job.runner(() => undefined)).content);
+    expect(ids).toContain('ar-a-1');
+    expect(ids).toContain('ar-b-1');
+  });
+});
+
+describe('P2 平台审计租户选项：真实 tenants 表上的受控查询（不要求 tenant:read）', () => {
+  it('keyword 模糊匹配（名称 / 编码）+ 分页元信息；停用租户仍返回（历史审计可追溯）', async () => {
+    const page = await admin!.listTenantOptions({ keyword: 'tenant-', page: 1, pageSize: 1 });
+    expect(page.total).toBe(2); // tenant-a / tenant-b
+    expect(page.items).toHaveLength(1);
+    expect(page.hasMore).toBe(true);
+    expect(page.items[0]).toMatchObject({ id: expect.any(String), code: expect.any(String), name: expect.any(String), status: expect.any(Number) });
+
+    const byName = await admin!.listTenantOptions({ keyword: '租户B', page: 1, pageSize: 20 });
+    expect(byName.items.map((item) => item.id)).toEqual([TENANT_B]);
+    // 停用租户（status=0）不能被过滤掉，否则历史审计按租户追溯会断链
+    expect(byName.items[0]?.status).toBe(0);
+
+    const second = await admin!.listTenantOptions({ page: 2, pageSize: 1 });
+    expect(second.page).toBe(2);
+    expect(second.items).toHaveLength(1);
+  });
+
+  it('ids 批量解析（审计行 → 租户名）：只返回请求的租户，legacy 0 也在内', async () => {
+    const page = await admin!.listTenantOptions({ ids: [TENANT_A, LEGACY], page: 1, pageSize: 100 });
+    expect(page.items.map((item) => item.id).sort()).toEqual([LEGACY, TENANT_A].sort());
+  });
+
+  it('控制器端点：keyword/ids 收敛后透传真实存储（返回 PageResult 最小投影）', async () => {
+    const h = createHarness();
+    const byKeyword = await asCrossTenant(TENANT_A, () => h.controller.platformTenantOptions('租户A', undefined, '1', '20'));
+    expect(byKeyword.items.map((item) => item.id)).toEqual([TENANT_A]);
+    expect(Object.keys(byKeyword.items[0] ?? {}).sort()).toEqual(['code', 'id', 'name', 'status']);
+
+    const byIds = await h.controller.platformTenantOptions(undefined, `${TENANT_B},${LEGACY}`, '1', '100');
+    expect(byIds.items.map((item) => item.id).sort()).toEqual([LEGACY, TENANT_B].sort());
   });
 });

@@ -18,7 +18,7 @@
 
 import { Inject, Injectable } from '@nestjs/common';
 import { BizError, ErrorCode } from '@fw/core';
-import { DB_CLIENT, PrismaRepository, type ModelDelegate, type PrismaClientLike, type Sort } from '@fw/db';
+import { DB_CLIENT, PrismaRepository, type ModelDelegate, type PageResult, type PrismaClientLike, type Sort } from '@fw/db';
 import type { BaseEntity } from '@fw/db';
 import type {
   AuditAction,
@@ -89,6 +89,14 @@ interface DictItemRow extends Omit<BaseEntity, 'id'> {
   value: string;
   color: string | null;
   sort: number;
+}
+
+/** tenants 表行（平台审计租户选项所需的最小投影） */
+interface TenantOptionRow {
+  id: string;
+  code: string;
+  name: string;
+  status: number;
 }
 
 /** audit_logs 表行 */
@@ -217,6 +225,34 @@ export interface DictCategoryUpsertInput {
 }
 
 /**
+ * 平台审计租户选项视图（受控查询：只暴露审计筛选所需的最小字段）
+ *
+ * 刻意不含 `dbUrlEnc` / 套餐 / 到期等管理面字段——平台审计角色不应为了筛审计记录而被迫持有
+ * `tenant:read`（更不该看到租户连接串等管理信息）。本视图只回答「这个租户 ID 叫什么」。
+ */
+export interface TenantOptionView {
+  id: ID;
+  code: string;
+  name: string;
+  /** 租户状态（0 停用 / 1 正常 / …）：已停用租户的历史审计仍需可按租户追溯，故包含停用租户 */
+  status: number;
+}
+
+/** 平台审计租户选项查询（keyword 模糊匹配 / ids 批量解析，二选一，ids 优先） */
+export interface TenantOptionQuery {
+  /** 名称或编码模糊匹配（与租户管理列表同语义） */
+  keyword?: string;
+  /** 按 ID 批量取（审计列表行 → 租户名解析）；单次上限 100 */
+  ids?: string[];
+  page?: number;
+  pageSize?: number;
+}
+
+/** 租户选项分页上限与批量 ID 上限（与请求层 pageSize 上限一致，防大查询） */
+export const TENANT_OPTION_PAGE_MAX = 100;
+export const TENANT_OPTION_IDS_MAX = 100;
+
+/**
  * 管理后台存储端口
  */
 export interface AdminStore {
@@ -267,6 +303,17 @@ export interface AdminStore {
 
   /** 按主键查审计日志（不存在返回 null） */
   findAuditLogById(id: ID): Promise<AuditLogRecord | null>;
+
+  // ---------- 平台审计租户选项（受控最小字段查询） ----------
+
+  /**
+   * 审计筛选用租户选项（`keyword` 模糊匹配 / `ids` 批量解析，ids 优先）
+   *
+   * 与租户管理列表的差异：只返回 `id / code / name / status`，不要求 `tenant:read`——
+   * 平台审计角色凭 `audit:read` + `system:tenant:ignore` 即可解析历史审计所属租户的名称。
+   * 停用租户必须包含（历史审计仍可能属于已停用租户）。
+   */
+  listTenantOptions(query: TenantOptionQuery): Promise<PageResult<TenantOptionView>>;
 
   // ---------- 字典 ----------
 
@@ -520,6 +567,37 @@ export class PrismaAdminStore implements AdminStore {
   async findAuditLogById(id: ID): Promise<AuditLogRecord | null> {
     const row = (await this.delegate('auditLog').findUnique({ where: { id } })) as AuditLogRow | null;
     return row ? this.toAuditLog(row) : null;
+  }
+
+  // ---------- 平台审计租户选项 ----------
+
+  async listTenantOptions(query: TenantOptionQuery): Promise<PageResult<TenantOptionView>> {
+    const page = Math.max(1, Math.floor(query.page ?? 1));
+    const pageSize = Math.min(TENANT_OPTION_PAGE_MAX, Math.max(1, Math.floor(query.pageSize ?? 20)));
+    const where: Record<string, unknown> = {};
+    if (query.ids && query.ids.length > 0) {
+      // ids 模式（审计行 → 租户名解析）：行集固定，分页只作防御性限制
+      where.id = { in: query.ids.slice(0, TENANT_OPTION_IDS_MAX) };
+    } else if (query.keyword) {
+      // 与 TenantAdminStore.pageTenants 同语义：编码 / 名称模糊匹配
+      where.OR = [{ code: { contains: query.keyword } }, { name: { contains: query.keyword } }];
+    }
+    const [rows, total] = await Promise.all([
+      this.delegate('tenant').findMany({
+        where,
+        orderBy: { id: 'asc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }) as Promise<TenantOptionRow[]>,
+      this.delegate('tenant').count({ where }) as Promise<number>,
+    ]);
+    return {
+      items: rows.map((row) => ({ id: row.id, code: row.code, name: row.name, status: row.status })),
+      total,
+      page,
+      pageSize,
+      hasMore: page * pageSize < total,
+    };
   }
 
   // ---------- 字典 ----------

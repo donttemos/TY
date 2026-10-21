@@ -43,6 +43,10 @@
  *   `/audit-logs/platform/:id` 三个维护入口（双权限：audit:read|audit:export + system:tenant:ignore，
  *   与后端 @IgnoreTenant 守卫的「与」关系一致）；跨租户演示行只从 platform 端点返回，
  *   普通 `/audit-logs*` 行为与产物不变（不伪造普通端点的跨租户能力）
+ * @modified 2026-10-21 donttemo P2 归档审计：新增 `/audit-archives`、`/audit-archives/export`、
+ *   `/audit-archives/platform`、`/audit-archives/platform/export` 四个端点（与在线同构、同权限、
+ *   普通入口不跨租户）与 `/audit-logs/platform/tenant-options` 受控租户选项查询（租户筛选不再取
+ *   管理面第一页 100 条，也不要求 tenant:read）
  * @module admin-web/mock
  */
 
@@ -65,7 +69,7 @@ import type {
   MockUploadFile,
   MockUser,
 } from './db';
-import { db as defaultDb, PLATFORM_AUDIT_LOGS } from './db';
+import { db as defaultDb, PLATFORM_ARCHIVE_AUDIT_LOGS, PLATFORM_AUDIT_LOGS } from './db';
 import { escapeCsvCell } from './csv-cell';
 import { MOCK_AUDIT_EVENTS } from './audit-events';
 
@@ -668,6 +672,16 @@ function filterMockAuditRows<T extends MockAuditLog>(rows: T[], query: URLSearch
  */
 function platformAuditRows(database: MockDb): MockAuditLog[] {
   return [...database.auditLogs, ...PLATFORM_AUDIT_LOGS];
+}
+
+/**
+ * 归档审计行集（P2）
+ *
+ * 普通端点只看归档表；维护入口额外合并跨租户归档演示行（与在线平台行同口径）。
+ * 归档不是越权后门：普通端点行集不含任何他租户行。
+ */
+function archiveAuditRows(database: MockDb, platform = false): MockAuditLog[] {
+  return platform ? [...database.auditArchives, ...PLATFORM_ARCHIVE_AUDIT_LOGS] : [...database.auditArchives];
 }
 
 /**
@@ -1779,6 +1793,38 @@ export async function handleMockRequest(
     send(res, CODE.OK, 'ok', jobView(job), traceId);
     return { handled: true };
   }
+  // 平台审计租户选项（受控查询，P2）：租户筛选远程搜索 / 行内名称批量解析。
+  // 与 platform* 维护入口同一把钥匙（audit:read + system:tenant:ignore），只返回最小投影，
+  // 不要求 tenant:read——对应真实后端 GET /audit-logs/platform/tenant-options。
+  // 路由必须在 platform/:id 之前声明，否则 'tenant-options' 会被当成记录 ID。
+  if (path === '/audit-logs/platform/tenant-options' && method === 'GET') {
+    const perm = requirePlatformAudit(database, ctx, 'audit:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const keyword = (query.get('keyword') ?? '').trim();
+    const idsRaw = query.get('ids');
+    const page = Math.max(1, Number(query.get('page') ?? '1'));
+    const pageSize = Math.min(100, Math.max(1, Number(query.get('pageSize') ?? '20')));
+    let tenants = [...database.tenants];
+    if (idsRaw !== null) {
+      const ids = idsRaw.split(',').map((value) => value.trim()).filter((value) => /^\d+$/.test(value)).slice(0, 100);
+      if (ids.length === 0) {
+        send(res, CODE.BAD_REQUEST, 'ids 非法：需为逗号分隔的十进制租户 ID', null, traceId);
+        return { handled: true };
+      }
+      tenants = tenants.filter((tenant) => ids.includes(tenant.id));
+    } else if (keyword) {
+      tenants = tenants.filter((tenant) => tenant.code.includes(keyword) || tenant.name.includes(keyword));
+    }
+    const total = tenants.length;
+    const items = tenants
+      .slice((page - 1) * pageSize, page * pageSize)
+      .map((tenant) => ({ id: tenant.id, code: tenant.code, name: tenant.name, status: tenant.status }));
+    send(res, CODE.OK, 'ok', { items, total, page, pageSize, hasMore: page * pageSize < total }, traceId);
+    return { handled: true };
+  }
   const platformAuditMatch = /^\/audit-logs\/platform\/([\w-]+)$/.exec(path);
   if (platformAuditMatch && method === 'GET') {
     const perm = requirePlatformAudit(database, ctx, 'audit:read');
@@ -1793,6 +1839,113 @@ export async function handleMockRequest(
       return { handled: true };
     }
     send(res, CODE.OK, 'ok', log, traceId);
+    return { handled: true };
+  }
+  // ---- 归档审计域（P2：在线 / 归档切换的数据源）----
+  // 与在线审计同构、同权限码、同租户边界：普通归档端点只返回归档表（单租户口径），
+  // 跨租户样本只在 /audit-archives/platform* 出现。
+  if (path === '/audit-archives' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'audit:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const unknown = unknownMockAuditFilterParam(query);
+    if (unknown) {
+      send(res, CODE.BAD_REQUEST, unknown, null, traceId);
+      return { handled: true };
+    }
+    const page = Math.max(1, Number(query.get('page') ?? '1'));
+    const pageSize = Math.min(200, Math.max(1, Number(query.get('pageSize') ?? '20')));
+    const parsedSort = parseMockSort(query.get('sort'), MOCK_AUDIT_SORT_FIELDS);
+    if ('error' in parsedSort) {
+      send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
+      return { handled: true };
+    }
+    const rows = applyMockSort(filterMockAuditRows(archiveAuditRows(database), query), parsedSort.items, 'createdAt', 'desc');
+    send(res, CODE.OK, 'ok', paginate(rows, page, pageSize), traceId);
+    return { handled: true };
+  }
+  if (path === '/audit-archives/export' && method === 'GET') {
+    const perm = requirePermission(database, ctx, 'audit:export');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const unknown = unknownMockAuditFilterParam(query);
+    if (unknown) {
+      send(res, CODE.BAD_REQUEST, unknown, null, traceId);
+      return { handled: true };
+    }
+    const parsedSort = parseMockSort(query.get('sort'), MOCK_AUDIT_SORT_FIELDS);
+    if ('error' in parsedSort) {
+      send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
+      return { handled: true };
+    }
+    const rows = applyMockSort(filterMockAuditRows(archiveAuditRows(database), query), parsedSort.items, 'createdAt', 'desc');
+    const job = dispatchJob(database, {
+      type: 'audit.archive.export',
+      title: '审计归档导出',
+      ownerId: ctx.user.id,
+      durationMs: 3000,
+      fileName: `audit-archives-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`,
+      artifact: buildMockAuditCsv(rows),
+      simulateFail: query.get('simulate') === 'fail',
+      traceId,
+    });
+    send(res, CODE.OK, 'ok', jobView(job), traceId);
+    return { handled: true };
+  }
+  if (path === '/audit-archives/platform' && method === 'GET') {
+    const perm = requirePlatformAudit(database, ctx, 'audit:read');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const unknown = unknownMockAuditFilterParam(query);
+    if (unknown) {
+      send(res, CODE.BAD_REQUEST, unknown, null, traceId);
+      return { handled: true };
+    }
+    const page = Math.max(1, Number(query.get('page') ?? '1'));
+    const pageSize = Math.min(200, Math.max(1, Number(query.get('pageSize') ?? '20')));
+    const parsedSort = parseMockSort(query.get('sort'), MOCK_AUDIT_SORT_FIELDS);
+    if ('error' in parsedSort) {
+      send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
+      return { handled: true };
+    }
+    const rows = applyMockSort(filterMockAuditRows(archiveAuditRows(database, true), query), parsedSort.items, 'createdAt', 'desc');
+    send(res, CODE.OK, 'ok', paginate(rows, page, pageSize), traceId);
+    return { handled: true };
+  }
+  if (path === '/audit-archives/platform/export' && method === 'GET') {
+    const perm = requirePlatformAudit(database, ctx, 'audit:export');
+    if (!perm.ok) {
+      send(res, perm.code, perm.message, null, traceId);
+      return { handled: true };
+    }
+    const unknown = unknownMockAuditFilterParam(query);
+    if (unknown) {
+      send(res, CODE.BAD_REQUEST, unknown, null, traceId);
+      return { handled: true };
+    }
+    const parsedSort = parseMockSort(query.get('sort'), MOCK_AUDIT_SORT_FIELDS);
+    if ('error' in parsedSort) {
+      send(res, CODE.BAD_REQUEST, parsedSort.error, null, traceId);
+      return { handled: true };
+    }
+    const rows = applyMockSort(filterMockAuditRows(archiveAuditRows(database, true), query), parsedSort.items, 'createdAt', 'desc');
+    const job = dispatchJob(database, {
+      type: 'audit.archive.export',
+      title: '平台归档审计导出',
+      ownerId: ctx.user.id,
+      durationMs: 3000,
+      fileName: `platform-audit-archives-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`,
+      artifact: buildMockAuditCsv(rows),
+      simulateFail: query.get('simulate') === 'fail',
+      traceId,
+    });
+    send(res, CODE.OK, 'ok', jobView(job), traceId);
     return { handled: true };
   }
   if (path === '/audit-logs' && method === 'GET') {

@@ -476,9 +476,24 @@ async function downloadJobText(jobId, token, tenantCode) {
  * 「导出任务重跑不丢租户限制」是任务中心跨实例重建（jobRunnerRegistry 工厂）语义，
  * HTTP 层对 succeeded 任务无法触发重跑——由 `audit-tenant-isolation.integration.spec.ts`
  * 用真实库 + 工厂重建覆盖。
+ *
+ * P2 追加（历史审计追溯 + 租户筛选）：E8~E11 覆盖归档出口（普通归档只含本租户、平台归档可跨租户、
+ * 归档导出表头与在线一致）；E12 覆盖平台审计租户选项受控查询（keyword/ids/分页/权限），
+ * 证明租户筛选不依赖 `tenant:read`。
  */
 async function phaseAuditTenantIsolation() {
   console.log('\n=== 阶段 E：双租户审计隔离（PRD-015 AC-15-07/09）===');
+  // 归档表演员数据：直接写库（归档迁移任务不在本冒烟范围内），用于验证归档出口的租户边界
+  const { PrismaClient } = await import('@prisma/client');
+  const mainDb = new PrismaClient({ datasources: { db: { url: 'file:./dev.db' } } });
+  await mainDb.auditLogArchive.deleteMany({ where: { id: { startsWith: 'smoke-ar-' } } });
+  await mainDb.auditLogArchive.createMany({
+    data: [
+      { id: 'smoke-ar-a-1', tenantId: 1n, userId: null, module: 'user', action: 'create', category: 'admin', event: 'user.create', result: 'success', createdAt: new Date(Date.UTC(2026, 7, 10, 0, 0, 0)) },
+      { id: 'smoke-ar-a-2', tenantId: 1n, userId: null, module: 'user', action: 'update', category: 'admin', event: 'user.update', result: 'success', createdAt: new Date(Date.UTC(2026, 7, 10, 0, 1, 0)) },
+      { id: 'smoke-ar-legacy', tenantId: 0n, userId: null, module: 'system', action: 'login', category: 'admin', event: 'user.create', result: 'success', createdAt: new Date(Date.UTC(2026, 7, 10, 0, 2, 0)) },
+    ],
+  });
   const server = await startServer({
     TENANT_ENABLED: 'true',
     TENANT_BASE_DOMAIN: 'example.com',
@@ -582,8 +597,93 @@ async function phaseAuditTenantIsolation() {
       platformExport.body?.code === 0 && platformProgress?.status === 'succeeded'
       && platformArtifact.text.includes(ownRow?.id ?? '__missing__') && platformArtifact.text.includes(legacyRow?.id ?? '__missing__'),
       `[status=${platformProgress?.status} acme=${platformArtifact.text.includes(ownRow?.id ?? '__missing__')} legacy=${platformArtifact.text.includes(legacyRow?.id ?? '__missing__')}]`);
+
+    // E8 归档普通出口：与在线同权限边界——只含本租户归档行，tenant_id 他租户 4001
+    const auditorArchive = await call('/api/v1/audit-archives?page=1&pageSize=100', { headers: acmeHeaders(auditorToken) });
+    const auditorArchiveRows = auditorArchive.body?.data?.items ?? [];
+    check('E8 普通归档列表只含当前租户归档行（真实归档表）',
+      auditorArchive.status === 200 && auditorArchiveRows.length > 0
+      && auditorArchiveRows.every((row) => row.tenantId === '1')
+      && auditorArchiveRows.some((row) => row.id === 'smoke-ar-a-1'),
+      `[http=${auditorArchive.status} total=${auditorArchive.body?.data?.total}]`);
+    check('E8 普通归档不含 legacy 归档行（归档不是越权后门）',
+      !auditorArchiveRows.some((row) => row.id === 'smoke-ar-legacy'));
+    const archiveCrossParam = await call('/api/v1/audit-archives?tenant_id=0', { headers: acmeHeaders(auditorToken) });
+    check('E8 普通归档指定他租户 tenant_id → 4001',
+      (archiveCrossParam.status === 400 || archiveCrossParam.status === 403) && archiveCrossParam.body?.code === 4001,
+      `[http=${archiveCrossParam.status} code=${archiveCrossParam.body?.code}]`);
+
+    // E9 归档维护入口：admin 可跨租户检索/收窄；acmeauditor 访问 → 3002
+    const platformArchive = await call('/api/v1/audit-archives/platform?page=1&pageSize=100', { headers: legacyHeaders(adminToken) });
+    const platformArchiveRows = platformArchive.body?.data?.items ?? [];
+    const platformArchiveTenants = new Set(platformArchiveRows.map((row) => row.tenantId));
+    check('E9 平台归档维护入口可跨租户检索（同时含 legacy 与 acme 归档行）',
+      platformArchive.status === 200 && platformArchiveTenants.has('0') && platformArchiveTenants.has('1'),
+      `[tenants=${[...platformArchiveTenants].join(',')}]`);
+    const platformArchiveNarrow = await call('/api/v1/audit-archives/platform?tenant_id=1&page=1&pageSize=100', { headers: legacyHeaders(adminToken) });
+    const platformArchiveNarrowRows = platformArchiveNarrow.body?.data?.items ?? [];
+    check('E9 平台归档可按 tenant_id 收窄',
+      platformArchiveNarrow.status === 200 && platformArchiveNarrowRows.length > 0
+      && platformArchiveNarrowRows.every((row) => row.tenantId === '1'),
+      `[total=${platformArchiveNarrow.body?.data?.total}]`);
+    const deniedArchivePlatform = await call('/api/v1/audit-archives/platform', { headers: acmeHeaders(auditorToken) });
+    check('E9 普通租户账号访问平台归档入口 → 403/3002',
+      deniedArchivePlatform.status === 403 && deniedArchivePlatform.body?.code === 3002,
+      `[code=${deniedArchivePlatform.body?.code}]`);
+
+    // E10 归档导出：产物只含本租户归档行；表头与在线导出逐字节一致（同一份 CSV 定义）
+    const archiveExport = await call('/api/v1/audit-archives/export', { headers: acmeHeaders(auditorToken) });
+    const archiveExportId = archiveExport.body?.data?.id;
+    const archiveProgress = archiveExportId ? await waitJob(archiveExportId, auditorToken, 'acme') : null;
+    const archiveArtifact = archiveExportId ? await downloadJobText(archiveExportId, auditorToken, 'acme') : { status: 0, text: '' };
+    check('E10 归档导出任务 succeeded 且产物只含本租户归档行',
+      archiveExport.body?.code === 0 && archiveProgress?.status === 'succeeded'
+      && archiveArtifact.text.includes('smoke-ar-a-1') && !archiveArtifact.text.includes('smoke-ar-legacy'),
+      `[status=${archiveProgress?.status}]`);
+    check('E10 归档导出表头与在线导出一致（BOM + 列序同构）',
+      archiveArtifact.text.split('\r\n')[0] === exportArtifact.text.split('\r\n')[0],
+      `[archive=${archiveArtifact.text.split('\r\n')[0]?.slice(0, 24)}]`);
+
+    // E11 平台归档导出：产物跨租户
+    const platformArchiveExport = await call('/api/v1/audit-archives/platform/export', { headers: legacyHeaders(adminToken) });
+    const platformArchiveJobId = platformArchiveExport.body?.data?.id;
+    const platformArchiveProgress = platformArchiveJobId ? await waitJob(platformArchiveJobId, adminToken, 'legacy') : null;
+    const platformArchiveArtifact = platformArchiveJobId ? await downloadJobText(platformArchiveJobId, adminToken, 'legacy') : { status: 0, text: '' };
+    check('E11 平台归档导出任务 succeeded 且产物跨租户',
+      platformArchiveExport.body?.code === 0 && platformArchiveProgress?.status === 'succeeded'
+      && platformArchiveArtifact.text.includes('smoke-ar-a-1') && platformArchiveArtifact.text.includes('smoke-ar-legacy'),
+      `[status=${platformArchiveProgress?.status}]`);
+
+    // E12 平台审计租户选项（受控查询）：分页 / keyword / ids / 权限，无需 tenant:read
+    const tenantOptions = await call('/api/v1/audit-logs/platform/tenant-options?page=1&pageSize=100', { headers: legacyHeaders(adminToken) });
+    const tenantOptionItems = tenantOptions.body?.data?.items ?? [];
+    const optionIds = tenantOptionItems.map((item) => item.id);
+    check('E12 平台审计租户选项返回最小投影（id/code/name/status）',
+      tenantOptions.status === 200 && tenantOptionItems.length >= 2
+      && tenantOptionItems.every((item) => ['id', 'code', 'name', 'status'].every((key) => key in item)),
+      `[total=${tenantOptions.body?.data?.total} ids=${optionIds.join(',')}]`);
+    const tenantOptionsKeyword = await call('/api/v1/audit-logs/platform/tenant-options?keyword=acme', { headers: legacyHeaders(adminToken) });
+    const keywordOptionItems = tenantOptionsKeyword.body?.data?.items ?? [];
+    check('E12 租户选项支持 keyword 远程搜索',
+      tenantOptionsKeyword.status === 200 && keywordOptionItems.length === 1 && keywordOptionItems[0]?.code === 'acme',
+      `[n=${keywordOptionItems.length}]`);
+    const tenantOptionsIds = await call('/api/v1/audit-logs/platform/tenant-options?ids=1,0&page=1&pageSize=100', { headers: legacyHeaders(adminToken) });
+    check('E12 租户选项支持 ids 批量解析（列表行 → 名称）',
+      JSON.stringify((tenantOptionsIds.body?.data?.items ?? []).map((item) => item.id).sort()) === JSON.stringify(['0', '1']),
+      `[ids=${(tenantOptionsIds.body?.data?.items ?? []).map((item) => item.id).join(',')}]`);
+    const tenantOptionsPaged = await call('/api/v1/audit-logs/platform/tenant-options?page=2&pageSize=1', { headers: legacyHeaders(adminToken) });
+    check('E12 租户选项可分页（page/pageSize/hasMore）',
+      tenantOptionsPaged.status === 200 && tenantOptionsPaged.body?.data?.page === 2
+      && (tenantOptionsPaged.body?.data?.items ?? []).length === 1
+      && typeof tenantOptionsPaged.body?.data?.hasMore === 'boolean',
+      `[page=${tenantOptionsPaged.body?.data?.page}]`);
+    const deniedTenantOptions = await call('/api/v1/audit-logs/platform/tenant-options', { headers: acmeHeaders(auditorToken) });
+    check('E12 普通租户账号访问租户选项 → 403/3002',
+      deniedTenantOptions.status === 403 && deniedTenantOptions.body?.code === 3002,
+      `[code=${deniedTenantOptions.body?.code}]`);
   } finally {
     await stopServer(server);
+    await mainDb.$disconnect();
   }
 }
 

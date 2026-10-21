@@ -192,4 +192,30 @@ describe('CrudTable 四态与权限', () => {
     await flushPromises();
     expect(wrapper.text()).toContain('停用');
   });
+
+  it('loaded 事件：列表加载成功后携带 items/total（供页面按行 tenantId 批量解析名称）', async () => {
+    mockedGet.mockResolvedValue(pagePayload([{ id: 'a-1', tenantId: '3' }], 7));
+    const wrapper = mountTable('user');
+    await flushPromises();
+    expect(wrapper.emitted('loaded')?.[0]).toEqual([{ items: [{ id: 'a-1', tenantId: '3' }], total: 7 }]);
+  });
+
+  it('filters 变化：回到第一页并以新条件重查（页面级租户选择器切换后列表必须跟随）', async () => {
+    mockedGet.mockResolvedValue(pagePayload([{ id: '1', username: 'admin' }], 1));
+    const wrapper = mount(CrudTable, {
+      props: {
+        api: '/audit-logs/platform',
+        columns: COLUMNS,
+        pagination: true,
+        filters: { tenant_id: '1' },
+      },
+    });
+    await flushPromises();
+    expect(mockedGet).toHaveBeenCalledTimes(1);
+
+    await wrapper.setProps({ filters: { tenant_id: '3' } });
+    await flushPromises();
+    expect(mockedGet).toHaveBeenCalledTimes(2);
+    expect(mockedGet).toHaveBeenLastCalledWith('/audit-logs/platform', { params: { page: 1, pageSize: 20, tenant_id: '3' } });
+  });
 });

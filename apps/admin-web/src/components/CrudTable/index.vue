@@ -22,11 +22,13 @@
  * @modified 2026-10-15 donttemo N-03：列表接口返回 3002（无操作权限）时整页替换为无权限视图
  *   （与 /403 页同形），不再落「加载失败」通用错误态——3002 是权限判定结论而非瞬时故障，
  *   重试按钮会造成「点了也没用」的误导；其他错误码维持原错误态。
+ * @modified 2026-10-21 donttemo P2 审计：新增 `loaded` 事件（供页面按行 tenantId 批量解析租户名）
+ *   与 filters 变化自动重查（页面级租户选择器选中后回到第一页刷新，避免「筛选器变了列表没变」）
  * @module admin-web/components
 -->
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, useSlots } from 'vue';
+import { computed, onMounted, reactive, ref, useSlots, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Refresh, Search, Setting } from '@element-plus/icons-vue';
@@ -108,6 +110,13 @@ const emit = defineEmits<{
   (event: 'refresh'): void;
   (event: 'selection-change', rows: Record<string, unknown>[]): void;
   (event: 'export', payload: { search: SearchModel; sort: string | null }): void;
+  /**
+   * 列表数据加载成功（每次 fetchList 成功后触发）
+   *
+   * 用途：页面级后处理，如审计页按行内 `tenantId` 批量解析租户名称（避免一次性拉全量租户列表）。
+   * 错误 / 无权限路径不触发——调用方不应把「加载失败」当成「空结果」。
+   */
+  (event: 'loaded', payload: { items: Record<string, unknown>[]; total: number }): void;
 }>();
 
 const route = useRoute();
@@ -263,6 +272,7 @@ async function fetchList(): Promise<void> {
       list.value = array;
       total.value = array.length;
     }
+    emit('loaded', { items: list.value, total: total.value });
   } catch (err) {
     list.value = [];
     total.value = 0;
@@ -471,6 +481,22 @@ function refresh(): void {
 }
 
 defineExpose({ refresh });
+
+/**
+ * 页面级固定 filters 变化 → 回到第一页重查
+ *
+ * 典型场景：平台审计页在查询区之外渲染可搜索租户选择器，选中租户后经 filters 注入 `tenant_id`。
+ * 没有这个 watch 时 filters 只在首次挂载生效，用户切换租户会看到「下拉框变了、列表没变」的假象。
+ * 页码必须回到 1：换了筛选条件后停留在旧页码会产生空页。
+ */
+watch(
+  () => props.filters,
+  () => {
+    page.value = 1;
+    void fetchList();
+  },
+  { deep: true },
+);
 
 onMounted(() => {
   loadColumnSettings();

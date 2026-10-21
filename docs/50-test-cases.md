@@ -136,6 +136,7 @@
 | TC-TNT-004 | 数据权限四档 | 四种 `dataScope` 各查列表 | 返回范围正确 | P0 |
 | TC-TNT-008 | 审计租户分维（P1，2026-10-21） | 共享库下 A 租户 `dataScope=all` 用户：① 传 `tenant_id=<B>` 查审计列表 / 导出；② 直接请求 B 租户审计记录 ID；③ 同一请求改走 `/audit-logs/platform*` 维护入口 | ①② 一律拒绝（列表 / 导出 `4001`，详情 `404/1002`，不返回 B 租户数据）；③ 仅当守卫校验 `system:tenant:ignore` 并写 `tenant_bypass` 审计后放行，且归属人范围仍按 `dataScope` 收敛 | P0 |
 | TC-TNT-009 | 平台审计双租户验收（P2，2026-10-21） | 多租户启用下两个真实账号：acmeauditor（tenant 1，dataScope=all，无跨租户码）与 admin（legacy，平台维护码）分别查列表 / 详情 / 导出；admin 走 `/audit-logs/platform*`；普通账号访问维护入口 | 普通账号行集与导出产物只含本租户、他租户 `tenant_id` → `4001`、他租户详情 `404`；维护入口跨租户可检索 / 收窄 / 导出且普通账号 `3002`；导出任务重跑（params 固化重建）不混入期间新增他租户行。自动化：`audit-tenant-isolation.integration.spec.ts` + `smoke-tenant.mjs` 阶段 E；前端「系统管理 → 平台审计」入口仅 `system:tenant:ignore` 持有者可见且横幅显式标注单租户 / 跨租户 | P0 |
+| TC-TNT-010 | 在线 / 归档审计双来源 + 租户筛选受控查询（P2，2026-10-21） | 审计界面切「在线审计 / 归档审计」；普通账号查 `/audit-archives`、平台账号查 `/audit-archives/platform*`；平台模式用租户选项下拉远程搜索与 ids 批量解析 | 归档出口与在线同权限边界（普通归档只含本租户、他租户 `4001`；平台归档仅维护入口跨租户）；归档导出与在线导出表头逐字节一致且产物只含对应数据源行；归档详情取列表快照（无独立详情端点）；租户选项返回 `id/code/name/status` 最小投影、支持 keyword/ids/分页、停用租户仍返回，且不要求 `tenant:read`。自动化：`audit-tenant-isolation.integration.spec.ts`（归档 5 例 + 租户选项 3 例）、`smoke-tenant.mjs` E8~E12、`smoke-mock` 归档/租户选项段、admin-web 单测 | P0 |
 | TC-TNT-005 | transport 切换 | `in-process` → `redis` | 调用方代码不改，调用成功 | P0 |
 | TC-TNT-006 | 链路贯通 | 跨 2 个服务的请求 | 同一 traceId 在追踪系统可见完整链路 | P1 |
 | TC-TNT-007 | Helm 部署 | 部署后滚动更新 | 探针通过，无中断，HPA 生效 | P1 |

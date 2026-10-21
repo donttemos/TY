@@ -259,6 +259,7 @@
 | GET | `/audit-logs/platform/:id` | `audit:read` + `system:tenant:ignore` | 跨租户维护入口：平台级审计详情（可读任意租户记录；归属人范围仍按 `dataScope` 校验）。**只有该入口（以及 `platform*` 其他端点）允许跨租户读取** |
 | GET | `/audit-archives/platform` | `audit:read` + `system:tenant:ignore` | 跨租户维护入口：归档冷数据全局检索（`tenant_id` 可选；归属人范围照旧收敛） |
 | GET | `/audit-archives/platform/export` | `audit:export` + `system:tenant:ignore` | 跨租户维护入口：归档导出（与维护列表同一份租户豁免语义） |
+| GET | `/audit-logs/platform/tenant-options` | `audit:read` + `system:tenant:ignore` | **平台审计租户选项（受控查询，P2）**：只返回 `id / code / name / status` 四列最小投影，供审计页租户筛选与「记录 → 租户名」解析。`keyword`（名称/编码模糊，≤64 字符）与 `ids`（逗号分隔十进制 ID，≤100，优先于 keyword）二选一，`page/pageSize` 分页（pageSize ≤100）；停用租户仍返回（历史审计需可追溯）。与 `platform*` 维护入口同一把钥匙——**不要求 `tenant:read`**，避免「为了筛审计而授予租户管理读取权」。路由声明在 `platform/:id` 之前 |
 
 > **两个正交维度**（P1 租户分维，2026-10-21）：`dataScope` 回答「能看谁的数据」（self / org /
 > org_below / all），租户范围回答「能看哪个租户的数据」，**分别收敛、同时施加**。普通请求的租户条件
@@ -268,11 +269,14 @@
 > 守卫写 `tenant_bypass` 豁免审计）；该入口只放开租户维度，归属人范围仍按 `dataScope` 收敛。
 > 全局 / 按任意租户检索的行为只在这些 `platform*` 端点上成立，与普通审计端点分开验收。
 >
-> **管理后台入口（2026-10-21 P2）**：平台审计视图 `/system/audit-logs/platform`（菜单权限码
-> `system:tenant:ignore`，页面另要求 `audit:read`）调用本节 `platform*` 端点；普通审计页
-> `/system/audit-logs` 仍只调用普通端点、不提供跨租户开关与租户筛选。两页顶部常驻「单租户 /
-> 跨租户」范围标识，**前端入口收敛不是安全边界**——服务端守卫（`@IgnoreTenant` + 权限码）仍是
-> 最终判定，普通端点不因存在平台页而放宽。
+> **管理后台入口（2026-10-21 P2）**：审计界面支持「在线审计 / 归档审计」来源切换——普通模式调用
+> `/audit-logs*` / `/audit-archives*`，平台模式调用 `/audit-logs/platform*` / `/audit-archives/platform*`；
+> 普通审计页 `/system/audit-logs` 不提供跨租户开关，平台审计视图 `/system/audit-logs/platform`
+> （菜单权限码 `system:tenant:ignore`，页面另要求 `audit:read`）才可跨租户。两页顶部常驻
+> 「租户范围 + 数据来源」双维标识；**前端入口收敛不是安全边界**——服务端守卫（`@IgnoreTenant` +
+> 权限码）仍是最终判定，普通端点不因存在平台页而放宽。归档表无独立详情端点（列表 DTO 即完整只读
+> 快照，详情由前端用行数据渲染）；平台审计的租户筛选/名称解析走 `GET /audit-logs/platform/tenant-options`
+> 受控查询，平台审计角色只需 `audit:read` + `system:tenant:ignore`，**无需 `tenant:read`**。
 >
 > M15（PRD-015，ADR-0032）起审计记录追加**业务快照**（`summary` / `targetLabel` / `actorLabel` / `reason` /
 > `auditSource` / `tenantId`），并由 `GET /audit-logs/events` 下发事件语义。分层约定：快照落库冻结、

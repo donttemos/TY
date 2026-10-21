@@ -62,4 +62,24 @@ describe('TenantPicker（可搜索租户选择器）', () => {
     wrapper.findComponent({ name: 'ElSelect' }).vm.$emit('change', 't1');
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['t1']);
   });
+
+  it('注入 fetcher 时走受控查询：不再调用管理面 /tenants（平台审计无需 tenant:read）', async () => {
+    const fetcher = vi.fn().mockResolvedValue([{ id: '3', code: 'dedicated', name: '独立库租户' }]);
+    const wrapper = mount(TenantPicker, {
+      global: { plugins: [ElementPlus] },
+      props: { modelValue: '', fetcher },
+    });
+    await remoteMethodOf(wrapper)('dedicated');
+    expect(fetcher).toHaveBeenCalledWith('dedicated');
+    expect(fetchTenants).not.toHaveBeenCalled();
+  });
+
+  it('注入 fetcher 抛错：不向外抛（选择器不阻断页面）', async () => {
+    const fetcher = vi.fn().mockRejectedValue(new Error('audit tenant options down'));
+    const wrapper = mount(TenantPicker, {
+      global: { plugins: [ElementPlus] },
+      props: { modelValue: '', fetcher },
+    });
+    await expect(remoteMethodOf(wrapper)('x')).resolves.toBeUndefined();
+  });
 });
