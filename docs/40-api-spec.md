@@ -477,7 +477,7 @@
 | GET | `/saas/plans/:id/versions` | `ops:saas:read` | 套餐版本列表（含各版本配额默认项；发布后不可变） |
 | POST | `/saas/plans` | `ops:saas:write` | 创建套餐 `{code, name, description?}`；code 唯一，冲突 → `409/1003`（M14 FR-14-05） |
 | POST | `/saas/plans/:id/versions` | `ops:saas:write` | 发布新版本 `{remark?, quotas:[{quotaKey, limitValue, execution?}]}`；版本 = 当前最大 +1，发布后不可变；配额字典未登记 → `404/1002`；返回含配额默认项（limitValue 转 string）（M14 FR-14-06） |
-| POST | `/saas/tenant-subscriptions` | `ops:saas:write` | 创建订阅 `{tenantId, planCode, planVersion?, expireAt?}`；已有生效订阅 → `409/1003`；创建即按版本快照生成 tenant_quotas |
+| POST | `/saas/tenant-subscriptions` | `ops:saas:write` | 创建订阅 `{tenantId, planCode, planVersion?, expireAt?}`；**`tenantId` / `planCode` 空白 → `400/1001`，租户不存在 → `404/1002`**（校验在接口边界完成，不依赖前端表单；领域服务 `SubscriptionService.create` 另有非空不变量，`tenantId` 以 `trim` 归一后落库与写审计快照）；已有生效订阅 → `409/1003`；创建即按版本快照生成 tenant_quotas |
 | POST | `/saas/tenant-subscriptions/:id/cancel` | `ops:saas:write` | 取消订阅（幂等：已关闭直接成功） |
 | GET | `/saas/tenants/:id/subscription` | `ops:saas:read` | 当前生效订阅（无则 data=null） |
 | GET | `/saas/tenant-subscriptions` | `ops:saas:read` | 订阅分页列表（M14 FR-14-07）：`page/pageSize(≤200)/tenantId/planCode/status(active\|expired\|cancelled)/expireFrom/expireTo`；排序固定 effectiveAt desc + id asc；行内补 `planCode/planName/planVersion` |

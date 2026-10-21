@@ -42,6 +42,9 @@
  * @modified 2026-10-20 M14 收口：全部入参校验（含 M13 遗留三处）统一 throw BizError——
  *   信封直返会被全局响应拦截器包双层（{code:0,data:{code:1001}}），前端按顶层 code 误判成功；
  *   禁新增信封直返校验（冒烟 S15.0 断言锁定）。
+ * @modified 2026-10-21 donttemo P1：订阅创建补边界校验——tenantId/planCode 空白 → 1001、
+ *   租户不存在 → 1002（真机验收复现过 `{"tenantId":""}` 建出 `tenant_id=''` 的订阅行）；
+ *   通过校验后以 trim 归一值调用领域服务并写入审计快照。
  * @module example-api/saas
  */
 
@@ -239,12 +242,36 @@ export class SaasOpsController {
 
   // ---- 订阅（写 + 读） ----
 
+  /**
+   * 创建订阅（M13/M14）
+   *
+   * 入参在**接口边界**校验，不依赖前端表单（真机验收复现过：`{"tenantId":""}` 返回 code 0
+   * 并建出 `tenant_id=''` 的订阅行）：
+   * ① tenantId 非空白 → 否则 1001（空串/纯空白一律拒绝，不做「兜底成 0 号租户」的猜测）；
+   * ② planCode 非空白 → 否则 1001（避免把空 code 当业务参数传进领域层）；
+   * ③ 租户存在 → 否则 1002（`findTenantStatus` 的 null 即「租户不存在」，见 LifecycleStore 端口约定）。
+   *
+   * 为什么要在边界查存在性：订阅行会绑定 active_marker（一租户一生效的唯一键）并生成配额快照，
+   * 挂到不存在的租户上会产出无法归属的权益数据，且该租户日后建档时会「莫名已有生效订阅」。
+   * 领域层另有一道非空不变量（SubscriptionService.create），两层各自独立。
+   */
   @Post('tenant-subscriptions')
   @Permissions(PERM.OPS_SAAS_WRITE)
   async createSubscription(@Body() body: CreateSubscriptionBody, @CurrentUser() operator?: RequestUser, @Req() request?: Request): Promise<unknown> {
+    const tenantId = typeof body?.tenantId === 'string' ? body.tenantId.trim() : '';
+    if (!tenantId) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'tenantId 必填（不能为空或纯空白）');
+    }
+    const planCode = typeof body?.planCode === 'string' ? body.planCode.trim() : '';
+    if (!planCode) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'planCode 必填（不能为空或纯空白）');
+    }
+    if ((await this.store.findTenantStatus(tenantId)) === null) {
+      throw new BizError(ErrorCode.NOT_FOUND, `租户不存在：${tenantId}`);
+    }
     const sub = await this.subscriptions.create({
-      tenantId: body.tenantId,
-      planCode: body.planCode,
+      tenantId,
+      planCode,
       planVersion: body.planVersion,
       expireAt: body.expireAt ? new Date(body.expireAt) : null,
     });
@@ -253,7 +280,7 @@ export class SaasOpsController {
       targetId: sub.id,
       targetLabel: await this.subscriptionLabelOf(sub),
       actorLabel: operator?.username,
-      after: { tenantId: body.tenantId, planCode: body.planCode, planVersion: body.planVersion ?? null, expireAt: body.expireAt ?? null },
+      after: { tenantId, planCode, planVersion: body.planVersion ?? null, expireAt: body.expireAt ?? null },
       ip: request ? clientIp(request) : undefined,
     });
     return sub;

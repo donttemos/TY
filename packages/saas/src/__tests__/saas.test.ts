@@ -67,6 +67,28 @@ describe('SubscriptionService（ADR-0029 一租户一生效 + 版本快照）', 
     await expect(subs.create({ tenantId: 't1', planCode: 'default' })).rejects.toMatchObject({ code: 1003 });
   });
 
+  it('入参不变量（P1）：空白 tenantId / planCode → 1001，且库上零副作用；归一化后同一租户', async () => {
+    const { store, plans, subs } = await setup();
+    const plan = await plans.createPlan({ code: 'default', name: '基础版' });
+    await plans.publishVersion(plan.id, { quotas: [{ quotaKey: 'api_calls', limitValue: 100n }] });
+
+    // 空串 / 纯空白 / 非字符串一律拒绝：不得写出 tenant_id='' 的行（还会占住 active_marker）
+    await expect(subs.create({ tenantId: '', planCode: 'default' })).rejects.toMatchObject({ code: 1001 });
+    await expect(subs.create({ tenantId: '   ', planCode: 'default' })).rejects.toMatchObject({ code: 1001 });
+    await expect(subs.create({ tenantId: undefined as never, planCode: 'default' })).rejects.toMatchObject({ code: 1001 });
+    await expect(subs.create({ tenantId: 't1', planCode: '  ' })).rejects.toMatchObject({ code: 1001 });
+
+    expect(await subs.findActive('')).toBeNull();
+    expect(await subs.findActive('t1')).toBeNull();
+    expect(await store.findTenantQuotaOverride('t1', 'api_calls')).toBeNull(); // 无半程快照
+
+    // 归一化：首尾空白不得分裂租户归属（activeMarker 与快照都用 trim 后的值）
+    const sub = await subs.create({ tenantId: ' t1 ', planCode: ' default ' });
+    expect(sub.tenantId).toBe('t1');
+    expect((await subs.findActive('t1'))?.id).toBe(sub.id);
+    await expect(subs.create({ tenantId: 't1', planCode: 'default' })).rejects.toMatchObject({ code: 1003 });
+  });
+
   it('取消后可重新订阅（active_marker 释放）', async () => {
     const { plans, subs } = await setup();
     const plan = await plans.createPlan({ code: 'default', name: '基础版' });

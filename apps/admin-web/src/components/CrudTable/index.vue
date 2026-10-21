@@ -24,6 +24,9 @@
  *   重试按钮会造成「点了也没用」的误导；其他错误码维持原错误态。
  * @modified 2026-10-21 donttemo P2 审计：新增 `loaded` 事件（供页面按行 tenantId 批量解析租户名）
  *   与 filters 变化自动重查（页面级租户选择器选中后回到第一页刷新，避免「筛选器变了列表没变」）
+ * @modified 2026-10-21 donttemo P1 导出范围一致性：导出参数构造改走与列表同一份
+ *   `buildSearchParams`（filters + transformSearch + 去空值），修复「选了租户后列表收窄、
+ *   导出仍是全量」——此前 handleExport 只发查询区，页面级 filters 不进导出请求
  * @module admin-web/components
 -->
 
@@ -39,6 +42,7 @@ import { useUserStore } from '@/store/user';
 import type { PermissionCode } from '@/api/types';
 import type { CrudColumn, FormField, FormModel, PagePayload, SearchField, SearchModel } from './types';
 import { buildSortParam, type TableSortOrder } from './sort';
+import { buildSearchParams } from './params';
 
 const props = withDefaults(
   defineProps<{
@@ -238,15 +242,14 @@ function canExport(): boolean {
   return code === null || user.hasPermission(code);
 }
 
-/** 查询参数（固定 filters + 查询区（去掉空值；daterange 转 min/max）+ 分页 + 排序） */
+/**
+ * 查询参数（固定 filters + 查询区变换 + 去空值 → 再补分页 / 排序）
+ *
+ * 合并逻辑放在 `./params` 的纯函数里，与 handleExport 共用同一份实现：
+ * 列表与导出看到的条件必须逐项一致，否则会出现「列表 20 条、导出 2000 条」的交付偏差。
+ */
 function buildParams(): SearchModel {
-  const transformed = props.transformSearch ? props.transformSearch({ ...search }) : search;
-  const params: SearchModel = { ...(props.filters ?? {}), ...transformed };
-  for (const [key, value] of Object.entries(params)) {
-    if (value === '' || value === null || value === undefined || (Array.isArray(value) && value.length === 0)) {
-      delete params[key];
-    }
-  }
+  const params: SearchModel = buildSearchParams({ filters: props.filters, search, transformSearch: props.transformSearch });
   if (props.pagination) {
     params.page = page.value;
     params.pageSize = size.value;
@@ -445,11 +448,16 @@ function handleBatchDelete(): void {
   void handleDelete(selectedRows.value);
 }
 
-/** 导出（页面实现；这里只透传当前查询条件） */
+/**
+ * 导出（页面实现；这里只透传当前查询条件）
+ *
+ * 必须与列表用同一份合并逻辑（`buildSearchParams`）：固定 filters（如平台审计页的租户选择）
+ * 曾经只在列表侧生效，导出只带查询区 → 选中租户后导出范围大于列表范围。
+ * 这里不发分页参数（导出即全量命中行），排序仍单独透传由页面决定是否携带。
+ */
 function handleExport(): void {
-  // 导出与列表用同一份变换后的条件，避免「看到 20 条、导出 2000 条」
-  const transformed = props.transformSearch ? props.transformSearch({ ...search }) : { ...search };
-  emit('export', { search: transformed, sort: sort.value });
+  const searchParams = buildSearchParams({ filters: props.filters, search, transformSearch: props.transformSearch });
+  emit('export', { search: searchParams, sort: sort.value });
 }
 
 /** 列设置 */

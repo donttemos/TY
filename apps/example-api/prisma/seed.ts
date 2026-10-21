@@ -44,6 +44,11 @@
  *   同批补「租户审计员」示范角色（tenant_auditor：audit:read + audit:export，dataScope=all，
  *   刻意不含 system:tenant:ignore）与 acme 租户账号 acmeauditor（tenantId=1）——M15 双租户验收的
  *   普通租户管理员侧账号，与 admin（legacy + 平台维护）形成对照
+ * @modified 2026-10-21 donttemo 清场范围修复（docs/64 §5 #4 真机观察项）：truncate 追加租户级 SaaS
+ *   数据（订阅 / 配额覆盖 / 窗口用量 / 用量事件 / 用量汇总 / 生命周期日志）与归档审计——此前
+ *   reseed 只清 tenants，旧订阅的 active_marker 会被新租户 ID 继承，表现为「刚建的租户已有生效
+ *   订阅」（开通 1003）、新租户继承旧用量；目录类数据（plans / versions / plan_quotas /
+ *   quota_definitions）刻意保留，非租户数据且不产生错误归属
  * @module example-api
  */
 
@@ -246,8 +251,33 @@ const MENU_TREE: MenuSeed[] = [
   // 若后续补真实订单模块，按 MENU_TREE 同格式追回即可（component 写 views 下相对路径）。
 ];
 
-/** 清场顺序：外键依赖倒序（关联表 → 主表 → 演示表 → 租户 → 字典） */
+/**
+ * 清场顺序：外键依赖倒序（租户级 SaaS/归档 → 关联表 → 主表 → 演示表 → 租户 → 字典）
+ *
+ * **租户级数据必须一并清掉**（docs/64 §5 #4 真机观察项，2026-10-21 修复）：
+ * `tenants` 每次 reseed 都会被重建，若 `tenant_subscriptions` / `tenant_quotas` /
+ * `tenant_quota_windows` / `usage_events` / `usage_rollups` / `tenant_lifecycle_logs` /
+ * `audit_log_archives` 保留旧行，新租户就会**继承同 ID 旧租户的历史**——表现为
+ * 「刚建的租户已有生效订阅」（`active_marker` 唯一键被占，开通直接 1003）、
+ * 「新建租户用量已超限」、归档审计里出现不属于自己的行。ID 复用 + 残留是数据归属错误，
+ * 不是展示问题，故一律清空。
+ *
+ * 故意**不清**目录类数据（`plans` / `plan_versions` / `plan_quotas` / `quota_definitions`）：
+ * 它们是运营配置而非租户数据，不随租户 ID 复用产生错误归属；保留可让 reseed 后
+ * 套餐页/配额字典仍有可操作样本（真实环境若要重置目录，走单独的目录维护流程）。
+ */
 async function truncate(): Promise<void> {
+  // —— 租户级 SaaS 数据：必须先于 tenants 清（否则 ID 复用即产生错误归属）——
+  // 订阅（含 active_marker 唯一键）、配额覆盖/快照、窗口用量、事件明细、汇总、生命周期日志
+  await prisma.tenantSubscription.deleteMany();
+  await prisma.tenantQuota.deleteMany();
+  await prisma.tenantQuotaWindow.deleteMany();
+  await prisma.usageEvent.deleteMany();
+  await prisma.usageRollup.deleteMany();
+  await prisma.tenantLifecycleLog.deleteMany();
+  // 归档审计（冷数据）：同样带 tenant_id，reseed 后不复用旧租户 ID 的历史
+  await prisma.auditLogArchive.deleteMany();
+
   await prisma.auditLog.deleteMany();
   await prisma.refreshToken.deleteMany();
   // M10 E-13：站内信（收件人 ID 逻辑外键指向 users，先于主表清）

@@ -391,3 +391,9 @@ helm upgrade --install myapp deploy/helm/fw-app -f deploy/helm/fw-app/values-pro
 kubectl rollout status deploy/myapp
 kubectl rollout undo deploy/myapp
 ```
+
+> **`db:seed` 是破坏性操作**（只用于 dev / 验收夹具，禁止在生产重置数据前未备份）：清场范围含业务与鉴权表，
+> 以及**租户级 SaaS 数据**（订阅 / 配额覆盖 / 窗口用量 / 用量事件 / 用量汇总 / 生命周期日志）与归档审计
+> `audit_log_archives`——租户每次重建都从 ID 0 起分配，若不清这些携带 `tenant_id` 的行，新租户会继承同 ID
+> 旧租户的订阅（`active_marker` 唯一键被占，开通直接 `409/1003`）、用量与历史。目录类数据
+> （`plans` / `plan_versions` / `plan_quotas` / `quota_definitions`）刻意保留，不随 reseed 清空。

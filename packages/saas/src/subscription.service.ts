@@ -6,6 +6,9 @@
  * @author donttemo
  * @created 2026-10-19
  * @modified 2026-10-20 donttemo 订阅创建与配额快照收敛为单事务（先读快照、后一次原子写；中途失败全回滚）
+ * @modified 2026-10-21 donttemo P1：create 增加入参不变量——tenantId / planCode 空白直接 1001，
+ *   不再写出 `tenant_id=''` 的订阅行（该行还会占住 active_marker 唯一键，污染后续归属判定）；
+ *   tenantId 归一化（trim）后再用于查询、快照与 activeMarker，避免首尾空白分裂同一租户
  * @module @fw/saas
  */
 import { BizError, ErrorCode } from '@fw/core';
@@ -22,9 +25,16 @@ export class SubscriptionService {
 
   /**
    * 为租户创建订阅：
+   * - tenantId / planCode 必须非空白（不变量，见下）；
    * - 套餐与版本必须存在且已发布（published）；
    * - 已有生效订阅 → 1003 CONFLICT；
    * - 成功后按版本快照生成 tenant_quotas（source=plan_snapshot）。
+   *
+   * 入参不变量（P1）：`tenantId` 为空白时直接 1001，**不进任何查询/写入**。
+   * 空串曾被原样写进 `subscriptions.tenant_id`，同时占住 `active_marker`（一租户一生效的
+   * 唯一键）：这类行既无法回答「属于哪个租户」，又会让后续归属判定出现「看似已有生效订阅」
+   * 的错误结论。控制器边界已拒绝，这里再拦一次——服务可能被任务/脚本直接调用，
+   * 领域层不能假设调用方一定走过表单或 HTTP 校验。
    *
    * 原子性（ADR-0029 §2.5）：快照**先在内存里算好**（版本发布后 plan_quotas 不可变，
    * 故读快照不引入竞态），再与新订阅行交给端口的单事务方法一次写入——
@@ -37,11 +47,21 @@ export class SubscriptionService {
     effectiveAt?: Date;
     expireAt?: Date | null;
   }): Promise<SubscriptionView> {
-    const plan = await this.plans.findPlanByCode(input.planCode);
-    if (!plan) {
-      throw new BizError(ErrorCode.NOT_FOUND, `套餐不存在：${input.planCode}`);
+    // 归一化后再落库：`' t1 '` 与 `'t1'` 必须是同一个租户，不能因首尾空白分裂归属
+    const tenantId = typeof input.tenantId === 'string' ? input.tenantId.trim() : '';
+    if (!tenantId) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'tenantId 必填（不能为空或纯空白）');
     }
-    const active = await this.subscriptions.findActiveSubscription(input.tenantId);
+    const planCode = typeof input.planCode === 'string' ? input.planCode.trim() : '';
+    if (!planCode) {
+      throw new BizError(ErrorCode.BAD_REQUEST, 'planCode 必填（不能为空或纯空白）');
+    }
+
+    const plan = await this.plans.findPlanByCode(planCode);
+    if (!plan) {
+      throw new BizError(ErrorCode.NOT_FOUND, `套餐不存在：${planCode}`);
+    }
+    const active = await this.subscriptions.findActiveSubscription(tenantId);
     if (active) {
       throw new BizError(ErrorCode.CONFLICT, `租户已有生效订阅（${active.id}），请先关闭再创建`);
     }
@@ -53,14 +73,14 @@ export class SubscriptionService {
       ? published.find((v) => v.version === input.planVersion)
       : published.sort((a, b) => b.version - a.version)[0];
     if (!target) {
-      throw new BizError(ErrorCode.NOT_FOUND, `套餐 ${input.planCode} 无可用发布版本${input.planVersion ? `：v${input.planVersion}` : ''}`);
+      throw new BizError(ErrorCode.NOT_FOUND, `套餐 ${planCode} 无可用发布版本${input.planVersion ? `：v${input.planVersion}` : ''}`);
     }
 
     // 版本快照：plan_quotas → tenant_quotas（source=plan_snapshot）。读在写之前，
     // 读取失败时库上零副作用；写入由驱动保证同事务全成/全败。
     const planQuotas = await this.plans.listPlanQuotas(target.id);
     const snapshot: TenantQuotaOverride[] = planQuotas.map((q) => ({
-      tenantId: input.tenantId,
+      tenantId,
       quotaKey: q.quotaKey,
       overrideValue: q.limitValue,
       execution: q.execution,
@@ -69,12 +89,12 @@ export class SubscriptionService {
 
     return this.subscriptions.createSubscriptionWithSnapshot(
       {
-        tenantId: input.tenantId,
+        tenantId,
         planId: plan.id,
         planVersionId: target.id,
         effectiveAt: input.effectiveAt ?? new Date(),
         expireAt: input.expireAt ?? null,
-        activeMarker: input.tenantId,
+        activeMarker: tenantId,
       },
       snapshot,
     );

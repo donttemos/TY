@@ -22,6 +22,8 @@
  * @modified 2026-10-15 donttemo N-03：列表接口返回 3002（无操作权限）时整页替换为无权限视图
  *   （与 /403 页同形），不再落「加载失败」通用错误态——3002 是权限判定结论而非瞬时故障，
  *   重试按钮会造成「点了也没用」的误导；其他错误码维持原错误态。
+ * @modified 2026-10-21 donttemo 导出范围一致性：导出参数构造改走与列表同一份
+ *   `buildSearchParams`（filters + 去空值），修复「选了筛选器后列表收窄、导出仍是全量」
  * @module __APP_NAME__-web/components
 -->
 
@@ -37,6 +39,7 @@ import { useUserStore } from '@/store/user';
 import type { PermissionCode } from '@/api/types';
 import type { CrudColumn, FormField, FormModel, PagePayload, SearchField, SearchModel } from './types';
 import { buildSortParam, type TableSortOrder } from './sort';
+import { buildSearchParams } from './params';
 
 const props = withDefaults(
   defineProps<{
@@ -221,14 +224,14 @@ function canExport(): boolean {
   return code === null || user.hasPermission(code);
 }
 
-/** 查询参数（固定 filters + 查询区（去掉空值；daterange 转 min/max）+ 分页 + 排序） */
+/**
+ * 查询参数（固定 filters + 查询区变换 + 去空值 → 再补分页 / 排序）
+ *
+ * 合并逻辑放在 `./params` 的纯函数里，与 handleExport 共用同一份实现：
+ * 列表与导出看到的条件必须逐项一致，否则会出现「列表 20 条、导出 2000 条」的交付偏差。
+ */
 function buildParams(): SearchModel {
-  const params: SearchModel = { ...(props.filters ?? {}), ...search };
-  for (const [key, value] of Object.entries(params)) {
-    if (value === '' || value === null || value === undefined || (Array.isArray(value) && value.length === 0)) {
-      delete params[key];
-    }
-  }
+  const params: SearchModel = buildSearchParams({ filters: props.filters, search });
   if (props.pagination) {
     params.page = page.value;
     params.pageSize = size.value;
@@ -426,9 +429,15 @@ function handleBatchDelete(): void {
   void handleDelete(selectedRows.value);
 }
 
-/** 导出（页面实现；这里只透传当前查询条件） */
+/**
+ * 导出（页面实现；这里只透传当前查询条件）
+ *
+ * 必须与列表用同一份合并逻辑（`buildSearchParams`）：固定 filters 只在列表侧生效时，
+ * 选中筛选器后导出范围会大于列表范围。分页参数不随导出下发（导出即全量命中行）。
+ */
 function handleExport(): void {
-  emit('export', { search: { ...search }, sort: sort.value });
+  const searchParams = buildSearchParams({ filters: props.filters, search });
+  emit('export', { search: searchParams, sort: sort.value });
 }
 
 /** 列设置 */

@@ -7,6 +7,9 @@
  * @created 2026-10-13
  * @modified 2026-10-15 donttemo N-03：补 3002 无权限整页视图断言（出现 / 不误报「加载失败」/ 恢复路径），
  *   并做反向验证——非 3002 错误码不得落入无权限视图
+ * @modified 2026-10-21 donttemo P1 导出范围一致性回归：导出必须合并固定 filters（选中租户后导出
+ *   不得放宽范围）、查询区变换与空值剔除与列表同口径、transformSearch 不得重复执行、
+ *   filters 为空时不得凭空带出参数
  * @module admin-web/components
  */
 
@@ -65,6 +68,13 @@ function mountTable(permission?: string) {
       formFields: [{ prop: 'nickname', label: '昵称', type: 'input' }],
     },
   });
+}
+
+/** 工具栏「导出」按钮（`exportable` 且持有 `<permission>:export` 时才渲染） */
+function findExportButton(wrapper: ReturnType<typeof mount>) {
+  const button = wrapper.findAll('button').find((item) => item.text().trim() === '导出');
+  expect(button).toBeTruthy();
+  return button!;
 }
 
 describe('CrudTable 四态与权限', () => {
@@ -217,5 +227,80 @@ describe('CrudTable 四态与权限', () => {
     await flushPromises();
     expect(mockedGet).toHaveBeenCalledTimes(2);
     expect(mockedGet).toHaveBeenLastCalledWith('/audit-logs/platform', { params: { page: 1, pageSize: 20, tenant_id: '3' } });
+  });
+
+  it('导出：固定 filters 合并进 export 参数（选中租户后导出范围与列表同一口径）', async () => {
+    mockedGet.mockResolvedValue(pagePayload([]));
+    useUserStore().permissions = ['audit:export'];
+    const wrapper = mount(CrudTable, {
+      props: {
+        api: '/audit-logs/platform',
+        columns: COLUMNS,
+        permission: 'audit',
+        exportable: true,
+        filters: { tenant_id: '3' },
+      },
+    });
+    await flushPromises();
+
+    await findExportButton(wrapper).trigger('click');
+    // 回归点：导出曾经只发查询区（此处为 {}），把「按租户筛选后的 20 条」变成「全量导出」
+    expect(wrapper.emitted('export')?.[0]).toEqual([{ search: { tenant_id: '3' }, sort: null }]);
+    // 导出发的是「全量命中行」，不得带分页参数
+    expect(wrapper.emitted('export')?.[0]?.[0]).not.toHaveProperty('search.page');
+  });
+
+  it('导出：查询区变换 / 空值剔除 / 排序与列表同口径，且 transformSearch 只执行一次', async () => {
+    mockedGet.mockResolvedValue(pagePayload([]));
+    useUserStore().permissions = ['audit:export'];
+    const transformSearch = vi.fn((search: Record<string, unknown>) => {
+      const next = { ...search };
+      delete next.risk; // 风险等级不落库 → 展开成事件码集合
+      next.event = 'auth.login,auth.logout';
+      return next;
+    });
+    const wrapper = mount(CrudTable, {
+      props: {
+        api: '/audit-logs/platform',
+        columns: COLUMNS,
+        permission: 'audit',
+        exportable: true,
+        filters: { tenant_id: '3' },
+        searchForm: [
+          { prop: 'result', label: '结果', type: 'select', options: [], defaultValue: 'failed' },
+          { prop: 'risk', label: '风险', type: 'select', options: [], defaultValue: 'high' },
+          { prop: 'from', label: '开始', type: 'date', defaultValue: '' },
+        ],
+        transformSearch,
+      },
+    });
+    await flushPromises();
+    const callsBeforeExport = transformSearch.mock.calls.length;
+
+    await findExportButton(wrapper).trigger('click');
+    expect(wrapper.emitted('export')?.[0]).toEqual([
+      { search: { tenant_id: '3', result: 'failed', event: 'auth.login,auth.logout' }, sort: null },
+    ]);
+    // 导出只额外调用一次变换：重复变换会让风险筛选被展开两次（与列表不一致）
+    expect(transformSearch).toHaveBeenCalledTimes(callsBeforeExport + 1);
+  });
+
+  it('导出：filters 为空对象时不污染参数（普通单租户页不得凭空带上 tenant_id）', async () => {
+    mockedGet.mockResolvedValue(pagePayload([]));
+    useUserStore().permissions = ['audit:export'];
+    const wrapper = mount(CrudTable, {
+      props: {
+        api: '/audit-logs',
+        columns: COLUMNS,
+        permission: 'audit',
+        exportable: true,
+        filters: {},
+        searchForm: [{ prop: 'result', label: '结果', type: 'select', options: [], defaultValue: '' }],
+      },
+    });
+    await flushPromises();
+
+    await findExportButton(wrapper).trigger('click');
+    expect(wrapper.emitted('export')?.[0]).toEqual([{ search: {}, sort: null }]);
   });
 });

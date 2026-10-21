@@ -5,7 +5,8 @@
  *   S1  admin 登录（多租户模式，legacy 租户）
  *   S2  GET  /saas/plans                       运营面可读（含回填的 default 套餐）
  *   S3  POST /tenants                          建冒烟租户 saas-smoke-<ts>（tenant:create）
- *   S4  POST /saas/tenant-subscriptions        开通订阅（active + 版本快照）
+ *   S4.0~4.2 入参校验：空白 tenantId → 400/1001；未知租户 → 404/1002（P1 缺口回归）
+ *   S4  POST /saas/tenant-subscriptions        开通订阅（兼作 seed 清场回归：同 ID 旧订阅残留 → 1003）
  *   S5  重复开订阅 → 409/1003（一租户一生效）
  *   S6  用量上报 ×10（limit=10）→ 全 ok；第 11 次 → 429/4029（硬限额，details 带 metricKey/used/limit）
  *   S7  幂等键重放 → result=deduped（重复投递不重复计量，AC-13-05）
@@ -153,6 +154,15 @@ async function main() {
     const tenant = await call('/api/v1/tenants', { method: 'POST', body: { code: TENANT_CODE, name: 'SaaS 冒烟租户', isolation: 'shared' } }, auth.admin);
     check('S3 建租户成功', isOk(tenant.status) && tenant.body.code === 0 && tenant.body.data?.id, `http=${tenant.status} code=${tenant.body.code}`);
     const tenantId = tenant.body.data?.id;
+
+    // S4.0 入参校验（P1 真机缺口回归）：空白 tenantId / 未知租户必须在接口边界被拒，
+    // 不得建出 tenant_id='' 的订阅行（该行还会占住 active_marker 唯一键，污染归属判定）
+    const blankTenant = await call('/api/v1/saas/tenant-subscriptions', { method: 'POST', body: { tenantId: '', planCode: 'default' } }, auth.admin);
+    check('S4.0 空 tenantId → 400/1001', blankTenant.status === 400 && blankTenant.body.code === 1001, `http=${blankTenant.status} code=${blankTenant.body.code}`);
+    const spacedTenant = await call('/api/v1/saas/tenant-subscriptions', { method: 'POST', body: { tenantId: '   ', planCode: 'default' } }, auth.admin);
+    check('S4.1 纯空白 tenantId → 400/1001', spacedTenant.status === 400 && spacedTenant.body.code === 1001, `http=${spacedTenant.status} code=${spacedTenant.body.code}`);
+    const ghostTenant = await call('/api/v1/saas/tenant-subscriptions', { method: 'POST', body: { tenantId: 'tenant-not-exists', planCode: 'default' } }, auth.admin);
+    check('S4.2 未知租户 → 404/1002（不产生订阅行与配额快照）', ghostTenant.status === 404 && ghostTenant.body.code === 1002, `http=${ghostTenant.status} code=${ghostTenant.body.code}`);
 
     // S4 开通订阅
     const sub = await call('/api/v1/saas/tenant-subscriptions', { method: 'POST', body: { tenantId, planCode: 'default' } }, auth.admin);

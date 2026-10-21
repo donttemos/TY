@@ -17,7 +17,8 @@
 > 验收时间：2026-10-21 12:49~13:55 CST｜部署版本：`2f30084`（origin/main）｜服务：`fw-api`（systemd）
 > 数据库：1Panel PostgreSQL 18.6（容器 `1Panel-postgresql-MXHt`，宿主 5432）｜缓存/队列：Redis（bullmq）
 > 结论：**API 侧验收全部通过（A 段 32/32 + B 段范围/租户/导出/性能/同口径全过）**；三项环境限制与四项
-> 缺陷线索如实登记；**零 AC 勾选**（证据不足以签字的项保持未勾选，口径见 PRD-015 §7）。
+> 缺陷线索如实登记（§5 #1 空 tenantId 校验、#4 seed 清场范围均已于 2026-10-21 修复，真机复测待部署窗口）；
+> **零 AC 勾选**（证据不足以签字的项保持未勾选，口径见 PRD-015 §7）。
 
 ## 1. 部署记录（c192885 → 2f30084）
 
@@ -112,10 +113,10 @@ n=30/组：无过滤列表 p50=29ms / p95=30ms；带 `result+event` 过滤 p50=2
 
 | # | 现象 | 性质 | 建议 |
 |---|---|---|---|
-| 1 | `POST /saas/tenant-subscriptions` 接受**空 tenantId**（`{"tenantId":""}` 返回 code 0 并建出 `tenant_id=''` 的订阅行） | **输入校验缺口**（CreateSubscriptionBody 未校验非空） | 控制器/DTO 补非空校验；本次已产生 2 条残留并 SQL 清理 |
+| 1 | `POST /saas/tenant-subscriptions` 接受**空 tenantId**（`{"tenantId":""}` 返回 code 0 并建出 `tenant_id=''` 的订阅行） | **输入校验缺口**（CreateSubscriptionBody 未校验非空）→ **已修复（2026-10-21）**：控制器拒绝空白 `tenantId`/`planCode`（`400/1001`）并校验租户存在（`404/1002`），`SubscriptionService.create` 补领域不变量 + `trim` 归一；`smoke-saas-ops` 新增 S4.0~S4.2 负例（本地 37/37）。真机残留 2 条已在本次清理，真机复测待下一次部署窗口 | 控制器/DTO 补非空校验（已落地）；真机按 S4.0~S4.2 复测 |
 | 2 | `dept_leader`/`dept_member`/`self_updater` 示范角色未授 `auth:me`，`/auth/me` 返回 3002 | 种子缺口（示范角色连本人信息都取不到） | seed 的 scopeDemoGrants 补 `PERM.AUTH_ME` |
 | 3 | 登录限流约 10 次/分钟/IP，批量验收连登即 9003 | 既有安全策略，验收脚本需 12s+ 间距 + 65s 退避（已适配） | 文档化即可 |
-| 4 | seed 的 `truncate()` 不清 SaaS 表（plans/subscriptions/quotas），reseed 后旧 SaaS 数据被新租户 ID 继承（租户 0 沿用旧生效订阅） | 观察项（非缺陷，但 reseed 语义不完整） | 后续评估 truncate 范围 |
+| 4 | seed 的 `truncate()` 不清 SaaS 表（plans/subscriptions/quotas），reseed 后旧 SaaS 数据被新租户 ID 继承（租户 0 沿用旧生效订阅） | 观察项 → **已修复（2026-10-21）**：`truncate()` 追加**租户级** SaaS 数据（tenant_subscriptions / tenant_quotas / tenant_quota_windows / usage_events / usage_rollups / tenant_lifecycle_logs）与 audit_log_archives——ID 复用即数据归属错误（新租户「已有生效订阅」→ 开通 1003、继承旧用量）；目录类（plans / plan_versions / plan_quotas / quota_definitions）**刻意保留**（非租户数据，且保留 reseed 后的可操作样本）。验证：reseed 后 7 张表计数归零、目录数据保留，`smoke-saas-ops` 连续两次 37/37 | 已落地；`smoke-saas-ops` S4 兼作该缺陷的回归探针 |
 
 ## 6. 复跑方式
 
@@ -132,6 +133,10 @@ cd /opt/fw/current/apps/example-api && sudo -u fw bash -c \
 # 证据目录
 /opt/fw/shared/verify-20261021-m15/   # list-*.json / export-*.csv / db-*.txt / detail-sample.json
 ```
+
+> ⚠️ reseed 是破坏性操作：2026-10-21 起清场范围含**租户级 SaaS 数据**（订阅 / 配额覆盖 / 窗口用量 /
+> 用量事件 / 用量汇总 / 生命周期日志）与 `audit_log_archives`（口径见 docs/60 §15 注）。验收期间重跑会清空
+> 已有订阅与用量——与他人并行验收时先确认，必要时先 `pg_dump` 备份。
 
 ## 7. 结论与后续
 

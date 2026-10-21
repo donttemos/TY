@@ -18,6 +18,25 @@
 
 ## [Unreleased]
 
+### Fixed（P1：seed 清场遗漏租户级 SaaS 数据，reseed 后新租户继承旧租户历史，2026-10-21）
+
+- **问题**（真机验收 docs/64 §5 #4 登记项）：`prisma/seed.ts` 的 `truncate()` 只清业务/鉴权表，**不清 SaaS 表**。`tenants` 每次 reseed 都会重建，ID 从头分配，而 `tenant_subscriptions` / `tenant_quotas` / `tenant_quota_windows` / `usage_events` / `usage_rollups` / `tenant_lifecycle_logs` / `audit_log_archives` 的旧行保留 → 新租户**继承同 ID 旧租户的历史**：刚建的租户「已有生效订阅」（`active_marker` 唯一键被占，开通直接 `409/1003`）、新建租户用量已超限、归档审计出现不属于自己的行。这是数据归属错误，不是展示问题。
+- **修复**：`truncate()` 追加上述 7 张**租户级**表的清空（先于 `tenants`，沿外键逻辑依赖倒序）。**刻意保留目录类数据**（`plans` / `plan_versions` / `plan_quotas` / `quota_definitions`）——它们是运营配置、不随租户 ID 复用产生错误归属，保留可让 reseed 后套餐页与配额字典仍有可操作样本。
+- **验证**：本机 reseed 后 7 张表计数归零、目录数据（plans 8 / plan_versions 8 / quota_definitions 1）保留；`smoke-saas-ops` 连续两次 **37/37**（此前第二次会因继承订阅在 S4 落 `1003`）——S4 因此兼作该缺陷的回归探针，脚本头部已注明「S4 1003 不是偶发失败」。reseed 前已备份 `prisma/dev.db.bak-before-reseed-20261021`。
+
+### Fixed（P1：平台审计导出未合并租户筛选，列表与交付文件范围不一致，2026-10-21）
+
+- **问题**：`CrudTable.handleExport()` 只把查询区转换后的条件发给父组件，**没有合并 `props.filters`**；审计页 `handleExport()` 又直接使用 `payload.search`。平台维护人员在 `TenantPicker` 选中租户后，列表经 `filters` 注入 `tenant_id` 已收窄，导出仍发更大范围——**在线导出与归档导出两条路径同时受影响**。这不是绕过后端授权的直接证据（服务端权限边界未变，导出仍按 `dataScope` + 租户边界收敛），但会造成「筛选结果 ≠ 交付文件」，运营可能导出超过预期的数据量。
+- **修复**：新增 `apps/admin-web/src/components/CrudTable/params.ts` 纯函数 `buildSearchParams`（固定 `filters` 铺底 → `transformSearch` 变换查询区 → 剔除空值），`buildParams()`（列表）与 `handleExport()`（导出）**共用同一份实现**；导出仍不下发分页参数（导出即全量命中行），排序继续单独透传。`templates/admin` 脚手架同步修复，新项目不再继承该缺陷。
+- **回归测试**：`crud-table.test.ts` +3 例（导出合并固定 filters；变换 / 空值剔除与列表同口径且 `transformSearch` 只执行一次；filters 为空时不得凭空带参数）；新增 `platform-export.test.ts` 5 例——**真实 CrudTable + 真实审计页**，分别断言在线导出（`/audit-logs/platform/export`）与归档导出（`/audit-archives/platform/export`）请求参数都带正确的 `tenant_id`，并覆盖「未选租户 / 清空租户 / 普通单租户页不带 `tenant_id`」的反向路径。缺陷复现验证：把 `handleExport` 退回旧实现，8 个导出断言中 5 例立即变红。
+
+### Fixed（P1：SaaS 创建订阅缺租户校验，可建出 `tenant_id=''` 的订阅行，2026-10-21）
+
+- **问题**（真机验收 docs/64 §5 #1 已登记）：`POST /saas/tenant-subscriptions` 接收空 `tenantId` 并成功创建订阅（`{"tenantId":""}` 返回 code 0，落 `tenant_id=''` 行），控制器把 `body.tenantId` 原样透传给领域服务；空租户订阅还会占住 `active_marker`（一租户一生效的唯一键）并生成配额快照，影响后续订阅查询、配额与归属判定。
+- **修复（接口边界）**：`createSubscription` 增加三道校验——`tenantId` 非空白（否则 `400/1001`）、`planCode` 非空白（`400/1001`）、**租户存在**（`findTenantStatus` 返回 null 即不存在 → `404/1002`）；校验通过后以 `trim` 归一值调用领域服务并写入审计 `after` 快照。被拒请求不查库、不触达领域服务、不落审计。
+- **修复（领域不变量）**：`SubscriptionService.create` 自身拒绝空白 `tenantId` / `planCode`（`1001`，进任何查询前），并对 `tenantId` 做 `trim` 归一后用于存在性查询、配额快照与 `activeMarker`——服务可能被任务/脚本直接调用，不能只依赖 HTTP 边界或前端表单。
+- **测试**：`saas-ops.controller.spec.ts` +6 例（空 / 纯空白 / 非字符串 `tenantId`、未知租户、空白 `planCode` 均不产生副作用；正常创建透传 `trim` 值并同步审计快照），4 个既有名称快照用例补 `findTenantStatus` 语义；`@fw/saas` +1 例（`1001` 且库上零副作用——无订阅行、无半程快照，`trim` 后同一租户）；`smoke-saas-ops.mjs` 新增 S4.0~S4.2（空 `tenantId` → `400/1001`、纯空白 → `400/1001`、未知租户 → `404/1002`），本地 37/37 全通过。无新增错误码 / 迁移 / 破坏性契约变更。
+
 ### Added（P2：历史审计追溯 + 平台审计租户筛选受控查询，2026-10-21）
 
 - **在线 / 归档双来源**：审计视图新增来源切换——普通模式 `/audit-logs*` ↔ `/audit-archives*`，平台模式 `/audit-logs/platform*` ↔ `/audit-archives/platform*`；范围提示改为「租户范围 + 数据来源」双维横幅。归档表无独立详情端点，详情由列表行快照渲染（归档记录不可变）；归档导出与在线导出共用 `buildAuditCsv`（表头逐字节一致）。修复「平台审计页只能查在线表、历史审计追溯未交付」的缺口——平台维护人员现可在管理后台直接检索归档冷数据。

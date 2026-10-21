@@ -14,6 +14,9 @@
  * @modified 2026-10-21 donttemo P1 加固（FR-15-10 评审）：补名称快照**故障注入**降级断言——
  *   名称查询抛异常时，已提交的业务操作（发布/开通/取消/迁移）照常成功，原始业务错误
  *   （4030/4029）原样抛出，审计一律落缺失标记：旁路查询不得反向决定业务成败。
+ * @modified 2026-10-21 donttemo P1 订阅创建入参校验：空 / 纯空白 / 非字符串 tenantId → 1001，
+ *   未知租户 → 1002，planCode 空白 → 1001；被拒请求不得查库、不得触达领域服务、不得落审计。
+ *   名称快照用例同步补 findTenantStatus（存在性由状态端点回答，名称缺失是另一回事）。
  * @author donttemo
  * @created 2026-10-20
  * @module example-api/saas
@@ -261,6 +264,104 @@ describe('SaasOpsController M13 端点入参校验（信封直返修正，HTTP 4
   });
 });
 
+describe('SaasOpsController POST /saas/tenant-subscriptions 入参校验（P1：真机空 tenantId 缺口）', () => {
+  /** 订阅领域服务桩：只记录调用参数，不落库 */
+  function makeSubscriptions() {
+    return {
+      create: vi.fn(async (input: { tenantId: string; planCode: string; planVersion?: number; expireAt?: Date | null }) => ({
+        id: 'sub-new',
+        tenantId: input.tenantId,
+        planId: 'plan-1',
+        planVersionId: 'pv-1',
+        status: 'active',
+        effectiveAt: new Date(),
+        expireAt: input.expireAt ?? null,
+        closedAt: null,
+        reason: null,
+      })),
+    };
+  }
+
+  /** 控制器装配（订阅点位换成桩） */
+  function makeCreateController(store: SaasStore, subscriptions: ReturnType<typeof makeSubscriptions>) {
+    return new SaasOpsController(store, makePlans() as never, subscriptions as never, {} as never, {} as never, {} as never, AUDIT as never);
+  }
+
+  it('空 tenantId → 1001：不查租户、不调领域服务、不落审计（不再建出 tenant_id="" 的行）', async () => {
+    const subscriptions = makeSubscriptions();
+    const store = makeStore({ findTenantStatus: vi.fn(async () => 'active') });
+    await expect(
+      makeCreateController(store, subscriptions).createSubscription({ tenantId: '', planCode: 'default' } as never, undefined as never),
+    ).rejects.toMatchObject({ code: ErrorCode.BAD_REQUEST });
+    expect(store.findTenantStatus).not.toHaveBeenCalled();
+    expect(subscriptions.create).not.toHaveBeenCalled();
+    expect(AUDIT.recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('纯空白 tenantId → 1001（trim 后为空，不做「兜底成某租户」的猜测）', async () => {
+    const subscriptions = makeSubscriptions();
+    const store = makeStore({ findTenantStatus: vi.fn(async () => 'active') });
+    await expect(
+      makeCreateController(store, subscriptions).createSubscription({ tenantId: '   ', planCode: 'default' } as never, undefined as never),
+    ).rejects.toMatchObject({ code: ErrorCode.BAD_REQUEST });
+    expect(store.findTenantStatus).not.toHaveBeenCalled();
+    expect(subscriptions.create).not.toHaveBeenCalled();
+  });
+
+  it('tenantId 类型非字符串（null/数字）→ 1001', async () => {
+    const subscriptions = makeSubscriptions();
+    const store = makeStore({ findTenantStatus: vi.fn(async () => 'active') });
+    await expect(
+      makeCreateController(store, subscriptions).createSubscription({ tenantId: null, planCode: 'default' } as never, undefined as never),
+    ).rejects.toMatchObject({ code: ErrorCode.BAD_REQUEST });
+    await expect(
+      makeCreateController(store, subscriptions).createSubscription({ tenantId: 1, planCode: 'default' } as never, undefined as never),
+    ).rejects.toMatchObject({ code: ErrorCode.BAD_REQUEST });
+    expect(subscriptions.create).not.toHaveBeenCalled();
+  });
+
+  it('租户不存在 → 1002：不调领域服务（避免产出入权益数据挂到不存在的租户上）', async () => {
+    const subscriptions = makeSubscriptions();
+    const store = makeStore({ findTenantStatus: vi.fn(async () => null) });
+    await expect(
+      makeCreateController(store, subscriptions).createSubscription({ tenantId: 'ghost', planCode: 'default' } as never, undefined as never),
+    ).rejects.toMatchObject({ code: ErrorCode.NOT_FOUND });
+    expect(subscriptions.create).not.toHaveBeenCalled();
+    expect(AUDIT.recordEvent).not.toHaveBeenCalled();
+  });
+
+  it('planCode 空白 → 1001（不在领域层用空 code 查套餐）', async () => {
+    const subscriptions = makeSubscriptions();
+    const store = makeStore({ findTenantStatus: vi.fn(async () => 'active') });
+    await expect(
+      makeCreateController(store, subscriptions).createSubscription({ tenantId: 't1', planCode: '  ' } as never, undefined as never),
+    ).rejects.toMatchObject({ code: ErrorCode.BAD_REQUEST });
+    expect(store.findTenantStatus).not.toHaveBeenCalled();
+    expect(subscriptions.create).not.toHaveBeenCalled();
+  });
+
+  it('正常创建：trim 后的 tenantId 透传领域服务，审计 after 同步使用归一值', async () => {
+    const subscriptions = makeSubscriptions();
+    const store = makeStore({
+      findTenantStatus: vi.fn(async () => 'active'),
+      findTenantName: vi.fn(async () => '示例企业'),
+      findPlanById: vi.fn(async () => ({ id: 'plan-1', code: 'default', name: '基础版' })),
+    });
+    const sub = (await makeCreateController(store, subscriptions).createSubscription(
+      { tenantId: ' t1 ', planCode: ' default ' } as never,
+      undefined as never,
+    )) as { id: string; tenantId: string };
+
+    expect(store.findTenantStatus).toHaveBeenCalledWith('t1');
+    expect(subscriptions.create).toHaveBeenCalledWith({ tenantId: 't1', planCode: 'default', planVersion: undefined, expireAt: null });
+    expect(sub).toMatchObject({ id: 'sub-new', tenantId: 't1' });
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.subscription.create',
+      expect.objectContaining({ targetLabel: '示例企业 · 基础版', after: expect.objectContaining({ tenantId: 't1', planCode: 'default' }) }),
+    );
+  });
+});
+
 describe('SaasOpsController GET /saas/usage/overview（M14 FR-14-14）', () => {
   it('风险 ≥80% TOP20 + 五态计数 + 最近迁移 + 到期过滤', async () => {
     const now = new Date();
@@ -377,6 +478,7 @@ describe('SaasOpsController 审计 target_label 名称快照（P1 / PRD-015 FR-1
   it('订阅开通：target_label = 租户名 · 套餐名', async () => {
     const subscriptions = makeSubscriptionsCreate('sub-1', 't1', 'plan-1');
     const store = makeStore({
+      findTenantStatus: vi.fn(async () => 'active'),
       findTenantName: vi.fn(async () => '示例企业'),
       findPlanById: vi.fn(async () => ({ id: 'plan-1', code: 'pro', name: '专业版' })),
     });
@@ -391,6 +493,8 @@ describe('SaasOpsController 审计 target_label 名称快照（P1 / PRD-015 FR-1
   it('订阅开通：租户名取不到 → 只标记缺失的一侧，套餐名照常', async () => {
     const subscriptions = makeSubscriptionsCreate('sub-2', 't-ghost', 'plan-1');
     const store = makeStore({
+      // 名称缺失 ≠ 租户不存在（软删/改名历史行）：存在性由 findTenantStatus 回答
+      findTenantStatus: vi.fn(async () => 'active'),
       findTenantName: vi.fn(async () => null),
       findPlanById: vi.fn(async () => ({ id: 'plan-1', code: 'pro', name: '专业版' })),
     });
@@ -521,6 +625,7 @@ describe('SaasOpsController 名称快照故障注入降级（P1 加固：旁路�
   it('订阅开通：findTenantName 抛异常 → 开通照常成功，仅租户侧缺失标记', async () => {
     const subscriptions = makeSubscriptionsCreate('sub-1', 't1', 'plan-1');
     const store = makeStore({
+      findTenantStatus: vi.fn(async () => 'active'),
       findTenantName: boom(),
       findPlanById: vi.fn(async () => ({ id: 'plan-1', code: 'pro', name: '专业版' })),
     });
@@ -536,6 +641,7 @@ describe('SaasOpsController 名称快照故障注入降级（P1 加固：旁路�
   it('订阅开通：findPlanById 抛异常 → 开通照常成功，仅套餐侧缺失标记', async () => {
     const subscriptions = makeSubscriptionsCreate('sub-2', 't1', 'plan-1');
     const store = makeStore({
+      findTenantStatus: vi.fn(async () => 'active'),
       findTenantName: vi.fn(async () => '示例企业'),
       findPlanById: boom(),
     });

@@ -22,6 +22,9 @@
  *   详情直接使用列表行（归档记录为不可变只读快照），导出产物与在线导出逐字节同构。
  *   租户筛选改为受控租户选项查询（`/audit-logs/platform/tenant-options`，远程搜索 + 行内批量
  *   名称解析），不再依赖 `tenant:read`，也不受「只取第一页 100 条」限制。
+ * @modified 2026-10-21 donttemo P1 导出范围一致性：租户筛选经 CrudTable 的 filters 合并进导出
+ *   请求参数（此前只进列表），在线/归档两条导出路径的命中范围与列表保持同一口径；
+ *   页面侧仅透传 payload，不再自行拼筛选条件。
  * @module admin-web/views
 -->
 
@@ -319,8 +322,9 @@ const exporting = ref(false);
 /**
  * 导出当前筛选条件下的审计日志（N-02 异步任务）
  *
- * payload.search 已由 CrudTable 用同一份 `toQuery` 变换过（风险 → 事件集合），
- * 这里不得再次变换，否则风险筛选会被展开两次。
+ * payload.search 已由 CrudTable 用同一份 `toQuery` 变换过（风险 → 事件集合），并已合并页面级
+ * `filters`（租户选择器的 `tenant_id`）——这里**不得**再变换一次（风险会被展开两次），
+ * 也**不得**重新拼装筛选条件（会绕开列表与导出共用的合并逻辑，让导出范围大于列表范围）。
  * 端点按「模式 × 来源」四选一：在线/归档导出产物逐字节同构，但数据源与权限入口不同。
  */
 async function handleExport(payload: { search: SearchModel; sort: string | null }): Promise<void> {
