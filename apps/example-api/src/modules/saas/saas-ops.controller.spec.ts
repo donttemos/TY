@@ -20,6 +20,9 @@
  * @modified 2026-10-21 donttemo P1 业务一致性：订阅创建补生命周期状态规则——terminated → 4030
  *   （终态无迁出，不得留下「生效订阅 + 终止租户」），pending/active/grace/frozen 放行且不触发
  *   隐式迁移；存在性与状态共用同一次 findTenantStatus 读取（调用次数锁定）。
+ * @modified 2026-10-21 donttemo P2 追溯补齐：terminated 拒绝改为**必须落一条 denied 审计**
+ *   （`saas.subscription.create_rejected`，含操作人/租户名快照/请求套餐/租户状态/拒绝文案），
+ *   同时锁定「仍不创建订阅」；名称解析抛错时照常 4030 并落缺失标记（审计是旁路）。
  * @author donttemo
  * @created 2026-10-20
  * @module example-api/saas
@@ -376,11 +379,17 @@ describe('SaasOpsController POST /saas/tenant-subscriptions 生命周期状态�
     return new SaasOpsController(store, makePlans() as never, subscriptions as never, {} as never, {} as never, {} as never, AUDIT as never);
   }
 
-  it('terminated → 4030（终态无迁移出口）：不调领域服务、不落审计，details 带 from/action', async () => {
+  it('terminated → 4030（终态无迁移出口）：不创建订阅，但拒绝必须落 denied 审计', async () => {
     const subscriptions = makeSubscriptions();
-    const store = makeStore({ findTenantStatus: vi.fn(async () => 'terminated') });
+    const store = makeStore({
+      findTenantStatus: vi.fn(async () => 'terminated'),
+      findTenantName: vi.fn(async () => '已注销租户'),
+    });
     await expect(
-      makeCreateController(store, subscriptions).createSubscription({ tenantId: 't-term', planCode: 'default' } as never, undefined as never),
+      makeCreateController(store, subscriptions).createSubscription(
+        { tenantId: 't-term', planCode: ' pro ' } as never,
+        { id: 'u-1', username: 'alice' } as never,
+      ),
     ).rejects.toMatchObject({
       code: ErrorCode.LIFECYCLE_TRANSITION_INVALID,
       http: 409,
@@ -391,7 +400,38 @@ describe('SaasOpsController POST /saas/tenant-subscriptions 生命周期状态�
     });
     // 拒绝发生在领域调用之前：不会留下「生效订阅 + 终止租户」的矛盾数据
     expect(subscriptions.create).not.toHaveBeenCalled();
-    expect(AUDIT.recordEvent).not.toHaveBeenCalled();
+    // 但运营追溯不能断：与 saas.lifecycle.invalid 同口径，先记录再原样抛出
+    expect(AUDIT.recordEvent).toHaveBeenCalledTimes(1);
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.subscription.create_rejected',
+      expect.objectContaining({
+        userId: 'u-1',
+        actorLabel: 'alice',
+        targetType: 'tenant',
+        targetId: 't-term',
+        targetLabel: '已注销租户',
+        result: 'denied',
+        reason: expect.stringContaining('租户已终止'),
+        after: { planCode: 'pro', tenantStatus: 'terminated', code: ErrorCode.LIFECYCLE_TRANSITION_INVALID },
+      }),
+    );
+  });
+
+  it('拒绝留痕不依赖名称解析：findTenantName 抛错仍 4030，targetLabel 落缺失标记（不造假名称）', async () => {
+    const subscriptions = makeSubscriptions();
+    const store = makeStore({
+      findTenantStatus: vi.fn(async () => 'terminated'),
+      findTenantName: vi.fn(async () => {
+        throw new Error('db down');
+      }),
+    });
+    await expect(
+      makeCreateController(store, subscriptions).createSubscription({ tenantId: 't-term', planCode: 'default' } as never, undefined as never),
+    ).rejects.toMatchObject({ code: ErrorCode.LIFECYCLE_TRANSITION_INVALID });
+    expect(AUDIT.recordEvent).toHaveBeenCalledWith(
+      'saas.subscription.create_rejected',
+      expect.objectContaining({ targetLabel: '名称快照缺失（ID: t-term）', result: 'denied' }),
+    );
   });
 
   it.each(['pending', 'active', 'grace', 'frozen'] as const)('%s → 放行开通（frozen 的续订+恢复是合法流程，开通不做隐式迁移）', async (status) => {

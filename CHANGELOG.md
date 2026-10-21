@@ -18,6 +18,14 @@
 
 ## [Unreleased]
 
+### Fixed（P2：终止租户开通订阅的 4030 没有审计记录，运营追溯断链，2026-10-21）
+
+- **问题**：上一条把 terminated 开通订阅拦成 4030 后，该分支**只抛错、不落审计**（当时的测试还专门断言「不落审计」）。这与既有口径不一致：同为 4030 拒绝，`saas.lifecycle.invalid` 会记录（result=denied），订阅开通却不记——运营无法在审计后台回答「这个租户为什么开不了套餐」，只能让开发者翻应用日志。拒绝时无副作用是对的，但**无痕迹**不是。
+- **修复**：新增审计事件 `saas.subscription.create_rejected`（category=tenant / action=create / risk=notice / target=租户）。终止态分支改为**先记录、再原样抛出** 4030：`result=denied`，记录操作人（userId + actorLabel）、租户名快照（`targetLabel`）、请求套餐（`after.planCode`）、租户状态（`after.tenantStatus`）、拒绝码与领域文案（`after.code` / `reason`）；摘要模板「租户「X」开通套餐「Y」被拒绝（已终止，未创建订阅）」。**不创建订阅、不改变租户状态与配额**，错误语义与响应体完全不变。
+- **不做假名**：审计是旁路——名称解析（`findTenantName`）抛错时仍照常 4030 并落「名称快照缺失（ID: …）」，不让一次查询抖动把已确定的拒绝变成 500，也不拿 ID 冒充名称。
+- **测试**：`saas-ops.controller.spec.ts` 53→54 —— 原「terminated → 4030 且不落审计」改为「terminated → 4030 且**必须落一条 denied 审计**」，逐字段锁定（result/targetType/targetId/targetLabel/actorLabel/reason/after）并保留「不创建订阅」断言；新增名称解析故障注入用例（仍 4030、落缺失标记）。
+- **门禁与同步**：`check:audit-events` **33 事件 / 44 写入点**，覆盖矩阵新增 `docs/45` §7.3 一行，mock 注册表（`mock/audit-events.ts`，生成物）重新生成；前端审计页无需改动（事件名称/摘要均由服务端注册表下发，无前端硬编码码表）。无新增错误码、无迁移。
+
 ### Fixed（P1：SaaS 订阅开通未限制终止态，可留下「生效订阅 + 终止租户」矛盾数据，2026-10-21）
 
 - **问题**（业务一致性评审）：`POST /saas/tenant-subscriptions` 只校验租户**存在性**（`findTenantStatus` 返回 null 才拒绝），`active/frozen/terminated` 一律继续开通。而 ADR-0031 的迁移表里 `terminated` 是**终态**（只有 `dispose`，无任何迁出），控制器类上的 `@LifecycleExempt()` 又让运营面绕过 4031 —— 于是管理员可为已终止租户建出一条生效订阅：租户仍终止、业务请求继续 4031，且没有任何合法迁移能恢复。订阅与租户状态自此不一致。

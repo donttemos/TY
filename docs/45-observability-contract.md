@@ -207,6 +207,7 @@ curl -s http://127.0.0.1:3000/metrics | grep '^fw_security_replay_detected_total
 | `saas.plan.create` | notice | success | 同上 | 套餐 | — | `target_label`=套餐名 |
 | `saas.plan.publish` | high | success | 同上 | 套餐（`target_label`=套餐名） | — | 含版本号与配额项数；发布后版本不可变；名称写入时解析，取不到落缺失标记 |
 | `saas.subscription.create` | notice | success | 同上 | 订阅（`target_label`=租户名 · 套餐名） | — | 含套餐编码/版本/到期时间；两侧名称写入时解析，取不到的一侧落缺失标记 |
+| `saas.subscription.create_rejected` | notice | denied | 同上（terminated 分支：先记录再原样抛出 4030） | 租户（`target_label`=租户名） | 领域错误文案 | 未创建订阅、未改变租户状态与配额；`after` 含请求套餐/租户状态/拒绝码；名称解析失败落缺失标记（审计不得反向决定业务成败） |
 | `saas.subscription.cancel` | high | success | 同上 | 订阅（`target_label`=租户名 · 套餐名） | 运营填写（必填建议） | 需复核；原因同时落 `reason` 列；名称口径同开通 |
 | `saas.quota.exceeded` | notice | denied | 同上（4029 分支） | 租户（`target_label`=租户名） | 系统生成 | 硬限额拒绝，未扣减用量；名称写入时解析，取不到落缺失标记 |
 

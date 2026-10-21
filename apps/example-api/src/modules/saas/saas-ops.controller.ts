@@ -49,6 +49,9 @@
  *   拒绝开通（4030，details 带 from/action），避免「生效订阅 + 终止租户」的矛盾数据（终态无迁出）；
  *   frozen/grace/pending 仍放行（frozen 的「续订再恢复」是 ADR-0031 §2.2 合法前置），
  *   开通本身不做隐式迁移。存在性与状态共用同一次 findTenantStatus 读取。
+ * @modified 2026-10-21 donttemo P2 追溯补齐：terminated 拒绝分支补审计
+ *   `saas.subscription.create_rejected`（result=denied，target=租户 + 名称快照，after 含请求套餐/
+ *   租户状态/拒绝码），记录后原样抛出；与 `saas.lifecycle.invalid` 同一留痕口径。
  * @module example-api/saas
  */
 
@@ -267,6 +270,9 @@ export class SaasOpsController {
    * frozen / grace / pending 均放行：ADR-0031 §2.2 的 `frozen -resume-> active` 前置条件正是
    * 「存在有效订阅（新订阅）」，即「先续订、再恢复」是合法流程；但开通本身**不做隐式迁移**
    * （状态写权唯一归属 TenantLifecycleService），运营随后显式 `resume` 即可，两种状态因此区别处理。
+   * 拒绝同时落 `saas.subscription.create_rejected`（result=denied，含租户名快照/请求套餐/
+   * 租户状态/拒绝文案）——与 `saas.lifecycle.invalid` 同口径：先记录、再原样抛出，
+   * 让运营能在审计后台直接回答「这个租户为什么开不了套餐」，不必回查应用日志。
    */
   @Post('tenant-subscriptions')
   @Permissions(PERM.OPS_SAAS_WRITE)
@@ -285,7 +291,7 @@ export class SaasOpsController {
     }
     // 终止态是终态：开通订阅会被误读成「复活」意图，而 terminated 在迁移表里没有迁出（ADR-0031 §2.2）
     if (tenantStatus === 'terminated') {
-      throw new BizError(
+      const denied = new BizError(
         ErrorCode.LIFECYCLE_TRANSITION_INVALID,
         `租户已终止（terminated 为终态，无迁移出口），不能开通订阅：${tenantId}`,
         [
@@ -293,6 +299,21 @@ export class SaasOpsController {
           { field: 'action', message: 'activate' },
         ],
       );
+      // 拒绝必须留痕（与 saas.lifecycle.invalid 同一口径：记录后原样抛出）。
+      // 否则运营在审计后台查不到「为什么这个租户开不了套餐」，只能让开发者翻应用日志。
+      // 审计是旁路：名称解析失败降级为缺失标记，绝不改变错误语义、不产生订阅/配额/状态写入。
+      this.audit.recordEvent('saas.subscription.create_rejected', {
+        userId: operator?.id,
+        targetType: 'tenant',
+        targetId: tenantId,
+        targetLabel: await this.tenantLabelOf(tenantId),
+        actorLabel: operator?.username,
+        result: 'denied',
+        reason: denied.message,
+        after: { planCode, tenantStatus, code: denied.code },
+        ip: request ? clientIp(request) : undefined,
+      });
+      throw denied;
     }
     const sub = await this.subscriptions.create({
       tenantId,

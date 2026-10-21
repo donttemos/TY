@@ -15,6 +15,10 @@
  *   `SNAPSHOT_MISSING_LABEL` / `snapshotMissingLabel`——写入点解析不到目标对象名称时
  *   显式写「名称快照缺失（ID: …）」，与展示侧（admin-web `ACTOR_SNAPSHOT_MISSING`）同口径，
  *   杜绝把 ID 当名称落库（运营视角的 target_label 必须是租户名/套餐名/用户名）。
+ * @modified 2026-10-21 donttemo P2 追溯补齐：新增 `saas.subscription.create_rejected`（denied）——
+ *   终止租户开通订阅的 4030 此前只抛错不落审计，运营无法在审计后台回答「为什么这个租户
+ *   开不了套餐」；口径与 `saas.lifecycle.invalid` 一致（捕获拒绝后记录再原样抛出，
+ *   category=tenant、target=租户、摘要含租户名/套餐/状态）。
  * @module @fw/auth
  */
 
@@ -201,6 +205,26 @@ export const AUDIT_EVENTS: readonly AuditEventDefinition[] = [
     targetType: 'tenant_subscription',
     summaryTemplate: '取消租户订阅（原因：{reason}）',
     changeFields: { reason: { label: '取消原因' } },
+  },
+  {
+    code: 'saas.subscription.create_rejected',
+    name: '开通订阅被拒绝',
+    description: '为不可开通订阅的租户（已终止：terminated 是终态，迁移表只有 dispose、无迁出）发起开通，请求被拒绝；未创建订阅、未改变租户状态与配额。',
+    category: 'tenant',
+    module: 'saas',
+    action: 'create',
+    risk: 'notice',
+    targetType: 'tenant',
+    guidance: '核对租户生命周期状态：已终止租户不可恢复，如需继续使用请新建租户；冻结/宽限租户可先开通订阅，再显式执行 resume（开通本身不做隐式迁移）。',
+    summaryTemplate: '租户「{targetLabel}」开通套餐「{planCode}」被拒绝（{tenantStatus}，未创建订阅）',
+    changeFields: {
+      planCode: { label: '请求套餐' },
+      tenantStatus: {
+        label: '租户状态',
+        valueLabels: { pending: '待开通', active: '正常', grace: '宽限期', frozen: '已冻结', terminated: '已终止' },
+      },
+      code: { label: '拒绝错误码' },
+    },
   },
   {
     code: 'saas.quota.exceeded',

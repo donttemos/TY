@@ -16,6 +16,7 @@ export const MOCK_AUDIT_EVENTS = [
   { code: "saas.plan.publish", name: "发布套餐版本", category: "admin", risk: "high", summaryTemplate: "发布套餐「{targetLabel}」的新版本 v{version}（配额项 {quotaCount} 项）", reviewRequired: false },
   { code: "saas.subscription.create", name: "开通订阅", category: "admin", risk: "notice", summaryTemplate: "为租户开通订阅（套餐 {planCode}，版本 {planVersion}）", reviewRequired: false },
   { code: "saas.subscription.cancel", name: "取消订阅", category: "admin", risk: "high", summaryTemplate: "取消租户订阅（原因：{reason}）", reviewRequired: true },
+  { code: "saas.subscription.create_rejected", name: "开通订阅被拒绝", category: "tenant", risk: "notice", summaryTemplate: "租户「{targetLabel}」开通套餐「{planCode}」被拒绝（{tenantStatus}，未创建订阅）", reviewRequired: false },
   { code: "saas.quota.exceeded", name: "配额超限被拒绝", category: "admin", risk: "notice", summaryTemplate: "租户配额超限，请求被拒绝（指标：{quotaKey}）", reviewRequired: false },
   { code: "saas.lifecycle.activate", name: "开通租户", category: "tenant", risk: "notice", summaryTemplate: "将租户「{targetLabel}」由{from}变更为{to}", reviewRequired: false },
   { code: "saas.lifecycle.freeze", name: "冻结租户", category: "tenant", risk: "high", summaryTemplate: "将租户「{targetLabel}」由{from}变更为{to}（原因：{reason}）", reviewRequired: true },
