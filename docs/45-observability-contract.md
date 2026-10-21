@@ -170,6 +170,13 @@ curl -s http://127.0.0.1:3000/metrics | grep '^fw_security_replay_detected_total
 > 记录来源（`audit_source`）：本表全部为 `domain`（领域层显式记录）。
 > **example-api 已无 `@Audit` 使用点**——12 处装饰器全部改为领域事件，避免「拦截器 + 领域」双写；
 > 拦截器保留在框架内供生成项目使用，其行语义仅为「HTTP 成功返回」，不得作为业务完成证据（ADR-0032 R5）。
+>
+> **租户维度（`tenant_id`）口径**：`AuditService.persist` 的取值顺序是
+> `payload.tenantId ?? 请求上下文 tenantId ?? 0`。平台维护面（`@IgnoreTenant()`）的运营请求通常**不带**
+> `x-tenant-id`，上下文没有租户可回退——因此**面向租户的事件必须显式传 `tenantId=目标租户`**，
+> 否则行落到 0，而平台审计的租户筛选走的正是 `tenant_id` 列，按租户检索时会漏掉这些记录。
+> 套餐等平台级对象**刻意不传**，避免平台配置动作被租户维度命中、泄露到承租户的审计视图。
+> 回归用例：`saas-audit-tenant.integration.spec.ts`（真实库断言落库值 + 按租户可查 + 漏传即落 0 的对照组）。
 
 ### 7.1 认证与权限
 

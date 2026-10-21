@@ -405,6 +405,9 @@ describe('SaasOpsController POST /saas/tenant-subscriptions 生命周期状态�
     expect(AUDIT.recordEvent).toHaveBeenCalledWith(
       'saas.subscription.create_rejected',
       expect.objectContaining({
+        // 租户维度必须显式对齐目标租户：@IgnoreTenant 请求无 x-tenant-id，靠上下文会落 0，
+        // 平台审计按租户筛选就查不到这条拒绝
+        tenantId: 't-term',
         userId: 'u-1',
         actorLabel: 'alice',
         targetType: 'tenant',
@@ -430,8 +433,17 @@ describe('SaasOpsController POST /saas/tenant-subscriptions 生命周期状态�
     ).rejects.toMatchObject({ code: ErrorCode.LIFECYCLE_TRANSITION_INVALID });
     expect(AUDIT.recordEvent).toHaveBeenCalledWith(
       'saas.subscription.create_rejected',
-      expect.objectContaining({ targetLabel: '名称快照缺失（ID: t-term）', result: 'denied' }),
+      expect.objectContaining({ tenantId: 't-term', targetLabel: '名称快照缺失（ID: t-term）', result: 'denied' }),
     );
+  });
+
+  it('套餐事件刻意不带 tenantId（平台级对象，且订阅相关事件必须带）', async () => {
+    const plans = makePlans();
+    await makeController(makeStore(), plans).createPlan({ code: 'pro', name: '专业版' });
+    const payload = AUDIT.recordEvent.mock.calls.find((c) => c[0] === 'saas.plan.create')?.[1] as Record<string, unknown>;
+    expect(payload).toBeDefined();
+    // 带上 tenantId 会让平台套餐动作被租户维度的审计查询命中
+    expect(payload.tenantId).toBeUndefined();
   });
 
   it.each(['pending', 'active', 'grace', 'frozen'] as const)('%s → 放行开通（frozen 的续订+恢复是合法流程，开通不做隐式迁移）', async (status) => {
@@ -576,7 +588,7 @@ describe('SaasOpsController 审计 target_label 名称快照（P1 / PRD-015 FR-1
     await controller.createSubscription({ tenantId: 't1', planCode: 'pro' } as never, undefined as never);
     expect(AUDIT.recordEvent).toHaveBeenCalledWith(
       'saas.subscription.create',
-      expect.objectContaining({ targetId: 'sub-1', targetLabel: '示例企业 · 专业版' }),
+      expect.objectContaining({ tenantId: 't1', targetId: 'sub-1', targetLabel: '示例企业 · 专业版' }),
     );
   });
 
@@ -592,7 +604,7 @@ describe('SaasOpsController 审计 target_label 名称快照（P1 / PRD-015 FR-1
     await controller.createSubscription({ tenantId: 't-ghost', planCode: 'pro' } as never, undefined as never);
     expect(AUDIT.recordEvent).toHaveBeenCalledWith(
       'saas.subscription.create',
-      expect.objectContaining({ targetId: 'sub-2', targetLabel: '名称快照缺失（ID: t-ghost） · 专业版' }),
+      expect.objectContaining({ tenantId: 't-ghost', targetId: 'sub-2', targetLabel: '名称快照缺失（ID: t-ghost） · 专业版' }),
     );
   });
 
@@ -607,7 +619,7 @@ describe('SaasOpsController 审计 target_label 名称快照（P1 / PRD-015 FR-1
     await controller.cancelSubscription('sub-9', { reason: '客户降级' } as never, undefined as never);
     expect(AUDIT.recordEvent).toHaveBeenCalledWith(
       'saas.subscription.cancel',
-      expect.objectContaining({ targetId: 'sub-9', targetLabel: '示例企业 · 专业版' }),
+      expect.objectContaining({ tenantId: 't1', targetId: 'sub-9', targetLabel: '示例企业 · 专业版' }),
     );
   });
 
@@ -624,7 +636,7 @@ describe('SaasOpsController 审计 target_label 名称快照（P1 / PRD-015 FR-1
     ).rejects.toMatchObject({ code: ErrorCode.QUOTA_EXCEEDED });
     expect(AUDIT.recordEvent).toHaveBeenCalledWith(
       'saas.quota.exceeded',
-      expect.objectContaining({ targetId: 't1', targetLabel: '示例企业', result: 'denied' }),
+      expect.objectContaining({ tenantId: 't1', targetId: 't1', targetLabel: '示例企业', result: 'denied' }),
     );
   });
 
@@ -641,7 +653,7 @@ describe('SaasOpsController 审计 target_label 名称快照（P1 / PRD-015 FR-1
     ).rejects.toMatchObject({ code: ErrorCode.QUOTA_EXCEEDED });
     expect(AUDIT.recordEvent).toHaveBeenCalledWith(
       'saas.quota.exceeded',
-      expect.objectContaining({ targetId: 't-ghost', targetLabel: '名称快照缺失（ID: t-ghost）' }),
+      expect.objectContaining({ tenantId: 't-ghost', targetId: 't-ghost', targetLabel: '名称快照缺失（ID: t-ghost）' }),
     );
   });
 
@@ -652,7 +664,7 @@ describe('SaasOpsController 审计 target_label 名称快照（P1 / PRD-015 FR-1
     await controller.transition('t1', { action: 'freeze', reason: '欠费' } as never, undefined as never);
     expect(AUDIT.recordEvent).toHaveBeenCalledWith(
       'saas.lifecycle.freeze',
-      expect.objectContaining({ targetId: 't1', targetLabel: '示例企业' }),
+      expect.objectContaining({ tenantId: 't1', targetId: 't1', targetLabel: '示例企业' }),
     );
 
     const invalidLifecycle = {
@@ -678,7 +690,7 @@ describe('SaasOpsController 审计 target_label 名称快照（P1 / PRD-015 FR-1
     await controller.transition('t-ghost', { action: 'activate' } as never, undefined as never);
     expect(AUDIT.recordEvent).toHaveBeenCalledWith(
       'saas.lifecycle.activate',
-      expect.objectContaining({ targetId: 't-ghost', targetLabel: '名称快照缺失（ID: t-ghost）' }),
+      expect.objectContaining({ tenantId: 't-ghost', targetId: 't-ghost', targetLabel: '名称快照缺失（ID: t-ghost）' }),
     );
   });
 });

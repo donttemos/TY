@@ -21,6 +21,10 @@
  *   GET  /saas/tenants/:id/lifecycle/logs    需 ops:saas:read  —— 迁移历史
  *   全部操作经 M12 审计契约（AuditService.record，userId/ip 随请求上下文）；写操作补 after 快照。
  *   类级 @LifecycleExempt()：frozen/terminated 租户的运营面（含迁移出口 resume）必须可用（ADR-0031 §3.2）。
+ *   **审计租户维度**（PRD-015 FR-15-06）：本类整类 @IgnoreTenant()，运营请求通常不带 x-tenant-id，
+ *   `AuditService.persist` 的 `entry.tenantId ?? 请求上下文 ?? 0` 会因此落到 0；而平台审计的租户筛选
+ *   走 `tenant_id` 列。所以**面向租户的事件必须显式传 `tenantId=目标租户`**（订阅开通/取消/拒绝、
+ *   配额超限、生命周期六动作与非法迁移）；套餐事件是平台级对象，刻意不传，避免平台配置动作被租户维度命中。
  * @author donttemo
  * @created 2026-10-19
  * @modified 2026-10-20 M14/PRD-014 FR-14-03：statusOf 助手转正为 GET lifecycle/status 端点（状态 + allowedActions），
@@ -52,6 +56,10 @@
  * @modified 2026-10-21 donttemo P2 追溯补齐：terminated 拒绝分支补审计
  *   `saas.subscription.create_rejected`（result=denied，target=租户 + 名称快照，after 含请求套餐/
  *   租户状态/拒绝码），记录后原样抛出；与 `saas.lifecycle.invalid` 同一留痕口径。
+ * @modified 2026-10-21 donttemo P2 租户维度修复：面向租户的六处事件显式补 `tenantId=目标租户`——
+ *   @IgnoreTenant() 请求无 x-tenant-id，persist 回退上下文后会归一为 0（真机实测 tenant_id=0），
+ *   导致平台审计按租户筛选漏记录；订阅取消取回查行的归属（查不到则宁缺不猜），
+ *   套餐事件为平台级对象刻意不传。
  * @module example-api/saas
  */
 
@@ -203,6 +211,8 @@ export class SaasOpsController {
     const plan = await this.plans.createPlan({ code: body.code.trim(), name: body.name.trim(), description: body.description ?? null });
     this.audit.recordEvent('saas.plan.create', {
       userId: operator?.id,
+      // 套餐是平台级对象、不属于任何租户：此处**刻意不传** tenantId（保持上下文/0），
+      // 否则平台套餐动作会被租户维度的审计查询命中，等于把平台配置动作暴露给租户。
       targetId: plan.id,
       targetLabel: plan.name,
       actorLabel: operator?.username,
@@ -238,6 +248,7 @@ export class SaasOpsController {
     const withQuotas = await this.plans.listPlanQuotas(version.id);
     this.audit.recordEvent('saas.plan.publish', {
       userId: operator?.id,
+      // 同 plan.create：套餐版本属平台级对象，刻意不传 tenantId
       targetId: planId,
       targetLabel: await this.planLabelOf(planId),
       actorLabel: operator?.username,
@@ -304,6 +315,9 @@ export class SaasOpsController {
       // 审计是旁路：名称解析失败降级为缺失标记，绝不改变错误语义、不产生订阅/配额/状态写入。
       this.audit.recordEvent('saas.subscription.create_rejected', {
         userId: operator?.id,
+        // 租户维度必须显式传目标租户：`@IgnoreTenant()` 的运营请求通常不带 x-tenant-id，
+        // persist 会回退请求上下文（缺失即 0），而平台审计的租户筛选走的就是 tenant_id 列。
+        tenantId,
         targetType: 'tenant',
         targetId: tenantId,
         targetLabel: await this.tenantLabelOf(tenantId),
@@ -323,6 +337,7 @@ export class SaasOpsController {
     });
     this.audit.recordEvent('saas.subscription.create', {
       userId: operator?.id,
+      tenantId, // 同拒绝分支：目标租户即租户维度，不依赖请求上下文
       targetId: sub.id,
       targetLabel: await this.subscriptionLabelOf(sub),
       actorLabel: operator?.username,
@@ -347,6 +362,9 @@ export class SaasOpsController {
     }
     this.audit.recordEvent('saas.subscription.cancel', {
       userId: operator?.id,
+      // 租户维度取订阅行自身归属；回查失败（并发硬删/库抖动）时无从得知，宁缺不猜——
+      // 存储层归一为 0，展示侧仍靠 targetLabel 可读，不会伪造到某个租户名下
+      ...(cancelled?.tenantId ? { tenantId: cancelled.tenantId } : {}),
       targetId: id,
       targetLabel: cancelled ? await this.subscriptionLabelOf(cancelled) : snapshotMissingLabel(id),
       actorLabel: operator?.username,
@@ -486,6 +504,7 @@ export class SaasOpsController {
       if (e instanceof Error && (e as { code?: number }).code === 4029) {
         this.audit.recordEvent('saas.quota.exceeded', {
           userId: operator?.id,
+          tenantId, // 目标租户（用量上报路径参数），供平台审计按租户筛选
           targetId: tenantId,
           targetLabel: await this.tenantLabelOf(tenantId),
           actorLabel: operator?.username,
@@ -636,6 +655,7 @@ export class SaasOpsController {
       if (error instanceof BizError && error.code === ErrorCode.LIFECYCLE_TRANSITION_INVALID) {
         this.audit.recordEvent('saas.lifecycle.invalid', {
           userId: operator?.id,
+          tenantId, // 目标租户即租户维度（运营面不带 x-tenant-id，不能靠上下文回退）
           targetId: tenantId,
           targetLabel: await this.tenantLabelOf(tenantId),
           actorLabel: operator?.username,
@@ -649,6 +669,7 @@ export class SaasOpsController {
     }
     this.audit.recordEvent(LIFECYCLE_EVENTS[body.action], {
       userId: operator?.id,
+      tenantId, // 六动作同口径：租户维度 = 被迁移的租户
       targetId: tenantId,
       targetLabel: await this.tenantLabelOf(tenantId),
       actorLabel: operator?.username,

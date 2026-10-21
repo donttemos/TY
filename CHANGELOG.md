@@ -18,6 +18,14 @@
 
 ## [Unreleased]
 
+### Fixed（P2：SaaS 运营审计落错租户维度，平台审计按租户筛选查不到，2026-10-21）
+
+- **问题**：`AuditService.persist` 的取值顺序是 `payload.tenantId ?? 请求上下文 tenantId ?? 0`，而 `SaasOpsController` 整类 `@IgnoreTenant()`、运营请求通常不带 `x-tenant-id` —— 面向租户的事件**从未显式传 `tenantId`**，于是全部落到 `tenant_id=0`（上一轮真机取证那条拒绝审计就是 `tenant_id=0`，已复现）。平台审计的租户筛选走的正是 `tenant_id` 列（`where.tenantId`），运营按目标租户检索时这些记录**一条都出不来**：拒绝留痕写了，但检索路径是断的。
+- **修复（显式对齐目标租户）**：六处面向租户的事件补 `tenantId=目标租户`——`saas.subscription.create`、`saas.subscription.create_rejected`、`saas.subscription.cancel`（取取消后订阅行的归属；回查失败时宁缺不猜，不伪造归属）、`saas.quota.exceeded`、`saas.lifecycle.*` 六动作、`saas.lifecycle.invalid`。`saas.plan.create` / `saas.plan.publish` **刻意不传**——套餐是平台级对象，带上会被租户维度的查询命中，等于把平台配置动作暴露给租户。
+- **为什么不改 `persist` 隐式推导**（如 `targetType==='tenant'` 时拿 `targetId` 兜底）：写入语义必须由调用点声明，隐式推导会让「这条审计属于哪个租户」变成框架猜的；本轮的代价是调用纪律，用测试兜住。
+- **测试**：新增真实库集成 `saas-audit-tenant.integration.spec.ts`（3 例，**真实 PrismaAuthStore + 真实 AuditService + 真实 PrismaSaasStore**）：① 无请求上下文的运营拒绝 → 落库 `tenant_id=21`、平台按该租户查得到、按 0 查不到；② 对照组：同一事件漏传 `tenantId` → 落 0 且按目标租户查不到（把修复前的真实后果固化）；③ 套餐事件 → 落 0、任何租户都查不到。控制器单测 54→55（既有 8 处审计断言补 `tenantId`，新增「套餐事件刻意不带 tenantId」）。
+- **文档**：`docs/45` §7 补「租户维度口径」（取值顺序 / 必须显式传 / 平台级对象不传 / 回归用例）。无新增事件、错误码与迁移。
+
 ### Fixed（P2：终止租户开通订阅的 4030 没有审计记录，运营追溯断链，2026-10-21）
 
 - **问题**：上一条把 terminated 开通订阅拦成 4030 后，该分支**只抛错、不落审计**（当时的测试还专门断言「不落审计」）。这与既有口径不一致：同为 4030 拒绝，`saas.lifecycle.invalid` 会记录（result=denied），订阅开通却不记——运营无法在审计后台回答「这个租户为什么开不了套餐」，只能让开发者翻应用日志。拒绝时无副作用是对的，但**无痕迹**不是。
