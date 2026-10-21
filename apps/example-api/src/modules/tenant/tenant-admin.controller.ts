@@ -20,6 +20,9 @@
  * @created 2026-10-15
  * @modified 2026-10-17 donttemo M12 W1（PRD-012 OBS-02）：裸抛迁移至 BizError 统一码（ADR-0025 三类治理）
  * @modified 2026-10-21 donttemo P0 收口：状态变更改走生命周期状态机（停用=freeze / 启用=resume|activate）
+ * @modified 2026-10-21 donttemo P2 租户维度修复：四处 `audit.record` 显式补 `tenantId=目标租户`——
+ *   本类整类 @IgnoreTenant()、请求不带 x-tenant-id，persist 会回退成 0，平台审计按租户筛选
+ *   查不到「该租户被创建 / 改名 / 停用 / 迁移」（真实库集成用例：saas-audit-tenant.integration.spec.ts）。
  * @module example-api/tenant
  */
 
@@ -154,6 +157,9 @@ export class TenantAdminController {
       userId: operator,
       module: 'tenant',
       action: 'create',
+      // 租户维度 = 新建的租户：本类整类 @IgnoreTenant()，请求通常不带 x-tenant-id，
+      // 不显式传会回退成 0，平台审计按租户筛选将查不到「该租户被创建」
+      tenantId: created.id,
       targetType: 'tenant',
       targetId: created.id,
       after: { code: created.code, name: created.name, isolation: created.isolation, plan: created.plan },
@@ -199,6 +205,7 @@ export class TenantAdminController {
       userId: operator,
       module: 'tenant',
       action: 'update',
+      tenantId: id, // 同 create：@IgnoreTenant 下必须显式声明被操作的租户
       targetType: 'tenant',
       targetId: id,
       before: { name: before.name, plan: before.plan, status: before.status, expireAt: before.expireAt },
@@ -235,6 +242,7 @@ export class TenantAdminController {
       userId: operator,
       module: 'tenant',
       action: 'delete',
+      tenantId: id, // 停用是租户级事实：按该租户检索必须能命中
       targetType: 'tenant',
       targetId: id,
       before: { code: before.code, status: before.status },
@@ -358,6 +366,7 @@ export class TenantAdminController {
       userId: operator,
       module: 'tenant',
       action: 'update',
+      tenantId: id, // 隔离级别迁移同属租户级事实
       targetType: 'tenant',
       targetId: id,
       before: { isolation: ctx.fromIsolation },

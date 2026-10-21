@@ -8,6 +8,8 @@
  *   ② 平台审计的租户筛选（`where.tenantId`）能按该租户查到这条记录——这正是运营的实际检索路径。
  *   反向对照组证明「不显式传就落 0、按租户查不到」不是猜测，而是必须被修复的行为；
  *   套餐事件（平台级对象）同样锁定为不落租户维度，避免平台配置动作被租户查询命中。
+ *   同一契约也覆盖 `/tenants` 租户管理面（整类 `@IgnoreTenant()`，走的是 `audit.record` 低层通道）：
+ *   开租户的审计必须落新租户维度，否则「该租户被创建」在平台审计按租户检索时不可见。
  *
  *   本地/CI 基础作业：自建临时 SQLite 并按序执行全量迁移 DDL（与 audit-tenant-isolation 集成同款）。
  *   真机取证口径见 CHANGELOG / docs/64。
@@ -22,9 +24,12 @@ import path from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import { AuditService, type AuditLogRecord, type RequestUser } from '@fw/auth';
 import { ErrorCode } from '@fw/core';
+import type { Request } from 'express';
 import { PrismaAuthStore } from '../auth/prisma-auth-store.js';
 import { PrismaSaasStore } from './prisma-saas-store.js';
 import { SaasOpsController } from './saas-ops.controller.js';
+import { TenantAdminController } from '../tenant/tenant-admin.controller.js';
+import { PrismaTenantAdminStore } from '../tenant/tenant-admin.store.js';
 import { applyAllSqliteMigrations } from '../../testing/apply-sqlite-migrations.js';
 
 /** 已终止租户（终态，迁移表只有 dispose）：开通订阅必被拒 */
@@ -40,6 +45,9 @@ let authStore: PrismaAuthStore | null = null;
 let saasStore: PrismaSaasStore | null = null;
 let audit: AuditService | null = null;
 let controller: SaasOpsController | null = null;
+
+/** 请求桩（控制器只关心 headers / ip） */
+const REQUEST = { headers: {}, ip: '127.0.0.1' } as unknown as Request;
 
 /** 平台运营操作人（持有 ops:saas:write；权限判定由守卫覆盖，本用例只关心审计落库） */
 const OPERATOR: RequestUser = {
@@ -149,5 +157,36 @@ describe('SaaS 运营审计的租户维度（真实库）', () => {
     expect(row.tenantId).toBe('0');
     expect(await findAudit('saas.plan.create', TERMINATED)).toBeNull();
     expect(await findAudit('saas.plan.create', ACTIVE)).toBeNull();
+  });
+});
+
+describe('租户管理面审计的租户维度（/tenants 同为 @IgnoreTenant，走 audit.record 低层通道）', () => {
+  it('开租户：审计落新租户维度，平台按该租户可查、按 0 查不到', async () => {
+    const adminStore = new PrismaTenantAdminStore(prisma as never);
+    const adminController = new TenantAdminController(
+      adminStore as never,
+      { invalidate: () => undefined } as never, // TenantService：开租户后失效解析缓存
+      { create: async () => ({ id: 'job-stub' }) } as never, // 本用例不触达异步任务
+      audit!,
+      { register: () => undefined } as never,
+      {} as never, // 生命周期服务：开租户不迁移状态
+    );
+    const created = await adminController.create(
+      { code: 'it-new-tenant', name: '集成新建租户', isolation: 'shared' } as never,
+      OPERATOR.id,
+      REQUEST,
+    );
+
+    const row = await waitForRow(async () => {
+      const page = await authStore!.pageAuditLogs({ page: 1, pageSize: 10, module: 'tenant', action: 'create', targetId: created.id });
+      return page.items[0] ?? null;
+    });
+    expect(row.tenantId).toBe(created.id); // 落新租户，不是 0
+    expect(row.targetType).toBe('tenant');
+
+    const byTenant = await authStore!.pageAuditLogs({ page: 1, pageSize: 10, module: 'tenant', action: 'create', tenantId: created.id });
+    expect(byTenant.items.some((item) => item.targetId === created.id)).toBe(true);
+    const byZero = await authStore!.pageAuditLogs({ page: 1, pageSize: 10, module: 'tenant', action: 'create', tenantId: '0' });
+    expect(byZero.items.some((item) => item.targetId === created.id)).toBe(false);
   });
 });

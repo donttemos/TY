@@ -172,11 +172,14 @@ curl -s http://127.0.0.1:3000/metrics | grep '^fw_security_replay_detected_total
 > 拦截器保留在框架内供生成项目使用，其行语义仅为「HTTP 成功返回」，不得作为业务完成证据（ADR-0032 R5）。
 >
 > **租户维度（`tenant_id`）口径**：`AuditService.persist` 的取值顺序是
-> `payload.tenantId ?? 请求上下文 tenantId ?? 0`。平台维护面（`@IgnoreTenant()`）的运营请求通常**不带**
-> `x-tenant-id`，上下文没有租户可回退——因此**面向租户的事件必须显式传 `tenantId=目标租户`**，
-> 否则行落到 0，而平台审计的租户筛选走的正是 `tenant_id` 列，按租户检索时会漏掉这些记录。
+> `payload.tenantId ?? 请求上下文 tenantId ?? 0`。平台维护面（`@IgnoreTenant()`：`/saas/*` 与 `/tenants`）
+> 的运营请求通常**不带** `x-tenant-id`，上下文没有租户可回退——因此**面向租户的事件必须显式传
+> `tenantId=目标租户`**（SaaS：订阅开通/取消/拒绝、配额超限、生命周期六动作与非法迁移；
+> 租户管理面：开租户/改名/停用/隔离级别迁移），否则行落到 0，而平台审计的租户筛选走的正是
+> `tenant_id` 列，按租户检索时会漏掉这些记录。
 > 套餐等平台级对象**刻意不传**，避免平台配置动作被租户维度命中、泄露到承租户的审计视图。
-> 回归用例：`saas-audit-tenant.integration.spec.ts`（真实库断言落库值 + 按租户可查 + 漏传即落 0 的对照组）。
+> 回归用例：`saas-audit-tenant.integration.spec.ts`（真实库断言落库值 + 按租户可查 + 漏传即落 0 的对照组 +
+> `/tenants` 开租户用例）。历史 `tenant_id=0` 行**不回填**（审计行是事实，不做推断性改写）。
 
 ### 7.1 认证与权限
 

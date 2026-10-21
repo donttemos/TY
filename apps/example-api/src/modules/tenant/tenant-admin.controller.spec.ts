@@ -182,6 +182,7 @@ describe('TenantAdminController', () => {
         userId: 'u-1',
         module: 'tenant',
         action: 'create',
+        tenantId: created.id, // 租户维度必须显式（@IgnoreTenant 无上下文本租户可回退）
         targetType: 'tenant',
         ip: '10.0.0.9',
       }));
@@ -209,6 +210,7 @@ describe('TenantAdminController', () => {
       await controller.update('1', { name: '新名', status: 0 }, 'u-1', request);
       expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
         action: 'update',
+        tenantId: '1',
         before: expect.objectContaining({ name: 'ACME 公司', status: 1 }),
         after: expect.objectContaining({ name: '新名', status: 3 }),
       }));
@@ -242,6 +244,7 @@ describe('TenantAdminController', () => {
       expect(rows.find((t) => t.id === '1')?.status).toBe(3);
       expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
         action: 'delete',
+        tenantId: '1',
         after: expect.objectContaining({ status: 3, affectedUsers: 3 }),
       }));
     });
@@ -277,7 +280,7 @@ describe('TenantAdminController', () => {
     });
 
     it('合法迁移：派发任务返回 JobView（pending + jobId），执行体完成控制面切换', async () => {
-      const { controller, jobs, request } = createController();
+      const { controller, jobs, audit, request } = createController();
       const job = (await controller.migrate('1', { isolation: 'dedicated', dbUrl: 'postgresql://u:p@h:5432/acme' }, 'u-1', request)) as {
         id: string;
         type: string;
@@ -296,6 +299,10 @@ describe('TenantAdminController', () => {
       }
       expect(view?.status).toBe('succeeded');
       expect(view?.progress).toBe(100);
+      // 隔离级别迁移属租户级事实：审计必须带目标租户维度，否则平台按租户查不到
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'update', tenantId: '1', targetId: '1', targetType: 'tenant' }),
+      );
     });
   });
 });
