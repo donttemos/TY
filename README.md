@@ -178,6 +178,7 @@ fw gen crud order
 | [云服务器裸机部署手册](./docs/61-bare-metal-deploy.md) | 不用容器的服务器部署：systemd 进程托管、release 软链发版与秒级回滚、nginx 静态托管与 HTTPS、数据库档位与 provider 约束、备份监控与排障速查 |
 | [1Panel 真机部署手册](./docs/62-1panel-real-deploy.md) | 已有 1Panel 面板的服务器落地：OpenResty host 网络反代、容器化数据库的宿主端口接入、PostgreSQL schema 变体与迁移重建、2C2G 内存约束（V8 堆 + cgroup MemoryMax）、站点目录与 HTTPS |
 | [1Panel 真机部署验证报告](./docs/63-1panel-real-deploy-verification.md) | 上述手册在腾讯云 2C2G4M 上的**完整实测记录**：逐项耗时与内存数据、三条约束的实测结论、端到端冒烟结果、**5 个只有真机才会暴露的缺陷**（队列权限缺失、dedicated 租户连接串、pnpm bin 时序、迁移计数、镜像配置）与结清后的遗留清单 |
+| [M15 真机验收报告](./docs/64-m15-real-machine-acceptance.md) | M15 审计线在 cs.donttemo.top 的部署与端到端验收：七类事件查库取证、四档 dataScope 与详情越权、租户隔离端到端、导出范围与脱敏扫描、三处同口径；单租户档位/配置中心/归档三项环境限制与 4 条真机缺陷线索，零 AC 勾选 |
 | [CHANGELOG](./CHANGELOG.md) | 版本规则与变更记录（**v0.7.0 已发布**：M13 SaaS 运营基础——套餐/订阅/配额/用量/生命周期全链 + 主线 B 文档四件套） |
 | [ADR 架构决策记录](./docs/adr/README.md) | 24 条决策（0001–0027，0017–0019 跳号）：NestJS / Prisma / monorepo / 缓存 / 异步任务 / 鉴权 / 前端 / 可切换性 / 测试 / 代码生成 / 可观测 / i18n / 暗色模式 / 存储端口 / 认证核心 M11 系列 |
 | [编码 Git PR 规范](./docs/70-engineering-standards.md) | 编码规范、**中文注释规范（文件头含作者与日期）**、反模式清单、分支与提交约定、PR 与评审规则 |

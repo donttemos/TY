@@ -18,6 +18,14 @@
 
 ## [Unreleased]
 
+### Security（M15 真机验收：cs.donttemo.top 部署 + 端到端取证，2026-10-21）
+
+- **部署**：真机由 `c192885`（pre-M15）升级至 `2f30084`（origin/main，含平台审计前端与双租户验收自动化，CI run 107 四腿全绿）。按 docs/62 手册路径：PG 备份 → 服务器 git 凭据与常驻 clone（`/opt/fw/shared/repo`，此前缺失本次自建）→ `bare-metal-deploy.sh`（PRISMA_SCHEMA=pg，WEB_SYNC_DIR=站点目录）→ 94s 完成（install 16.5s / generate 358ms / 15 包构建 / 前端 1928 模块含 platform chunk）→ 应用迁移 `20261020120000_add_audit_business_snapshot` → 软链切换 + 重启 → 健康检查通过（未触发回滚）→ reseed（6 角色四档 dataScope + tenant_auditor / 21 账号 / 4 租户）。
+- **取证（A 级，真机 PG 直查 + 公网 HTTPS）**：六/七类事件触发落库（auth.login/failed、authz.denied、plan.create/publish、subscription.create/cancel、quota.exceeded 4029、lifecycle.freeze/resume，另 permission_grant 与 tenant.create）；四态 success 50 / denied 10；domain 行快照缺失 0；**target_label 名称快照无裸 ID**（「存量单租户 · 基础版」「真机验收租户 · 真机验收套餐」）；四档 dataScope 集合单调包含 8/8 + 详情越权 404 7/7；租户隔离查询侧全过（他租户 tenant_id → 4001、跨租户详情 404、platform 无码 3002、admin 普通列表不跨租户、platform 全局+收窄）；导出范围与列表一致（carol/alice 逐条一致）+ 23 列追加式业务列 + 敏感字样零命中；三处同口径（注册表名称/风险 == CSV，详情 summary/result == CSV）。
+- **环境限制（不满足 AC 勾选标准，如实登记）**：① 单租户档位（TENANT_ENABLED=false）下审计写入 tenant_id 恒 0——开启多租户会使 apex 域名登录 4001（fail-closed），与现网单域名部署不兼容，多租户写入证据以 CI run 107（A 级）为准；② CONFIG_CENTER_ENABLED=false，config.change 真机不可触发（1004）；③ 归档任务未运行（archives 0 行），三处同口径归档腿与归档双账号核对未取证；④ failed/unknown 四态、浏览器步骤、真机数据量性能口径未做。
+- **真机暴露的缺陷线索**：① `POST /saas/tenant-subscriptions` 接受空 tenantId（建出 tenant_id='' 行，已清理 2 条残留）——输入校验缺口，建议下一迭代修；② dept_leader/dept_member/self_updater 示范角色未授 auth:me（/auth/me 3002）——种子缺口；③ 登录限流 ~10 次/分钟/IP，批量验收需 12s 间距（脚本已适配）；④ seed truncate 不清 SaaS 表，reseed 后旧订阅被新租户 ID 继承（观察项）。
+- **文档**：新增 [docs/64 M15 真机验收报告](./docs/64-m15-real-machine-acceptance.md)（部署实测数据、逐项证据、环境限制、缺陷线索、复跑方式）；PRD-015 §7.4 步骤 1~8（API 侧）已执行，9~13（浏览器/前端）待后续窗口；**零 AC 勾选**。
+
 ### Added（P2：平台审计前端入口 + 双租户验收自动化，2026-10-21）
 
 - **前端平台审计视图**：`apps/admin-web` 审计页支持 `crossTenant` 双模式——普通审计页仍走 `/audit-logs*`（服务端强制当前租户），新增「系统管理 → 平台审计」独立入口（`/system/audit-logs/platform`，菜单权限码 `system:tenant:ignore`）走 `/audit-logs/platform*` 维护端点。页面顶部常驻「查询范围：单租户（当前租户）/ 跨租户（平台维护入口）」横幅；跨租户模式默认显示租户列与租户筛选，详情/导出按模式分流；普通模式不再渲染无法使用的租户筛选（该维度由服务端强制为当前租户）。平台页缺 `system:tenant:ignore` 或 `audit:read` 时不渲染数据区（服务端守卫仍为最终防线）；**普通端点行为与授权未放宽**。mock 补 `/audit-logs/platform*` 三个端点（业务码 + `system:tenant:ignore` 双权限，与后端 `@IgnoreTenant` 守卫同构）与跨租户演示行，普通端点行集/产物不变。
