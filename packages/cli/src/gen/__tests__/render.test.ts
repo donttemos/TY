@@ -217,6 +217,16 @@ describe('buildPlan seed 产物', () => {
     expect(seed).toContain("path: '/orders'");
     expect(seed).toContain("component: 'views/order/index'");
   });
+
+  it('定向种子把自己建的权限授给 admin 角色（否则登录后菜单被权限过滤掉）', () => {
+    const seed = contentOf(planOf(), 'prisma/seed/order.seed.ts');
+    // 只建权限不授权时，/auth/menus 会按用户权限码过滤，新模块在后台完全不出现
+    expect(seed).toContain("const ADMIN_ROLE_CODE = 'admin'");
+    // role.code 不是唯一键：用 findUnique 会在运行期直接抛错
+    expect(seed).toContain('prisma.role.findFirst({');
+    expect(seed).toContain('roleId_permissionId');
+    expect(seed).toContain('await grantToAdminRole()');
+  });
 });
 
 describe('范围与匹配', () => {

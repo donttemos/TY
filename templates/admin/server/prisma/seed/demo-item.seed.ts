@@ -34,6 +34,36 @@ const MENU = {
   sort: 0,
 };
 
+/** 超级管理员角色码：新模块的权限必须授给它，否则登录后菜单里根本没有这一项 */
+const ADMIN_ROLE_CODE = 'admin';
+
+/**
+ * 把本次生成的权限点授给超级管理员（幂等）
+ * @returns 实际授予的条数（角色不存在时返回 0，不视为失败）
+ * @description 只建权限点不授权，`/auth/menus` 会按用户权限码过滤掉这个菜单——用户在后台
+ *   看不到刚生成的模块，只能以为「生成失败」。
+ */
+async function grantToAdminRole(): Promise<number> {
+  // role.code 不是唯一键（多租户下可重名），只能按 code + 未删除查首条
+  const role = await prisma.role.findFirst({
+    where: { code: ADMIN_ROLE_CODE, deletedAt: null },
+    orderBy: { createdAt: 'asc' },
+  });
+  if (!role) return 0;
+  let granted = 0;
+  for (const permission of PERMISSIONS) {
+    const row = await prisma.permission.findUnique({ where: { code: permission.code } });
+    if (!row) continue;
+    await prisma.rolePermission.upsert({
+      where: { roleId_permissionId: { roleId: role.id, permissionId: row.id } },
+      create: { roleId: role.id, permissionId: row.id },
+      update: {},
+    });
+    granted += 1;
+  }
+  return granted;
+}
+
 /**
  * 幂等写入DemoItem权限点与菜单
  * 权限点按 code 唯一键 upsert；菜单按 path 查重后更新或新建（可重复执行）
@@ -52,7 +82,10 @@ export async function seedDemoItemPermissions(): Promise<void> {
   } else {
     await prisma.menu.create({ data: MENU });
   }
-  console.log(`[seed] 已写入 DemoItem 权限点 ${PERMISSIONS.length} 个与菜单 1 条`);
+  const granted = await grantToAdminRole();
+  console.log(
+    `[seed] 已写入 DemoItem 权限点 ${PERMISSIONS.length} 个与菜单 1 条（授给 ${ADMIN_ROLE_CODE} 角色 ${granted} 条）`,
+  );
 }
 
 // 允许独立执行（pnpm exec tsx prisma/seed/demo-item.seed.ts），被 seed.ts 引用时也可复用
