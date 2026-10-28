@@ -52,6 +52,10 @@
 # @modified 2026-10-18 donttemo 新增双进程（双节点）一致性冒烟（smoke-dual-node.mjs）：自起 A/B 两实例
 #   共享同一 Redis + 同一库 + 同一 CACHE_PREFIX，把「双节点实测方案」的 T2~T5.1 固化为 CI 门禁；
 #   真机 Windows↔云同用例 30/30 通过（记录见根目录《Redis 多实例测试.md》§10）。
+# @modified 2026-10-22 donttemo M16/PRD-016：新增 Docker 镜像构建门禁（FR-16-08）——对 deploy/Dockerfile
+#   的 runtime 与 migrator 目标真实构建，并对镜像内容做静态断言（框架包 dist / Prisma Client 与查询引擎 /
+#   迁移 SQL / prisma CLI + tsx），再挂真实 PostgreSQL 完成「migrate deploy + seed + 起服务 + /ready」
+#   运行冒烟。缺此门禁时「宿主 CI 绿但镜像缺件」只在用户 fw deploy 现场才第一次暴露
 # @module ci
 
 name: CI
@@ -507,3 +511,167 @@ jobs:
         env:
           ROTATION_TEST_DB_URL: ${{ matrix.rotation_url }}
         run: node scripts/dual-instance-rotation.mjs
+
+  # ---------- Docker 镜像门禁（PRD-016 FR-16-08）：真实构建 + 内容断言 + 运行冒烟 ----------
+  # 宿主侧 CI（base/integration）全绿不等于镜像可用：镜像在 Alpine + 容器内 pnpm 全新安装下构建，
+  # 「依赖清单漏 COPY」「prisma generate 没跑」「迁移文件被 .dockerignore 误伤」「运行期缺 libc/openssl」
+  # 这类缺陷只有真实 build + run 才暴露。与 base/golden-path 并行（独立 runner、独立验证维度）。
+  # ① 双目标构建：runtime（应用镜像）+ migrator（迁移/种子镜像），PRISMA_SCHEMA 与 compose 生产默认一致（pg）；
+  # ② 静态断言：逐项检查镜像内容，缺件时直接给出缺哪一类（框架包 / Prisma / 迁移 / CLI）；
+  # ③ 运行冒烟：挂 service PostgreSQL，migrator 真跑 migrate deploy + seed，runtime 用默认 CMD 起服务，
+  #    断言 /health 与 /ready（含 db 实时探测项）。gha 缓存只加速依赖与编译层，不影响验证真实性。
+  docker-image:
+    name: Docker 镜像（runtime + migrator 构建与运行冒烟）
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fw_docker
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -h 127.0.0.1 -U postgres -d fw_docker"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      # 与 deploy/docker-compose.prod.yml 的生产默认保持一致：postgres → pg schema
+      PRISMA_SCHEMA: prisma/pg/schema.prisma
+      DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/fw_docker
+    steps:
+      - uses: actions/checkout@v4
+
+      # docker-container 驱动的 buildx：gha 缓存后端必需（默认 docker 驱动不支持 type=gha）
+      - uses: docker/setup-buildx-action@v3
+
+      # ---- ① 真实构建：先 runtime 后 migrator（共享缓存，第二个构建近乎免费） ----
+      - name: 构建 runtime 镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          target: runtime
+          load: true
+          tags: fw-app:ci
+          build-args: |
+            PRISMA_SCHEMA=${{ env.PRISMA_SCHEMA }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 构建 migrator 镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile
+          target: migrator
+          load: true
+          tags: fw-app-migrator:ci
+          build-args: |
+            PRISMA_SCHEMA=${{ env.PRISMA_SCHEMA }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ---- ② 静态断言：runtime 镜像内容 ----
+      # 框架包 dist：build 阶段按手写列表逐包编译，清单漏包时这里直接点名缺哪个
+      - name: 断言 runtime 镜像内容（应用产物 / 框架包 dist / 前端产物 / 迁移 SQL）
+        run: |
+          docker run --rm --entrypoint sh fw-app:ci -c '
+            set -e
+            echo "== 应用与前端产物 =="
+            test -f /repo/apps/example-api/dist/main.js || { echo "缺 apps/example-api/dist/main.js"; exit 1; }
+            test -f /repo/apps/admin-web/dist/index.html || { echo "缺 apps/admin-web/dist/index.html"; exit 1; }
+            echo "== 框架包 dist（packages/* 逐个点名）=="
+            for d in /repo/packages/*/; do
+              test -d "${d}dist" || { echo "缺框架包 dist: ${d}"; exit 1; }
+            done
+            echo "== 迁移文件 =="
+            mig=/repo/apps/example-api/prisma/migrations
+            test -d "$mig" || { echo "缺 $mig（migrator 无迁移可跑）"; exit 1; }
+            n=$(find "$mig" -name migration.sql | wc -l)
+            [ "$n" -gt 0 ] || { echo "迁移目录存在但 migration.sql 数量为 0"; exit 1; }
+            echo "migration.sql x${n}"
+          '
+
+      # Prisma Client 真实性：postinstall 留下的空壳 @prisma/client 在实例化时才炸
+      # （"@prisma/client did not initialize yet"），必须 new PrismaClient 验；引擎二进制单独点名
+      # （pnpm 布局下引擎在 @prisma/client 同层的 .prisma/client，做候选回退）
+      - name: 断言 Prisma Client 与查询引擎（runtime）
+        run: |
+          docker run --rm -w /repo/apps/example-api \
+            -e DB_URL=file:./docker-check-throwaway.db \
+            --entrypoint node fw-app:ci -e '
+            const { PrismaClient } = require("@prisma/client");
+            const fs = require("fs"), path = require("path");
+            const base = path.dirname(require.resolve("@prisma/client"));
+            const candidates = [path.join(base, "..", ".prisma", "client"), base, "/repo/node_modules/.prisma/client"];
+            const engineDir = candidates.find((p) => fs.existsSync(p) && fs.readdirSync(p).some((f) => f.startsWith("libquery_engine")));
+            if (!engineDir) {
+              console.error("缺 Prisma 查询引擎二进制（已探测: " + candidates.join(" , ") + "）：Alpine 上通常缺 libc6-compat/openssl 或 generate 未跑");
+              process.exit(1);
+            }
+            new PrismaClient({ datasourceUrl: "file:./docker-check-throwaway.db" });
+            console.log("prisma-client=ok 引擎目录=" + engineDir);
+          '
+
+      # ---- ② 静态断言：migrator 镜像内容 ----
+      # 真跑 prisma --version / tsx --version 而非只看 .bin 存在：pnpm workspace 软链断裂时 .bin 仍在但执行即炸
+      - name: 断言 migrator 镜像内容（prisma CLI + tsx 真实可执行）
+        run: |
+          docker run --rm -w /repo/apps/example-api --entrypoint sh fw-app-migrator:ci -c '
+            set -e
+            pnpm exec prisma --version >/dev/null || { echo "prisma CLI 不可执行"; exit 1; }
+            pnpm exec tsx --version >/dev/null || { echo "tsx 不可执行（seed.ts 跑不了）"; exit 1; }
+            echo "prisma-cli=ok tsx=ok"
+          '
+
+      # ---- ③ 运行冒烟：migrator 真跑迁移 + 种子 ----
+      # 与生产等价的调用形态（compose migrate 服务：pnpm exec + PRISMA_SCHEMA 环境变量）
+      - name: migrator 运行冒烟（migrate deploy + seed，真实 PostgreSQL）
+        run: |
+          docker run --rm --network host \
+            -e DB_DRIVER=postgres \
+            -e DB_URL="${{ env.DB_URL }}" \
+            -e PRISMA_SCHEMA="${{ env.PRISMA_SCHEMA }}" \
+            fw-app-migrator:ci \
+            sh -c "pnpm exec prisma migrate deploy --schema \$PRISMA_SCHEMA && pnpm exec tsx prisma/seed.ts"
+
+      # runtime 用默认 CMD 起服务（连 Dockerfile 的 CMD/HEALTHCHECK 一起验），内存驱动避免再挂 Redis
+      - name: runtime 运行冒烟（起服务 + /health + /ready）
+        run: |
+          docker run -d --name fw-ci-app --network host \
+            -e APP_ENV=prod -e APP_PORT=3000 \
+            -e DB_DRIVER=postgres \
+            -e DB_URL="${{ env.DB_URL }}" \
+            -e AUTH_STRATEGY=jwt \
+            -e JWT_SECRET=ci-docker-smoke-secret-0123456789abcdef \
+            -e TENANT_ENABLED=false \
+            -e CACHE_DRIVER=memory \
+            -e MQ_DRIVER=memory \
+            -e OTEL_ENABLED=false \
+            -e CONFIG_CENTER_ENABLED=false \
+            fw-app:ci
+          ok=""
+          for i in $(seq 1 60); do
+            if curl -sf http://127.0.0.1:3000/health > /dev/null; then ok=1; break; fi
+            sleep 1
+          done
+          if [ -z "$ok" ]; then
+            echo "== /health 60s 未就绪，容器日志 =="
+            docker logs fw-ci-app
+            exit 1
+          fi
+          echo "== /health ok，断言 /ready =="
+          curl -sf http://127.0.0.1:3000/ready | node -e '
+            let s = "";
+            process.stdin.on("data", (d) => (s += d)).on("end", () => {
+              const r = JSON.parse(s);
+              console.log(JSON.stringify(r));
+              if (r.status !== "ok") { console.error("/ready 未整体 ok"); process.exit(1); }
+            });
+          '
+
+      - name: 清理运行容器
+        if: always()
+        run: docker rm -f fw-ci-app > /dev/null 2>&1 || true
