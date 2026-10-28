@@ -10,6 +10,7 @@
 
 - 关联：PRD-014（docs/prd/prd-014-admin-web-productization.md，M14 草案）；无新 ADR（沿 ADR-0025/0026/0029~0031 既有契约）
 - 特性：**零迁移 / 零 seed 变更 / 零新错误码**（沿 1001/1002/1003 与 M13 十表）；版本升版 17 个 package.json（0.7.0 → 0.7.5）
+- 标签：`v0.7.5` → `ce2bf77`（**2026-10-28 回打**）。指向版本升版提交；其后 `025df3f`（B4）、`15fb621`（错误通道）、`21107ed`（真机验收收口）等提交不在 v0.7.5 内，随 v0.8.0 归档
 - 验证基线：admin-web 206/206 + vue-tsc 全绿；@fw/saas 29/29（覆盖率 91.6/81.8/88.2/94.1）；example-api saas 30/30；smoke-saas-ops 29/29；smoke-mock 140/140；headers（673）/ api-parity / triway 七轴 / no-raw-throw 门禁全绿（均为本机实测，CI 结论见推送后 run）
 
 ## 1. 本版变化清单（相对 v0.7.0）
