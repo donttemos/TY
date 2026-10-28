@@ -583,7 +583,10 @@ jobs:
             test -f /repo/apps/example-api/dist/main.js || { echo "缺 apps/example-api/dist/main.js"; exit 1; }
             test -f /repo/apps/admin-web/dist/index.html || { echo "缺 apps/admin-web/dist/index.html"; exit 1; }
             echo "== 框架包 dist（packages/* 逐个点名）=="
+            # PRD-017 铁律 6：@fw/studio-web 是本地开发者工具，不进部署面——镜像构建列表有意不含它，
+            # 断言同步排除（首跑实测：把 Studio 算进框架包会在镜像内误报「缺 dist」）
             for d in /repo/packages/*/; do
+              case "${d}" in */studio-web/) continue ;; esac
               test -d "${d}dist" || { echo "缺框架包 dist: ${d}"; exit 1; }
             done
             echo "== 迁移文件 =="
