@@ -1,6 +1,6 @@
 # PRD-016 · 开发体验与部署一体化（M16）
 
-> 里程碑：M16 ｜ 状态：开发中（S1 生成 / S2 部署 / S3 验收三条命令均已交付，2026-10-22；待验证：镜像真实构建、CI 黄金链路作业首跑、真机 target=real）｜ 优先级：P1 ｜ 依赖：M6（生成器）、M8（部署档位）、PRD-013 主线 B ｜ 负责人：donttemo ｜ 更新：2026-10-22
+> 里程碑：M16 ｜ 状态：**已发布 v0.8.0**（S1 生成 / S2 部署 / S3 验收三条命令均已交付；AC-16-07 由 CI golden-path 首绿收口，2026-10-28；遗留：镜像真实构建与 `target=real` 真机链路待验证）｜ 优先级：P1 ｜ 依赖：M6（生成器）、M8（部署档位）、PRD-013 主线 B ｜ 负责人：donttemo ｜ 更新：2026-10-28
 
 ## 1. 背景与目标
 
@@ -98,7 +98,7 @@ M6 交付了 `fw gen crud`，但「生成完」不等于「能跑」：`packages
 - [x] **AC-16-04 部署交互**：首次部署恰好 3 问（域名 / 数据库密码 / Redis 密码，后两项留空自动生成），第二次部署 0 问——`deploy.test.ts` 断言二次部署提问器零调用、`--yes` 与 `--plan` 都不提问
 - [x] **AC-16-05 失败诊断**：部署失败输出单行「失败：原因。下一步」并落 `deploy-report.json`（含阶段与 next）；本机无 docker 时实测输出 1 行且不再等待 stdin
 - [x] **AC-16-06 幂等**：连续两次 `fw gen crud` 无重复产物、无重复接线——实测第二次输出「接线已是最新」且零写入（`fw deploy` 部分待 S2）
-- [ ] **AC-16-07 全新项目链路**：`fw verify --target=ci` 已实现并单测覆盖（15 例：阶段序、失败定位、浏览器缺失降级、收尾清理）；**本机实跑至 migrate 阶段通过**，seed 之后受沙箱限制（Prisma 引擎在此沙箱静默不落库，与既有 `tsc/build` 同类问题），完整链路待 CI 作业首跑确认
+- [x] **AC-16-07 全新项目链路**：`fw verify --target=ci` 由 **CI golden-path 作业从干净检出跑通九阶段**（workspace → install → model → migrate → seed → generate → build → boot → browser），`result=success`、`browser=ok`，`跳过 0 个阶段`——run [40684860336](https://github.com/donttemos/TY/actions/runs/40684860336)（job 122804488117，commit `a2b5318`，2026-10-28）。这是首个「干净环境真能跑通」的证据；单测仍为 20 例（阶段序 / 失败定位与现场保留 / 浏览器回落 / 清场）。**首跑前连续暴露 5 处真实断裂并修复**（漏建框架包 TS2307 → 定向种子未授权致菜单不可见 → 全量 seed 与定向种子重复授权 P2002 → Vite 依赖预构建 504 → 验收模型缺约定字段致 9001），逐条记录见 [v0.8.0 发版记录](../90-release-v0.8.0.md) §5
 - [ ] **AC-16-08 真机链路**：`fw verify --target=real` 已实现（部署 → 健康 → 浏览器 CRUD，同一份用例）；**未验证**：本机无 docker、chromium 二进制下载在本机卡在 0%（CDN 不可达），镜像构建与真实浏览器执行均待测试机/CI 确认
 - [x] **AC-16-09 迁移安全**：DROP COLUMN / DROP TABLE / ADD NOT NULL 无默认值默认阻断；`--allow-destructive` 且确认后才执行；`migrate dev` 只用 `--create-only`，永不 reset；`fw deploy` 侧「备份失败即中止迁移」且首次部署显式跳过风险闸门（无历史基线）
 - [x] **AC-16-10 门禁**：`check:gen-sync` 覆盖「清单 ↔ 产物 ↔ 接线」三方一致（含反向抽查），已接入 CI 且反向验证会报红
@@ -111,7 +111,7 @@ M6 交付了 `fw gen crud`，但「生成完」不等于「能跑」：`packages
 |---|---|---|
 | S1 | A：一键生成（FR-16-01~07） | AC-16-02/03/07 绿 |
 | S2 | B：一键部署（FR-16-08~14） | AC-16-04/05/09 绿 |
-| S3 | C：一键验收（FR-16-15~18） | 代码与单测完成（AC-16-01 收口）；AC-16-07/08 待 CI 与真机首跑 |
+| S3 | C：一键验收（FR-16-15~18） | 代码与单测完成（AC-16-01 收口）；AC-16-07 已由 CI golden-path 首绿收口（2026-10-28），AC-16-08 待真机 `target=real` |
 
 S1 与 S2 可并行（共享 `fw.gen.json` 与 `deploy.manifest.json` 契约），S3 依赖 S1、S2 主体完成。
 
@@ -144,3 +144,5 @@ S1 与 S2 可并行（共享 `fw.gen.json` 与 `deploy.manifest.json` 契约）�
 | 2026-10-22 | 缺陷 2（`resolveLayout`）：`fw new --template=admin` 产出 `server/` + `admin-web/` 兄弟目录，无 `apps/` 时前端根被当成后端根，前端产物会写进后端目录 | 已识别兄弟 `admin-web`/`web`/`frontend` 目录，补 2 例布局测试 |
 | 2026-10-22 | 缺陷 3（Windows 执行）：`execFile('pnpm')` 报 ENOENT/EINVAL（`pnpm.cmd` 需经 shell）；错误信息只有 `Command failed`，无法定位 | 增加 `pnpmBin()` 与「.cmd 才走 shell」策略；失败时改用 stderr 首行 |
 | 2026-10-22 | 强化：`fw verify` 在 sqlite 场景预创建库文件（Prisma 引擎在沙箱/网络盘上 `unable to open database file`），并在 seed 前显式 `prisma generate`（否则 `@prisma/client` 只是空壳，报 `does not provide an export named 'PrismaClient'`） | 让黄金链路在 CI 与真机都能跑；本机沙箱仍受引擎静默失败限制 |
+| 2026-10-28 | **CI golden-path 首绿**（run [40684860336](https://github.com/donttemos/TY/actions/runs/40684860336) / commit `a2b5318`：九阶段全过、`browser=ok`、跳过 0）。为了绿，作业侧与产品侧共修 5 处真实断裂：① 作业清单漏建 6 个框架包（TS2307）；② 定向种子建了权限与菜单却没授给 admin（后台看不到模块）；③ 全量 seed 与定向种子重复授权撞 P2002；④ Vite dev server 依赖预构建首屏 504 → 改为「构建产物 + preview」；⑤ 验收模型缺 `deletedAt`/审计字段 → 接口 9001，`fw gen crud` 增加写盘前约定校验 | AC-16-07 收口；`fw verify` 改为验构建产物；`fw gen crud` 对不合约定的模型提前报错。逐条见 [v0.8.0 发版记录](../90-release-v0.8.0.md) §5 |
+| 2026-10-28 | 可诊断性：失败时保留生成项目（`apps/auto-verify`）并把服务端日志尾部写进错误信息——此前清场会把 9001 的堆栈一起删掉，只能靠猜 | 失败现场随 CI artifact 上传 |

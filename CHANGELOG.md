@@ -2,7 +2,7 @@
 
 本文件记录项目的所有重要变更。格式遵循 [Keep a Changelog 1.1](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循[语义化版本 2.0](https://semver.org/lang/zh-CN/)。
 
-> **当前状态：v0.7.5 已发布（2026-10-20）** —— 本次 **v0.7.5 交付 M14（PRD-014）Admin Web 产品化与 SaaS 运营体验升级 B1~B3 全量**：B1 正确性修复（操作原因端到端落库 / 写按钮 v-permission 权限渲染 / 生命周期真实状态驱动 `GET /saas/tenants/:id/lifecycle/status` / 查询状态隔离）+ B2 运营 API 闭环（`POST /saas/plans` 创建、`POST /saas/plans/:id/versions` 版本发布、`GET /saas/tenant-subscriptions` 分页列表与 `GET /saas/tenants/:id/subscriptions/history` 历史，存储端口扩展 Fake/Prisma 双实现，**无新增错误码与迁移**）+ B3 页面产品化（ConfirmWithReason 统一原因收集入口 / TenantPicker 可搜索租户选择器 / 订阅页列表优先重构含详情抽屉 / 套餐页创建+发布闭环含差异预览）。发版记录见 [v0.7.5 发布记录](./docs/90-release-v0.7.5.md)，上一版见 [v0.7.0 发布记录](./docs/90-release-v0.7.0.md)。CI 与真机验收见 §docs/90。
+> **当前状态：v0.8.0 已发布（2026-10-28）** —— 本次 **v0.8.0 交付 M16（PRD-016）开发体验与部署一体化 + M17（PRD-017）TY Studio S1~S4 + M15 运营审计 P1/P2 收口**：M16 三条命令（`fw gen crud` 一条命令到底 / `fw deploy` 单机部署 / `fw verify` 九阶段验收）+ **CI golden-path 作业首次从干净检出跑通「生成 → 迁移 → 启动 → 浏览器 CRUD」**；M17 本地可视化工作台（数据模型设计器 + schema 安全写回 + AI 建模 / AI 检查 + 标注，新增 `@fw/studio-web`）；M15 运营面审计落目标租户、导出与列表同口径、订阅创建边界校验。**零迁移 / 零新错误码 / 零新增服务端配置键**，存量环境更新代码即用。发版记录见 [v0.8.0 发布记录](./docs/90-release-v0.8.0.md)，上一版见 [v0.7.5 发布记录](./docs/90-release-v0.7.5.md)。
 >
 > v0.5.0（2026-10-15）：M10（PRD-010）的 P0 + P1 阶段整体成版：**多实例一致性收口**（E-01 任务中心驱动化 memory/db/bullmq 三驱动、E-02 配置中心多实例语义 + nacos 驱动转正、E-03 框架级 API 令牌桶限流默认开启、E-04 `/permissions/tree` 权限树契约落地）+ **规模化遗留**（E-06 bullmq/transport Redis Cluster 实测收口、**E-07 OAuth2 授权码端到端 + apikey 签名验签**，`AUTH_STRATEGY` 四策略名实相符）+ 遗留缺陷收口（N-03 整页 403 视图、bullmq rateLimit 热更重建、R4-05 工作台统计口径标注）；配置键 65→80，新文档 [docs/41 认证策略端到端指南](./docs/41-auth-strategies.md)。
 >
@@ -17,6 +17,17 @@
 - **频率**：每个发布版本一条记录；`Unreleased` 区间持续累积，发布时转为版本条目并清空。
 
 ## [Unreleased]
+
+## [0.8.0] - 2026-10-28
+
+### M16 开发体验与部署一体化 + M17 TY Studio S1~S4 + M15 运营审计收口
+
+- 版本升版 17 个 `package.json`（0.7.5 → 0.8.0）+ 新增 `@fw/studio-web` 0.8.0；发版记录见 [docs/90-release-v0.8.0.md](./docs/90-release-v0.8.0.md)。
+- **零迁移 / 零新错误码 / 零新增服务端配置键**：schema 仅补 `///` 中文标注（无结构变更），存量环境更新代码即可，无需 reseed。
+- 本条目归档自 v0.7.5 以来滞留 `[Unreleased]` 的全部批次：M15 运营审计 P1/P2、M16 三条命令与黄金链路、M17 Studio S1~S4。
+- **黄金链路首次在干净检出跑通**（CI `golden-path`，run [40684860336](https://github.com/donttemos/TY/actions/runs/40684860336)）：九阶段全过、`browser=ok`、跳过 0 阶段。首跑前暴露并修复 5 处真实缺陷（作业漏建框架包 TS2307 / 定向种子未授权致菜单不可见 / 全量 seed 与定向种子重复授权 P2002 / Vite 依赖预构建 504 / 验收模型缺约定字段致 9001），逐条见发版记录 §5。
+- **新增门禁**：`check-gen-sync`（清单 ↔ 产物 ↔ 接线）、`check-studio-separation`（Studio 与后台平台边界），均接入 CI。
+
 
 ### Added（M17 / PRD-017 FR-17-28：AI 补标注扫描，2026-10-28）
 

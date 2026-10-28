@@ -15,7 +15,10 @@
 
 # PRD-012 · 统一可观测契约与运维暴露
 
-> 里程碑：M12（v0.6.0 候选）｜ 状态：**草案**（2026-10-17）｜ 优先级：P1 ｜ 依赖：M1–M11 已交付能力（重点 M1 `@fw/core` 错误与信封、M3 `@fw/auth` 审计、M8 `@fw/telemetry` OTel 桥接、M10 审计归档 / E-17 RUM、M11.3/11.5 replay 安全事件与 Key Ring 可观测）｜ 负责人：donttemo ｜ 更新：2026-10-17
+> 里程碑：M12（v0.6.0）｜ 状态：**已发布 v0.6.0**（2026-10-17，2026-10-28 纠偏，原标「草案」）｜ 优先级：P1 ｜ 依赖：M1–M11 已交付能力（重点 M1 `@fw/core` 错误与信封、M3 `@fw/auth` 审计、M8 `@fw/telemetry` OTel 桥接、M10 审计归档 / E-17 RUM、M11.3/11.5 replay 安全事件与 Key Ring 可观测）｜ 负责人：donttemo ｜ 更新：2026-10-28
+>
+> **状态口径**（2026-10-28 纠偏）：W1 统一 Error/Audit Contract（ADR-0025）、W2 Observability 贯穿（ADR-0026）、W3 Maintenance/Health 三层边界（ADR-0027）**三波全部随 v0.6.0 发版**，AC-OBS-01~18 已勾选并附真机证据（`/opt/fw/shared/verify-20261017-201641`）。**AC-OBS-19 未关闭**：真机边界已实测（公网 maintenance 无 token → 401/3001、持 `ops:read` → 200 + no-store、demo → 404），剩 K8s/Helm 侧 NetworkPolicy/Ingress 限制评估。发版记录见 [v0.6.0](../90-release-v0.6.0.md) §1.2。
+
 >
 > **变更记录**
 >

@@ -16,13 +16,19 @@
 | [PRD-008](./prd-008-multitenancy-scale.md) | M8 | 多租户与规模化演进 | M2–M4、M7 | P2 | 已发布 v0.2.0（条件通过） |
 | [PRD-009](./prd-009-config-center.md) | M9 | 配置中心与热更新（L-02 / FR-08 收口） | M1、M3、M5 | P2 | 已发布 v0.4.0（2026-10-15） |
 | [PRD-010](./prd-010-next-stage-enhancements.md) | M10 | 下一阶段增强：多实例一致性收口与模板生态 | M7、M4、M9 | P1 | 已发布 v0.5.0（P0/P1 已交付，P2 过半，P3 全部落地） |
-| [PRD-011](./prd-011-saas-operations-and-ecosystem.md) | M11 | SaaS 运营能力与生态扩展（多租户运营 / 插件市场 / 更多适配器 / 通知渠道 / 生成器增强 / 微服务拆分 / 可观测告警 / 安全合规 / 开发者体验） | M1–M10（重点 M8、M9、M10） | P1 | 草案（2026-10-17） |
-| [PRD-012](./prd-012-observability-error-contract.md) | M12 | 统一可观测契约与运维暴露（W1 统一 Error/Audit Contract → W2 Observability 贯穿 → W3 Maintenance/Health 暴露） | M1–M11（重点 M1、M3、M8、M10、M11.3/11.5） | P1 | 草案（2026-10-17） |
+| [PRD-011](./prd-011-saas-operations-and-ecosystem.md) | M11 | SaaS 运营能力与生态扩展（多租户运营 / 插件市场 / 更多适配器 / 通知渠道 / 生成器增强 / 微服务拆分 / 可观测告警 / 安全合规 / 开发者体验） | M1–M10（重点 M8、M9、M10） | P1 | **部分交付**（2026-10-28 纠偏）：方向 1 S-01~S-07 由 PRD-013 承接并发版 v0.7.0；方向 9 前置项随 v0.7.0 主线 B 落地；其余方向待排期 |
+| [PRD-012](./prd-012-observability-error-contract.md) | M12 | 统一可观测契约与运维暴露（W1 统一 Error/Audit Contract → W2 Observability 贯穿 → W3 Maintenance/Health 暴露） | M1–M11（重点 M1、M3、M8、M10、M11.3/11.5） | P1 | **已发布 v0.6.0**（2026-10-17；AC-OBS-01~18 通过，AC-OBS-19 剩 K8s NetworkPolicy 评估） |
 | [PRD-013](./prd-013-saas-operations-foundation.md) | M13 | SaaS 运营基础落地与可复现开发环境（主线 A 套餐/订阅/配额/用量/生命周期/运营端/账单，细化 PRD-011 S-01~S-07；主线 B 工具链冻结与开发环境文档四件套） | M1–M12（重点 M8、M12） | P0 | 已发布 v0.7.0（2026-10-19） |
-| [PRD-014](./prd-014-admin-web-productization.md) | M14 | Admin Web 产品化与 SaaS 运营体验升级（B1 正确性修复 → B2 运营 API 闭环 → B3 页面产品化 → B4 看板与运营首页） | M13（重点 M12 契约、M13 领域服务与运营 API） | P1 | 草案（2026-10-19） |
+| [PRD-014](./prd-014-admin-web-productization.md) | M14 | Admin Web 产品化与 SaaS 运营体验升级（B1 正确性修复 → B2 运营 API 闭环 → B3 页面产品化 → B4 看板与运营首页） | M13（重点 M12 契约、M13 领域服务与运营 API） | P1 | **已发布 v0.7.5**（B1~B3，2026-10-20）+ B4 随 v0.8.0 归档；AC-14-02/03/06/07/09/10/12 待浏览器级回归 |
 | [PRD-015](./prd-015-business-readable-audit.md) | M15 | 业务可读审计与运营追溯（B1 契约与注册表 → B2 事件覆盖 → B3 运营视图 → B4 查询归档导出同口径 → B5 门禁验证） | M12 审计/错误/ID 契约、M13 SaaS 领域、M14 页面范式 | P1 | 已交付 B1~B5（验收取证进行中：AC 15-02/03/06/07/09/12/13 未勾选；2026-10-21 P2 补平台审计前端入口 + 双租户验收自动化） |
-| [PRD-017](./prd-017-ty-studio.md) | M17 | TY Studio 本地可视化工作台（S1 项目只读 → S2 数据模型设计器 → S3 生成 → S4 运行 → S5 部署 → S6 编辑器；五条铁律约束复杂度） | M6 生成器、M16 三条命令 | P1 | 草案（2026-10-22；S2 写回内核已实现并取证） |
-| [PRD-016](./prd-016-dev-experience-and-deploy.md) | M16 | 开发体验与部署一体化（S1 一键生成 → S2 一键部署 → S3 一键验收；硬约束：三条命令、零到一次交互） | M6 生成器、M8 部署档位、PRD-013 主线 B | P1 | 草案（2026-10-22） |
+| [PRD-017](./prd-017-ty-studio.md) | M17 | TY Studio 本地可视化工作台（S1 项目只读 → S2 数据模型设计器 → S3 生成 → S4 运行 → S5 部署 → S6 编辑器；五条铁律约束复杂度） | M6 生成器、M16 三条命令 | P1 | **已发布 v0.8.0**（S1~S4：只读工作台 / 设计器与 schema 安全写回 / 生成与指纹保护 / AI 审查与 AI 建模；S5 部署中心、S6 编辑器待做） |
+| [PRD-016](./prd-016-dev-experience-and-deploy.md) | M16 | 开发体验与部署一体化（S1 一键生成 → S2 一键部署 → S3 一键验收；硬约束：三条命令、零到一次交互） | M6 生成器、M8 部署档位、PRD-013 主线 B | P1 | **已发布 v0.8.0**（三条命令全交付；AC-16-07 由 CI golden-path 首绿收口，2026-10-28；AC-16-08 真机 `target=real` 与真实镜像构建待验证） |
+
+> **里程碑编号说明（2026-10-28 纠偏）**：`M11` 有两层含义，勿混用——
+> ① **v0.6.0 的「M11 认证核心强化」**（ADR-0020~0024：轮换 CAS / 客户端指纹 / 双 Key Ring 与可观测）是认证内核线，
+> **没有独立 PRD 文件**，交付事实以 [v0.6.0 发版记录](../90-release-v0.6.0.md) §1.1 为准；
+> ② **PRD-011** 是「SaaS 运营能力与生态扩展」这条**跨版本生态线**，名称中的 M11 只标其立项时点，不指 v0.6.0 那批交付（其 P0 已由 PRD-013 在 v0.7.0 落地）。
+> 此前 README 里程碑表把 M11/M12 链到 `prd-011-auth-core-hardening.md` / `prd-012-observability-contract.md`（两个不存在的文件），已于本次纠偏改为指向真实 PRD 与发版记录。
 
 ## 待规划 PRD（尚未排期）
 

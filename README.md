@@ -2,7 +2,7 @@
 
 > 一套「框架之上的框架」：用它在 1 天内搭出任意业务系统的可运行骨架，小到内部工具站、大到多租户 SaaS，规模升级时业务代码零重写。
 >
-> **当前状态：v0.7.5 已发布（2026-10-20）** —— 本次 **v0.7.5 交付 M14（PRD-014）Admin Web 产品化与 SaaS 运营体验升级 B1~B3**：B1 正确性修复（操作原因端到端落库 / 写按钮权限渲染 / 生命周期真实状态驱动 / 查询状态隔离）+ B2 运营 API 闭环（`/api/v1/saas/*` 十四端点：套餐创建与版本发布、订阅分页列表与历史、生命周期状态查询，存储端口 Fake/Prisma 双实现）+ B3 页面产品化（`ConfirmWithReason` 统一原因收集 / `TenantPicker` 租户选择器 / 订阅页列表优先重构 / 套餐页创建+发布+差异预览闭环）。**零迁移 / 零 seed 变更 / 零新错误码**，存量环境纯代码更新即用。发版记录见 [v0.7.5 发布记录](./docs/90-release-v0.7.5.md)，上一版见 [v0.7.0 发布记录](./docs/90-release-v0.7.0.md)（M13 SaaS 运营基础 + 主线 B，真机验收通过）。
+> **当前状态：v0.8.0 已发布（2026-10-28）** —— 本次 **v0.8.0 交付 M16（PRD-016）开发体验与部署一体化 + M17（PRD-017）TY Studio S1~S4 + M15 运营审计 P1/P2 收口**：M16 三条命令（`fw gen crud` 一条命令到底 / `fw deploy` 单机部署 / `fw verify` 九阶段验收），并且 **CI 新增的 `golden-path` 作业首次从干净检出跑通「生成 → 迁移 → 启动 → 浏览器完成增删改查」**（run [40684860336](https://github.com/donttemos/TY/actions/runs/40684860336)，九阶段全过、跳过 0）；M17 本地可视化工作台（数据模型设计器 + schema 安全写回 + AI 建模 / AI 检查 + 中文标注，新增 `@fw/studio-web`，与后台平台完全分离）；M15 运营面审计落目标租户、导出与列表同口径、订阅创建边界校验。**零迁移 / 零新错误码 / 零新增服务端配置键**，存量环境更新代码即用。发版记录见 [v0.8.0 发布记录](./docs/90-release-v0.8.0.md)，上一版见 [v0.7.5 发布记录](./docs/90-release-v0.7.5.md)。
 >
 > v0.6.0（2026-10-17）交付 M11 五阶段（认证核心强化，ADR-0020~0024：轮换 CAS / 生命周期完整性 / Client Fingerprint / 双 Key Ring / Key 可观测）与 M12 W1~W3（可观测与统一契约，ADR-0025~0027：错误三类治理 / requestId-traceId 双 ID 分层 / 运维端点三层边界），外加 **cache 缺陷清单 13 项修复**（标签原子协议 / 锁共享深度 / WRONGTYPE 对齐，Cluster 兼容策略见 ADR-0028）。
 >
@@ -96,6 +96,7 @@ framework/
     70-engineering-standards.md # 编码 / Git / PR 规范
     80-project-plan.md        # 项目计划与任务板
     85-parallel-workstreams.md # 并行开发工作线划分（契约 / 所有权 / 集成点）
+    90-release-v0.8.0.md      # v0.8.0 发布记录（M16 三条命令 + 黄金链路 CI 首绿 / M17 Studio / M15 审计收口）
     90-release-v0.7.5.md      # v0.7.5 发布记录（M14 B1~B3：正确性修复 + 运营 API 闭环 + 页面产品化）
     90-release-v0.7.0.md      # v0.7.0 发布记录（M13 SaaS 运营基础 + 主线 B + 真机验收结论）
     90-release-v0.6.0.md      # v0.6.0 发布验收报告（M11 五阶段成版 + M12 W1~W3 + cache 修复 13 项）
@@ -222,6 +223,7 @@ fw verify --target=real --url=https://<域名>   # 验证已部署实例（健�
 | [贡献指南](./CONTRIBUTING.md) | 三步上手与硬性规则入口 |
 | [PRD 索引](./docs/prd/README.md) | 迭代清单与 PRD 模板约定 |
 | PRD-001 ~ PRD-009 | 见 `docs/prd/`，每个功能 / 迭代一份 |
+| [v0.8.0 发布记录](./docs/90-release-v0.8.0.md) | 「M16 开发体验与部署一体化 + M17 TY Studio + M15 审计收口」发版记录：三条命令（gen/deploy/verify）与九阶段黄金链路、CI `golden-path` 首绿证据、M17 设计器/写回/AI 能力、升级影响（零迁移零新错误码零新配置键）、验证矩阵，以及黄金链路首跑暴露的**五处真实断裂**与修复过程（§5） |
 | [v0.6.0 发布验收报告](./docs/90-release-v0.6.0.md) | 「M11 认证核心强化 + M12 可观测与运维边界 + @fw/cache 缺陷修复」发布记录：M11.1~11.5（ADR-0020~0024）、M12 W1~W3（ADR-0025~0027）、cache 13 项修复与双驱动契约测试、升级影响（三批迁移、reseed `ops:read`、配置键 97→120、CSV 15 列、`@Cacheable` 键升级一次性失效）、验证证据（~1500 例 + 门禁七道 + CI 矩阵）与遗留问题 |
 | [修复项：db 就绪探针非实时](./docs/96-db-readiness-probe-issue.md) | 独立登记（P2，不混入 Redis 双节点验收）：`/ready` 的 db 探针是启动期一次性标志，启动失败后恢复仍报 fail、运行期断连仍报 ok；证据、根因（`createDbReadinessProbe`）、建议修法（带超时实时探测 + 防抖）与验收标准 |
 | [v0.5.5 发布验收报告](./docs/90-release-v0.5.5.md) | 「M10 P2/P3 在途交付整体成版」发布记录：E-08~E-17 交付清单、驱动审查修复 26 项、PRD-011 立项、升级影响（配置键 80→97、新增表 4 张、新权限点 2 个）、验证证据（1205 例 + 专项冒烟 + 静态门禁）、发布产物（commit/tag/CI）与遗留问题 |
@@ -254,12 +256,14 @@ fw verify --target=real --url=https://<域名>   # 验证已部署实例（健�
 | M7 | 队列与定时任务 | [007](./docs/prd/prd-007-queue-scheduler.md) | ✅ 已发布 v0.2.0 |
 | M8 | 多租户与规模化 | [008](./docs/prd/prd-008-multitenancy-scale.md) | ✅ 已发布 v0.2.0（条件通过） |
 | M9 | 配置中心与热更新（L-02 / FR-08 收口） | [009](./docs/prd/prd-009-config-center.md) | ✅ 已发布 v0.4.0 |
-| M10 | 增强与规模化收口（E-01~E-17） | [010](./docs/prd/prd-010-enhancement-roadmap.md) | ✅ 已发布 v0.5.x |
-| M11 | 认证核心强化（轮换 CAS / 指纹 / Key Ring） | [011](./docs/prd/prd-011-auth-core-hardening.md) | ✅ 已发布 v0.6.0 |
-| M12 | 可观测与统一契约（W1~W3） | [012](./docs/prd/prd-012-observability-contract.md) | ✅ 已发布 v0.6.0 |
+| M10 | 增强与规模化收口（E-01~E-17） | [010](./docs/prd/prd-010-next-stage-enhancements.md) | ✅ 已发布 v0.5.x |
+| M11 | 认证核心强化（轮换 CAS / 指纹 / Key Ring） | 无独立 PRD（ADR-0020~0024）；交付事实见 [v0.6.0 发版记录](./docs/90-release-v0.6.0.md) | ✅ 已发布 v0.6.0 |
+| M12 | 可观测与统一契约（W1~W3） | [012](./docs/prd/prd-012-observability-error-contract.md) | ✅ 已发布 v0.6.0（AC-OBS-19 剩 K8s NetworkPolicy） |
 | M13 | SaaS 运营基础 + 主线 B | [013](./docs/prd/prd-013-saas-operations-foundation.md) | ✅ 已发布 v0.7.0（真机已验收） |
-| M16 | 开发体验与部署一体化（三条命令 / 零到一次交互） | [016](./docs/prd/prd-016-dev-experience-and-deploy.md) | 开发中（S1 生成 / S2 部署 / S3 验收已交付；镜像构建与真机链路待验证） |
-| M17 | TY Studio 本地可视化工作台 | [017](./docs/prd/prd-017-ty-studio.md) | 开发中（S1 只读工作台、S2 写回内核+接口+设计器、S3 生成页与生成物指纹保护已交付；运行/日志与部署待做） |
+| M14 | Admin Web 产品化与 SaaS 运营体验升级（B1~B4） | [014](./docs/prd/prd-014-admin-web-productization.md) | ✅ 已发布 v0.7.5（B1~B3）+ B4 随 v0.8.0 |
+| M15 | 业务可读审计与运营追溯（B1~B5） | [015](./docs/prd/prd-015-business-readable-audit.md) | ✅ 已交付 B1~B5（AC 15-02/03/06/07/09/12/13 待真机窗口勾选） |
+| M16 | 开发体验与部署一体化（三条命令 / 零到一次交互） | [016](./docs/prd/prd-016-dev-experience-and-deploy.md) | ✅ 已发布 v0.8.0（黄金链路 CI 首绿，AC-16-07 收口；真实镜像构建与 `target=real` 待验证） |
+| M17 | TY Studio 本地可视化工作台 | [017](./docs/prd/prd-017-ty-studio.md) | ✅ 已发布 v0.8.0（S1 只读 / S2 设计器与写回 / S3 生成 / S4 AI 审查与 AI 建模；S5 部署中心与 S6 编辑器待做） |
 
 ## 开发规范
 
