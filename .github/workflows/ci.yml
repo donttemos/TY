@@ -311,12 +311,12 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
 
-      # 先构建框架包与 CLI：verify 内部要以 `node packages/cli/dist/index.js` 调用 fw new / fw gen crud
+      # 先构建框架包与 CLI：verify 内部要以 `node packages/cli/dist/index.js` 调用 fw new / fw gen crud，
+      # 且生成项目的后端类型校验（gen 阶段）要能解析每一个 @fw/*——清单式枚举漏一个包就会在
+      # generate 阶段炸 TS2307（首跑实测：漏 @fw/storage，生成项目 upload.module.ts 直接找不到模块）。
+      # 因此按目录递归构建，靠 pnpm 的拓扑序保证依赖在前，新增框架包自动被覆盖。
       - name: 构建框架包与 CLI（verify 依赖其 dist）
-        run: |
-          for pkg in @fw/config @fw/logger @fw/core @fw/config-center @fw/db @fw/auth @fw/cache @fw/cli; do
-            pnpm --filter $pkg run build
-          done
+        run: pnpm -r --filter "./packages/*" run build
 
       # 浏览器二进制单独缓存：命中时数十秒，未命中约 1~2 分钟
       - name: 缓存 Playwright 浏览器
