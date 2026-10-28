@@ -154,6 +154,17 @@ describe('runVerify target=ci', () => {
     ).rejects.toThrow(/浏览器 CRUD 未通过.*未找到新增按钮/);
   });
 
+  it('失败时保留生成项目（.verify-process.log 就是 500 的堆栈现场）', async () => {
+    const { exec } = makeExec();
+    await expect(
+      runVerify(
+        { projectRoot: tmpDir },
+        makeDeps({ exec, browser: async () => ({ status: 'failed', detail: '弹窗未关闭' }) }),
+      ),
+    ).rejects.toThrow();
+    expect(fs.existsSync(path.join(tmpDir, 'apps', 'auto-verify', 'server'))).toBe(true);
+  });
+
   it('浏览器缺失时记为 skipped 而不是伪通过（默认执行器路径）', async () => {
     const { exec } = makeExec();
     const report = await runVerify(

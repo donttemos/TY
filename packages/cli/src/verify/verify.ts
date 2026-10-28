@@ -467,7 +467,14 @@ export async function runVerify(options: VerifyOptions, deps: VerifyDeps = {}): 
       });
       mark('browser', result.status === 'passed' ? 'ok' : result.status, browserStart, result.detail);
       if (result.status === 'failed') {
-        fail('browser', `浏览器 CRUD 未通过：${result.detail}`, '查看 verify-artifacts 下的 trace 与截图');
+        // 浏览器失败往往是后端 500 的下游表现：把两个后台进程的日志尾部带进报告与错误信息，
+        // 否则只剩「弹窗没关」，真正的堆栈随清场一起消失（本轮实测踩过）
+        const tail = backgrounds.map((bg) => bg.tail()).filter(Boolean).join('\n');
+        fail(
+          'browser',
+          `浏览器 CRUD 未通过：${result.detail}`,
+          `查看 verify-artifacts 下的 trace 与截图；服务端日志尾部：\n${tail.split('\n').slice(-12).join('\n')}`,
+        );
       }
     }
 
@@ -480,7 +487,13 @@ export async function runVerify(options: VerifyOptions, deps: VerifyDeps = {}): 
     return report;
   } finally {
     await cleanup();
-    if (target === 'ci' && !options.keep) cleanupWorkspace(options.projectRoot, name);
+    // 失败时保留生成项目与其日志：CI 的 artifact 上传路径就指着 apps/auto-verify 下的
+    // .verify-process.log，删了等于把 500 的堆栈一起删掉（只能靠猜着改代码）
+    const failed = report.result !== 'success';
+    if (target === 'ci' && !options.keep) {
+      if (failed) io.log(`[verify] 失败现场已保留：apps/${name}（日志 apps/${name}/*/.verify-process.log）`);
+      else cleanupWorkspace(options.projectRoot, name);
+    }
   }
 }
 
