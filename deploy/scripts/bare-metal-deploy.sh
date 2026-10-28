@@ -185,7 +185,9 @@ elif git -C "$REPO_DIR" rev-parse --verify --quiet "origin/${TARGET_REF}^{commit
 else
   die "git ref 不存在：$TARGET_REF"
 fi
-COMMIT="$(git -C "$REPO_DIR" rev-parse --short "$RESOLVED_REF")"
+# 打解到 commit：注解标签（git tag -a）本身是一个 tag 对象，直接 rev-parse 得到的是它的哈希，
+# 会让 release 目录名与代码 commit 对不上（2026-10-28 实测：v0.8.0 → b8641fe，实际代码是 cf89e76）
+COMMIT="$(git -C "$REPO_DIR" rev-parse --short "${RESOLVED_REF}^{commit}")"
 
 RELEASE_NAME="$(date '+%Y%m%d%H%M%S')-$COMMIT"
 RELEASE_DIR="$RELEASES_DIR/$RELEASE_NAME"

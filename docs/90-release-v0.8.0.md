@@ -81,9 +81,12 @@
 
 ## 6. 真机验收（2026-10-28，106.55.32.251 / 1Panel）
 
-- 部署前基线：`current → releases/20261021204922-94fb703`，`fw-api` active，`/health` 200（**注：并非任务描述里的 2f30084，真机已先行部署到 94fb703**）。
-- 部署：`deploy/scripts/bare-metal-deploy.sh --ref v0.8.0`（release 目录 + 软链原子切换 + 健康检查兜底）；结果见下方「部署结论」。
-- 健康四项与前端产物校验随部署日志记录于 `/opt/fw/shared/`。
+- 部署前基线：`current → releases/20261021204922-94fb703`，`fw-api` active，`/health` 200（**注：并非任务描述里的 2f30084——真机已先行部署到 94fb703**）。
+- 部署：`PRISMA_SCHEMA=prisma/pg/schema.prisma WEB_SYNC_DIR=/opt/1panel/www/fw-web bare-metal-deploy.sh --ref v0.8.0`（release 目录 + 软链原子切换 + 健康检查兜底），日志 `/tmp/deploy-v080.log`。
+- **结论：成功**。`current → releases/20261028201335-b8641fe`，`fw-api` active；release 目录内 `package.json` 版本 0.8.0、`docs/90-release-v0.8.0.md` 就位；迁移阶段输出 `11 migrations found / No pending migrations to apply`（与「零迁移」一致）；前端产物于 20:14 同步到站点目录（asset `index-DXT_mLMj.js`）。
+- 健康：`/health` → `{"status":"ok"}`；`/ready` → `{"db":"ok","cache":"ok","queue":"ok","transport":"ok"}` 四项全绿。
+- 公网冒烟（`https://cs.donttemo.top`，服务器侧 curl）：首页 200；`POST /api/v1/auth/login`（`account` + `password`）201 取到 token；**`GET /api/v1/audit-logs/platform/tenant-options` → 200**（M15 P2 新增端点在线）；`GET /api/v1/auth/menus` → 200。
+- **release 目录名的哈希是注解标签对象**（`b8641fe`），不是代码 commit（`cf89e76`）：脚本 `rev-parse --short <ref>` 未解引用标签。已修 `deploy/scripts/bare-metal-deploy.sh`（`^{commit}`），下次发版起目录名与 commit 一致；本次 release 的代码仍是 `cf89e76`（目录内版本与文档已核对）。
 
 ## 7. 遗留与后续
 
