@@ -336,7 +336,13 @@ async function main(): Promise<void> {
   for (const code of GENERATED_PERMISSION_CODES) {
     const permission = await prisma.permission.findUnique({ where: { code } });
     if (permission) {
-      await prisma.rolePermission.create({ data: { roleId: adminRole.id, permissionId: permission.id } });
+      // upsert 而非 create：生成器的定向种子已把权限授给 admin（见 seed/<model>.seed.ts 的
+      // grantToAdminRole），此处再 create 同一 (roleId, permissionId) 会直接 P2002 炸掉全量 seed
+      await prisma.rolePermission.upsert({
+        where: { roleId_permissionId: { roleId: adminRole.id, permissionId: permission.id } },
+        create: { roleId: adminRole.id, permissionId: permission.id },
+        update: {},
+      });
     }
   }
 
