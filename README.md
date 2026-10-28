@@ -133,9 +133,40 @@ pnpm build && pnpm dev              # http://localhost:3000/health
 # 3. 前端（另开终端）
 cd ../admin-web && pnpm dev         # http://localhost:5173（dev 代理到 3000）
 
-# 4. 由数据表生成 CRUD（M6）
-fw gen crud order --dry
-fw gen crud order
+# 4. 由数据表生成 CRUD（M6 生成 / M16 一条命令到底）
+fw gen crud order --dry      # 先看将创建与重写的文件
+fw gen crud order            # 生成 + 自动接线 + 建并应用迁移 + 写权限点 + 前后端类型校验
+# 只改代码不动库：--no-migrate --no-seed；只校验后端：--fast；放行破坏性迁移：--allow-destructive
+
+# 5. 部署到单机（M16：一条命令，首次问三项，之后零输入）
+fw deploy --plan             # 只看计划：镜像标签、新增迁移、迁移风险（无副作用）
+fw deploy --seed             # 首次上线：部署并初始化账号/权限（seed 含清场语义，仅空库用）
+fw deploy                    # 日常发布：构建 → 备份 → 迁移 → 启动 → 健康检查
+fw deploy --rollback         # 回退上一镜像（数据库不回滚）
+
+# 6. 本地可视化工作台（M17：开发者本机工具，与后台平台完全分离）
+pnpm --filter @fw/studio-web run build   # 首次需构建工作台前端（未构建时回退内置只读页）
+fw studio                    # 在 127.0.0.1:4310 起服务并打开浏览器（--no-open 只起服务）
+#   Studio = 开发者用（改模型/生成/部署，只在本机，永不部署）
+#   admin-web = 产品后台（业务用户用，随应用部署）；两者互不依赖，边界由 check:studio-separation 门禁
+#   「AI 建模」页签：自然语言 → 只读模型草案（生成即校验，不写 schema）；「AI 检查」：审生成物
+
+# 7. AI 能力（模型路由在页面里填：Studio 右上角「AI 路由」）
+fw studio                    # 打开后填接口地址 / 密钥；模型名点「从地址获取」下拉选（可手填）；存 ~/.fw/studio-ai.json，不写项目、不回显
+#   数据模型页「＋ 从 JSON 导入」可粘贴 {models:[…]} / {Tag:{fields}} 等结构，识别成草稿后再预览写入
+#   也可用环境变量（CI 或无界面场景）：FW_AI_API_KEY（必填）/ FW_AI_MODEL（必填）/ FW_AI_BASE_URL（可选）
+#   优先级：页面配置 > 环境变量；保存即时生效，无需重启
+fw review --dry              # 先看「哪些代码会发出去」，不联网、不需要密钥
+fw review order --chunk-kb=12  # 大项目按体积分片（默认 24KB/片，越小越稳、调用次数越多）
+#   --split=model：按模型分组（同模型文件一包，shared 接线文件预算内随组发送）
+#   --per-file / --split=file：一个文件一次调用（失败隔离、行号准；跨文件问题更难发现）
+#   --raw：额外打印模型原文（默认只打印去重后的 P0/P1/P2 汇总）
+#   结论格式：[P0|P1|P2] 文件:行 — 问题 → 建议；审查只读，不写盘
+#   Studio 生成页同款入口：「AI 检查」；「AI 建模」页：自然语言 → 草案 → 一键导入设计器（草稿，不写盘）
+
+# 8. 黄金链路验收（M16：一条命令看结论，不手工敲几十条验证命令）
+fw verify --target=ci        # 仓库内建全新项目 → 建模 → 生成 → 迁移/种子 → 启动 → 浏览器 CRUD
+fw verify --target=real --url=https://<域名>   # 验证已部署实例（健康检查 + 浏览器 CRUD）
 ```
 
 ## 能力矩阵
@@ -187,6 +218,7 @@ fw gen crud order
 | [并行开发工作线划分](./docs/85-parallel-workstreams.md) | 多线并行：7 条工作线与负责人、8 份先行契约、目录所有权矩阵、W0–W10 时间轴与 I1/I2/I3 集成点 |
 | [先行契约](./docs/contracts/api-web.ts) | 类型即契约（只读）：C-04 缓存、C-05 权限契约、C-06 前端 API 契约、C-08 Job 契约已冻结，其余 C-03/C-07 待落地 |
 | [AI 多线程开工执行手册](./docs/86-ai-parallel-execution.md) | 编排者 + 5 个执行 agent 的拓扑、Wave 0–4 波次、agent 名额与目录白名单、prompt 模板、防造假四道闸 |
+| [AI 建模助手提示词](./docs/51-ai-model-designer-agent.md) | Model Designer Agent 内部提示词 v1.0：输入/输出 JSON 契约、逐字段字典（含义/类型/必填/异常）、增量修改协议、异常与降级矩阵、参数分层（业务生成参数 vs 调用参数）、自检 D1~D10（M17/PRD-017 FR-17-24） |
 | [贡献指南](./CONTRIBUTING.md) | 三步上手与硬性规则入口 |
 | [PRD 索引](./docs/prd/README.md) | 迭代清单与 PRD 模板约定 |
 | PRD-001 ~ PRD-009 | 见 `docs/prd/`，每个功能 / 迭代一份 |
@@ -226,6 +258,8 @@ fw gen crud order
 | M11 | 认证核心强化（轮换 CAS / 指纹 / Key Ring） | [011](./docs/prd/prd-011-auth-core-hardening.md) | ✅ 已发布 v0.6.0 |
 | M12 | 可观测与统一契约（W1~W3） | [012](./docs/prd/prd-012-observability-contract.md) | ✅ 已发布 v0.6.0 |
 | M13 | SaaS 运营基础 + 主线 B | [013](./docs/prd/prd-013-saas-operations-foundation.md) | ✅ 已发布 v0.7.0（真机已验收） |
+| M16 | 开发体验与部署一体化（三条命令 / 零到一次交互） | [016](./docs/prd/prd-016-dev-experience-and-deploy.md) | 开发中（S1 生成 / S2 部署 / S3 验收已交付；镜像构建与真机链路待验证） |
+| M17 | TY Studio 本地可视化工作台 | [017](./docs/prd/prd-017-ty-studio.md) | 开发中（S1 只读工作台、S2 写回内核+接口+设计器、S3 生成页与生成物指纹保护已交付；运行/日志与部署待做） |
 
 ## 开发规范
 

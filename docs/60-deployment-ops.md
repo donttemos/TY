@@ -215,15 +215,48 @@ curl -fsS http://127.0.0.1:3000/health
 └─ migrate      # 一次性迁移容器（先于 app 启动，退出即完成）
 ```
 
-**操作**
+**操作（推荐：一条命令）**
 
 ```bash
-docker compose -f deploy/docker-compose.prod.yml --env-file .env.prod up -d   # 启动
-docker compose -f deploy/docker-compose.prod.yml exec app pnpm db:migrate     # 迁移（只在一个实例执行）
+fw deploy                       # 首次问三项（域名 / 数据库密码 / Redis 密码，后两项可留空自动生成），之后零输入
+fw deploy --plan                # 只看计划：镜像标签、新增迁移数、迁移风险，不改环境不写配置
+fw deploy --seed                # 首装初始化账号与权限（seed 含清场语义，仅在空库/确认可清场时用）
+fw deploy --rollback            # 回退到上一镜像并重启（数据库不回滚）
+```
+
+`fw deploy` 内部阶段：环境向导 → 预检（docker / compose / 编排文件）→ 计划 → 构建（runtime + migrator 双目标）
+→ 备份（`pg_dump -Fc` + 魔数校验，失败即中止）→ 迁移（`migrate deploy`，永不 reset；新增迁移含破坏性操作默认阻断）
+→ 启动 → 健康检查（失败自动回退上一镜像）→ 写 `deploy-report.json` 与 `deploy.manifest.json`。
+失败时只给三行：哪一步、什么原因、下一条命令。
+
+**手工等价命令**（排查用；正常发布不必手工执行）
+
+```bash
+docker compose -f deploy/docker-compose.prod.yml --env-file .env.prod build app migrate   # 构建（migrate 需 --profile tools）
+docker compose -f deploy/docker-compose.prod.yml --env-file .env.prod --profile tools run --rm migrate
+docker compose -f deploy/docker-compose.prod.yml --env-file .env.prod up -d
 docker compose -f deploy/docker-compose.prod.yml logs -f --tail=200 app       # 看日志
 docker compose -f deploy/docker-compose.prod.yml up -d --scale app=3          # 扩容实例
 docker compose -f deploy/docker-compose.prod.yml down                          # 停止（保留卷）
 ```
+
+> ⚠️ **迁移不走 runtime 镜像**：`prisma` CLI 与 `@fw/cli` 在 devDependencies，runtime 镜像裁掉后跑不了迁移，
+> 因此构建产物有两个目标（`runtime` / `migrator`），迁移固定用 `migrate` 服务（`--profile tools`）。
+> ⚠️ `docker compose up` **不执行** `deploy.update_config` / `deploy.restart_policy`（Swarm 专用），
+> 所以「失败自动回滚」由 `fw deploy` 自己实现，不要指望编排文件。
+
+**`.env.prod` 变量**（`fw deploy` 首次生成，之后手工改也可）
+
+| 键 | 必填 | 说明 |
+|---|---|---|
+| `APP_DOMAIN` | 是 | 对外域名；同时作为 `TENANT_BASE_DOMAIN` 与 nginx 证书目录约定 |
+| `POSTGRES_PASSWORD` | 是 | 留空由 `fw deploy` 自动生成（32 字节 base64url），不回显 |
+| `REDIS_PASSWORD` | 是 | 同上 |
+| `JWT_SECRET` | 是 | 始终自动生成；**改动会让所有已签发令牌失效**，二次部署不会重写 |
+| `APP_IMAGE` | 否 | 镜像标签，默认 `fw-app:local`；`fw deploy` 每次发布写入新时间戳标签，用于回退 |
+| `APP_REPLICAS` | 否 | app 副本数，默认 1（2C4G 不建议超过 2） |
+| `WORKER_REPLICAS` | 否 | worker 副本数，默认 1 |
+| `PRISMA_SCHEMA` | 否 | 默认 `prisma/pg/schema.prisma`；**必须与 `DB_DRIVER` 匹配**，改错会导致迁移跑在错误的迁移目录 |
 
 **Nginx 要点**（已落 `deploy/nginx/fw.conf`）：`/api` 反向代理到 app 上游；`/` 指向前端静态资源并配 SPA history 回退；透传上游 `traceparent`（与 OTel 链路追踪贯通）；`/auth/*` 单独限流；`/metrics`、`/ready`、`/health` 等运维端点限内网白名单；开启 gzip 并让 `client_max_body_size` 与上传限制对齐；TLS 证书与自动续期。
 

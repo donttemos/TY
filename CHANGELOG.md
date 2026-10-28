@@ -18,6 +18,293 @@
 
 ## [Unreleased]
 
+### Added（M17 / PRD-017 FR-17-28：AI 补标注扫描，2026-10-28）
+
+- **「AI 补标注」按钮**：数据模型页工具行新增，扫描**缺 `///` 注释**的模型与字段，让模型给出中文标注建议；弹层展示候选规模与逐条建议，应用后只写入本地草稿，仍需「预览变更 → 写入 schema」。
+- **模型级注释现在可写回**：`ModelEdit.comment` 参与块级写回——无注释插入 `///`、有注释替换、空串删除；注释在 `model` 行上方，旧注释行会从上一块尾部摘除，字段行不受影响（有测试锁「只改注释不重排字段」）。
+- **只补缺的、不覆盖已有**：候选只含 `labelSource !== 'comment'` 的项；服务端过滤不存在的模型/字段、超长（>20 字）与未请求的模型标注，重复项去重；全部无效时报错而不是假成功。
+- **界面**：模型名旁「标注」输入框可手动改模型注释；字段「标注」列灰字是推断建议、输入即写回；扫描结果显示「候选 X 模型 / Y 字段、建议 N 条」。
+- **真实调用**：29 个模型、323 个缺注释字段 → 25 秒返回 323 条字段建议（`done→是否完成`、`deletedAt→删除时间`、`id→ID`），模型级 0 条（29 个模型都已有注释），schema 未改动。
+- **测试**：新增 8 例（候选筛选 1 / 输出过滤与去重 2 / 提示词 1 / 模型注释写回 2 / 接口 2），`@fw/cli` 全量 609 全绿；studio-web 114.04KB JS。
+
+### Added（M17 / PRD-017 FR-17-28：模型与字段中文标注，2026-10-28）
+
+- **标注来源分两种**：schema 里的 `/// 用户` 文档注释（`labelSource=comment`）；没有注释时按命名推断（`suggested`），如 `UserProfile` → 用户资料、`createdAt` → 创建时间、`stockCount` → 库存数量。推断只用于展示，**不写回** schema。
+- **认不出就不猜**：`Xyzzy` 这类名字返回空标注，避免乱译；词表覆盖 100+ 常见业务词与后缀（Count/Amount/Time/Date/List/Type/Status/Id/Url/At/By）。
+- **界面**：模型列表显示 `User（用户）`（推断值虚线、长注释取第一段，完整值在 tooltip）；字段表新增「标注」列，推断值作为占位符，编辑后作为 `///` 注释**写回 schema**；模型名旁显示标注 chip；生成页模型列表同步显示。
+- **写回安全**：字段注释参与块级 diff（改注释只多一行 `///`），未改字段仍复用原始行；模型级注释在块外，保持原样不重写。
+- **AI/JSON 导入也带标注**：草案 `display_name` 直接沿用，缺失时按命名推断，导入设计器后即可看到中文。
+- **验证**：真实仓库 29 个模型全部有标注（`DemoItem（演示条目）`、`User（用户）`、`Role（角色）`…），字段 `id→ID`、`done→完成`、`deletedAt→删除时间`；无头 Chrome 截图核对。
+- **测试**：新增 9 例（推断 5 / 注释解析写回 2 / 列表标注 2）+ to-editor 断言，`@fw/cli` 全量 601 全绿。
+
+### Added（M17 / PRD-017 FR-17-27：从 JSON 识别模型，2026-10-28）
+
+- **数据模型页新增「＋ 从 JSON 导入」**：粘贴 JSON → 识别成设计器草稿 → 走「预览变更 → 写入 schema」。识别本身**不写盘**，写入仍受风险分级与确认令牌约束。
+- **五种形态都认**：`{models:[...]}`（AI 草案信封）、`{models:{Tag:{...}}}`、`[{name,fields}]`、`{tables:[...]}`、以及顶层直接是模型映射 `{Tag:{fields:{name:"String?"}}}`；字段可用映射写法。
+- **类型简写与约束**：`String?` → 可空、`String[]` → 数组；`unique`/`indexed`/`default`/`enum_values`/`precision`/`scale`/`relation` 保留；导入后按项目约定补 `id`/审计字段（与 AI 草案同一条 `draftToEditorModels` 链路）。
+- **有界与可解释**：单次最多 50 模型 / 1000 字段 / 512KB，超出直接拒绝；重复模型、未知类型（按枚举处理）、被丢弃的关系都进 notes；语法错误定位到原因。
+- **`?import=1` 深链**：可直接打开导入弹层（方便把「导入入口」发给同事）。
+- **验证**：接口实测 `Tag` 草案 → 补 `id`/`createdAt` 等 7 字段、`@unique` 落位、schema 零改动；弹层与入口用无头 Chrome 截图核对。
+- **测试**：新增 11 例（解析 8 / 接口 3），`@fw/cli` 全量 592 全绿；studio-web 109.44KB JS。
+
+### Changed（M17 / Studio 界面重构，2026-10-28）
+
+- **设计 token 与控件统一**：间距/圆角/阴影/状态徽标收进 `style.css`（`--sp-*`、`--r-*`、`.pill`、`.chip`、`.num`），按钮/输入框统一 28px 高、主按钮带投影与 hover；复选框不再被输入框高度拉高。
+- **头部三层分离**：品牌区（TY Studio + 副标题）、页签（数据模型带计数）、右侧项目元信息（路径 chip、形态、待写入数、环境点、AI 路由），不再挤成一行。
+- **数据模型页**：模型列表加搜索与「字段数 · 关系数」，脏模型显示黄点；字段表改为紧凑行（输入框无边框、聚焦才显形）、表头吸顶、固定列宽（修掉「移除」被挤成竖排）；新增「＋ 字段」入口（此前只能删不能加）；diff 增加头部与「复制」。
+- **生成页**：模型列表显示字段数与漂移点，执行选项分组，主按钮前置；日志面板加状态徽标、耗时、复制，空态改为带说明的占位区；AI 检查的切分策略单独一行，不再挤在按钮间换行。
+- **AI 建模页**：草案头部改为状态徽标 + rev/模型数/字段数/重试次数；模型卡带 action 徽标、类型用 pill、布尔列用 ✓/·；「自动修正」「原始操作」折叠；未生成时右栏给三步引导，不再留白。
+- **页签深链**：`?tab=gen|draft` 可直接进入并随切换写回地址栏。
+- **验证**：用本机 Chrome 无头渲染三页截图核对（1440×900），修掉模型列表撑高页面、移除按钮竖排、日志空态过大等问题；studio-web 构建 106.14KB JS / 19KB CSS。
+
+### Added（M17 / PRD-017 FR-17-23：审查结论去重与汇总，2026-10-27）
+
+- **结构化解析**：把模型输出里的 `[P0|P1|P2] 文件:行 — 问题 → 建议` 解析成条目（兼容中英文冒号、`->`、无位置条目）；解析不到条目时**回退原文**，不吞结果。
+- **跨片去重**：分片/多次审查的同一问题只留一条。归并键用**文件名 + 行号**（模型常一处写全路径、一处只写文件名），严重级取更高，建议按包含关系去重并保留信息量更大的那条；展示保留更完整的路径。
+- **汇总输出**：先给 `P0/P1/P2` 计数与合并条数，再按严重级→文件→行排序输出；默认不再刷屏原始 JSON，`--raw` 可追加原文。
+- **实测（离线回放真实结论）**：同一 P0 被两片分别写成 `src/modules/demo-item/demo-item.controller.ts:27` 与 `demo-item.controller.ts:27` → 合并为 1 条，建议取「给 5 个端点补 @Permissions」。
+- **测试**：新增 11 例（解析 3 / 归并 5 / 渲染 1 / 名称归一 1 / 跨片集成 1），`@fw/cli` 全量 581 全绿。
+
+### Added（M17 / PRD-017 FR-17-23：AI 检查分片执行，2026-10-27）
+
+- **按体积分片**：审查不再一次塞全部文件。默认单片 24KB（`--chunk-kb=<n>` 可调，下限 4KB），贪心装填、顺序不变，最多 6 片；超出上限合并尾部并提示。
+- **超大单文件按行切段**：`prisma/seed.ts` 单文件 40KB 时按行切段，段头写明 `起始-结束 行（共 N 行）` 与偏移量；日志提示「引用行号需按段头偏移换算」，避免行号对不上。
+- **单片失败不影响其余**：逐片 try/catch，失败只记 `[error]` 并继续；只要有一片产出就返回结论并标注「只覆盖成功的分片」，全军覆没才整体失败。
+- **结论合并**：多片时按 `## 分片 i/n` 分节输出，便于对照；单片时输出与原来完全一致。
+- **新增逐文件模式 `--per-file`**：一个文件一次调用（大文件仍按行切段），失败只丢一个文件、行号不跨段；预演会显示「共 N 次调用」。默认仍是按体积装箱——不是为省成本（每次固定提示仅 521 字符 ≈261 tokens），而是为了保留**跨文件因果**：例如「controller 未挂权限装饰器」要结合「seed 里权限码无消费方」才能定为 P0。
+- **新增 `--split=model`（按模型分组）**：同一模型的 controller/service/dto/seed 归一组、组内按 24KB 装箱；**接线文件（shared）默认随组发送**（模块注册类问题必须同时看到 `demo-item.module` 与 `app.module`），模型组超过 3 个或体积装不下时才单独成组，并给出提示。结论标题带模型名（`## 分片 1/3 · DemoItem`）。实测 9 文件 61KB → 3 片：`DemoItem` 8 文件 21KB（含 `app.module.ts`）/ `prisma/seed.ts` 两段 24+16KB。
+- **Studio 暴露切分策略**：生成页「AI 检查」旁新增下拉（按体积 / 按模型 / 逐文件），经 `POST /api/review {split}` 透传为 `--split=`；非法值静默丢弃，不会把脏参数交给 CLI。
+- **预演如实显示分片**：`--dry` 不再只列“将发送 N 个文件”，而是按真实分片展示 `[i/n] 文件数/体积`，超大文件标出切段行号（如 `prisma/seed.ts（第 1-371 行 / 共 744 行）`）——预演的意义就是提前看见真实发送形态。
+- **实测（真实账号）**：61KB / 9 文件 → 3 片（21KB + 24KB + 16KB）。第 1 片成功产出 7 条结论（权限缺失、mass assignment、分页越界、通配符未转义等）；后两片仍 180s 超时，**判断为供应商排队/限流**而非体积（16KB 也超时，而 21KB 成功）。已把 `--chunk-kb` 暴露给用户按账号调小。
+- **测试**：新增 18 例（分片规划 9 / 切段 3 / 编排 4 / 预演分片 1 / 参数透传 3），`@fw/cli` 全量 570 全绿（`inspect` 的 2 例在默认 10s 钩子下会超时，属既有 Windows 环境限制，加 `--hookTimeout 60000` 后 9/9 通过）。
+
+### Added（M17 / PRD-017 FR-17-24：草案持久化与增量修改，2026-10-27）
+
+- **刷新不丢草案**：最近一份草案自动缓存到 `~/.fw/drafts/<项目哈希>.json`（0700/0600，原子替换），重开页面自动恢复并显示保存时间；「清空草案」可删缓存。生成一次要 20~60 秒，刷新即丢不可接受。
+- **增量修改（revise）**：草案面板新增「继续修改」输入，只把 `operations` 应用到当前草案，返回**字段级 diff**（`Product.color`：∅ → {…}），确认后才覆盖；未点名的字段原样保留——这是「不整份重发覆盖用户修改」的实现方式。
+- **破坏性变更分级**：改类型、收窄可空、去唯一、删字段/删模型/删索引会被标红并计入 `destructive`，界面提示「含破坏性变更」；`skipped` 逐条说明被跳过的操作（目标不存在、重复字段等）。
+- **revision 由服务端推导**：新草案 `revision = 旧 + 1`，不采信模型回填；`baseRevision` 不一致在调用前就挡（409）。
+- **接口**：`GET/POST /api/model-draft/saved`、`POST /api/model-draft/saved/clear`、`POST /api/model-draft/revise`（返回 `draft/operations/changes/skipped/destructive/attempts/warnings`）。
+- **测试**：新增 17 例（应用与 diff 8 / 缓存 6 / 接口 3），`@fw/cli` 全量 550 全绿；studio-web 构建 100.53KB JS。
+
+### Fixed（M17 / PRD-017 FR-17-24：待澄清草案的可用性，2026-10-23）
+
+- **「导入编辑器」不再空点**：草案 `status=needs_clarification` 或 `models` 为空时按钮禁用，`title` 直接说明原因（「待澄清：没有生成任何模型，先回答问题再重新生成」）。
+- **待澄清不再像失败**：提示改为「需要澄清：AI 判断与已有模型语义重叠，本轮没有生成模型」，并说明下一步。
+- **补上「继续对话」入口**：需求框下新增「补充说明」，把回答（如「复用 AuditLog」/「新建独立模型，只记录前台用户」）追加到需求后重新生成，不必重打整段需求。
+- **修两个渲染 bug**：`questions.options` 是对象数组时显示成 `[object Object]`（现在取 label/text/value）；`migration_risks` 字段缺失时显示成「. · ：」空白行（现在降级为「变更 · 风险 / 模型未给影响说明」）。
+- **测试**：studio-web 构建 96.84KB JS；`@fw/cli` 533 全绿（本轮仅前端改动）。
+
+### Fixed（M17 / PRD-017 FR-17-24：关系写残不再整份退回，2026-10-23）
+
+- **问题**：模型输出 `relations[0] = {}`（缺 target / cardinality / field）时，草案被整份判为 `schema-invalid`；虽然服务端已经回灌重试 1 次，但用户只看到一个无解报错，实际改不了任何东西。
+- **改法**：关系定义不完整、目标不存在、基数不支持 → **丢弃该关系并记 warning**，字段保留为普通外键，之后可在设计器用「＋关系」补两端；字段级关系同样降级为 `relation: null`。硬错误（模型名/字段名非法、破坏性变更未标记）仍然拒绝。
+- **可解释**：错误消息改为「连续 2 次未通过（已把问题回灌给模型重试 1 次）…」；草案面板新增「自动修正」区块，逐条列出被补齐/丢弃的内容，不再只给一个结论。
+- **测试**：新增 2 例（空关系对象、关系目标不存在），`@fw/cli` 全量 533 全绿；studio-web 95.54KB。
+
+### Added（M17 / PRD-017 FR-17-24 第三步：草案导入设计器，2026-10-23）
+
+- **「导入编辑器」按钮**：AI 建模页生成草案后可一键转入「数据模型」设计器，作为**本地草稿**（不写 schema）。之后沿用既有「预览变更 → 写入 schema」链路：风险分级、一次性令牌、`prisma validate`、备份、原子写一个都不绕过。
+- **转换规则**（`model-designer/to-editor.ts`）：按项目约定补齐框架字段（id / tenantId / 审计四件套 / deletedAt，缺 `id` 时写回必失败）；约束翻译成 Prisma 属性（`@default`、`@unique`、`@@index`、`@@unique`）；`Decimal` 仅在 postgres/mysql 写 `@db.Decimal(p,s)`；与 `@unique` 重复的单列索引自动跳过。
+- **关系不硬编**：草案里的关系字段先按外键标量导入，并提示用设计器的「＋关系」补齐两端——Prisma 要求两端同时声明，单边写入必然 P1012。
+- **不支持的变更如实拒绝**：`action` 为 update/delete 的模型不导入（会碰存量数据），在 `skipped` 里说明原因；`unsupported_features` 原样带入提示。
+- **实测**：真实链路「生成草案（23s）→ 转设计器」得到 `Tag` 9 个字段（补 id/审计四件套）、`@unique` 与 `@@index` 正确落位；schema 文件零改动。
+- **测试**：新增 8 例（转换 6 / 接口 2），`@fw/cli` 全量 531 全绿；studio-web 构建 95.23KB JS。
+
+### Fixed（M17 / PRD-017 FR-17-25 补充：模型调用错误可定位，2026-10-22）
+
+- **错误信息带完整地址**：超时/连接失败/非 2xx 都打印 `POST {baseUrl}/chat/completions`，不再只给个根地址让人猜「到底加没加路径」。
+- **新增链路诊断** `POST /api/ai-config/diagnose`：先查 `/models`，再发一条 `max_tokens: 1` 的真实对话；404 判「路径不存在」、401/403 判鉴权、429 判限流、超时判「可达但过慢/需代理」，400 且 body 含 `invalid model format` 时直接指出**该供应商要求 `provider/model`**。页面「测试连接」改为「诊断链路」，两步结果分行展示，并在地址下方实时预览对话地址。
+- **实测（Cline）**：`https://api.cline.bot/api/v1` → 模型列表 468 个；模型填 `deepseek-chat` 返回 400 `invalid model format`，正确写法是 `deepseek/deepseek-chat`。诊断已把这条结论直接显示出来，不用再猜超时还是路径。
+- **兼容网关的 `{ success, data }` 包装**：Cline 等网关把 OpenAI 响应包在 `data` 里，只认顶层 `choices` 会把 200 判成「没有正文」。已同时支持两种结构；只有 `reasoning` 没有正文时给出明确提示，不谎报成功。
+- **超时可配置**：默认 60s → **120s**，页面「AI 路由」新增「调用超时（秒）」（5~600），也可用 `FW_AI_TIMEOUT_MS`；推理模型 + 大 schema 实测需要 16~50s，60s 会误杀。
+- **软瑕疵先修复再校验**：模型漏 `generation_profile` / 调用参数、UI 布尔给成字符串、索引引用未列出的框架字段（如 `createdAt`）时，后端按默认值补齐或丢弃该索引并记 warning，不再整份拒绝；命名、关系、破坏性变更等硬约束仍然拒绝。
+- **实测**：`z-ai/glm-5.3-flash` + 真实仓库 schema（26.7k 字符 prompt）→ 31s 返回草案（`Tag` 5 字段），补齐类 20 条进 warnings；同一 prompt 直连模型 16s，说明差异在供应商排队而非代码。
+- **测试**：全量 **523** 全绿（诊断/超时/包装/软修复共 16 例新增）。
+
+### Fixed（M17 / PRD-017 FR-17-26：重启不再让页面 401，2026-10-22）
+
+- **问题**：`fw studio` 每次启动都随机生成令牌，用户正在页面里填配置时，只要服务重启过一次（改代码/换端口/重跑命令），保存就返回 401「缺少或错误的 token」——看起来像填错了，实际是令牌换了。
+- **改法**：令牌按项目持久化到 `~/.fw/studio-token.json`（目录 0700 / 文件 0600），项目路径取 sha256 前 16 位分桶（文件里不出现绝对路径）。优先级：显式参数 > `FW_STUDIO_TOKEN` > 已持久化 > 新生成并落盘。`--new-token` 强制轮换（显式动作，会让其他页面失效）。文件损坏按空表处理并重建，不阻断启动。
+- **前端**：401 文案改为「Studio 已重启或令牌已轮换：请用终端打印的最新地址重新打开页面」，不再让人怀疑自己填错。
+- **验证**：新增 6 例单测（复用 / 跨项目隔离 / 轮换 / 显式不落盘 / 损坏重建 / 文件不含绝对路径）；真实取证：重启后旧地址 `?token=RMsPAL…` 仍 200，AI 配置读写正常。`@fw/cli` 全量 507 全绿。
+- **边界**：令牌生命周期从「一次启动」变成「按项目长期」，安全模型不变（仍只监听 127.0.0.1、Host/Origin 校验、所有 `/api/*` 校验）。
+
+### Added（M17 / PRD-017 FR-17-25：模型路由在页面里配置，2026-10-22）
+
+- **Studio 顶部「AI 路由」**：接口地址 / 模型名 / 密钥三个字段直接在页面填，保存后**即时生效**（每次请求现场读配置，无需重启）。命令行 `fw review` 走同一份合并逻辑，页面配好终端即可用。
+- **密钥不写项目**：保存在 `~/.fw/studio-ai.json`（目录 0700、文件 0600），可用 `FW_STUDIO_AI_FILE` 覆盖路径。写项目 `.env` 等于给密钥一张进版本库的单程票，因此刻意不这么做。
+- **优先级与回显**：页面配置 > `FW_AI_*` 环境变量 > 默认。`GET /api/ai-config` 只回 `configured / baseUrl / model / apiKeySet / source / file`，**任何响应都不含密钥**；保存时密钥留空表示「不修改」，删除走 `clearApiKey`，避免空串把密钥冲掉。
+- **测试连接只打 `/models`**：不产生推理 token 费用；401 提示检查密钥，地址错误提示协议，超时与网络错误各自给可读说明；失败不落盘、不影响已保存配置。
+- **模型名从地址取**：`POST /api/ai-config/models` 拉 `{baseUrl}/models`，去重排序后返回；页面输入框接 datalist（下拉选 + 手填兜底，自建网关不实现该接口也能用），打开已配置实例时后台自动拉一次。查列表失败仍返回 200 + `ok:false`，避免「空列表冒充成功」。
+- **接口**：`GET /api/ai-config`、`POST /api/ai-config`（保存）、`POST /api/ai-config/test`；沿用 token + Host/Origin 校验，非法地址 400 且不落盘。
+- **测试**：新增 31 例（存储 19：留空不覆盖 / 清除 / 损坏文件 / 优先级 / 状态不含密钥 / 连接 200·401·无密钥·非法地址·网络错误 / 模型列表去重排序·空列表·401·无密钥·非法地址；接口 12：初始状态 / 保存即生效 / 留空不覆盖 / 清除 / 非法地址 / 测试连接 / 空 body / 405 / 列表无密钥 / 已保存可直接取 / 列表 405）；`@fw/cli` 全量 501 全绿；studio-web 构建 92.89KB JS。
+- **边界**：配置文件明文（不加密——能读用户目录的人本来也能读环境变量）；不支持多套路由切换；**未用真实供应商验证连接成功路径**（本机无密钥，仅 fetch 替身）。
+
+### Added（M17 / PRD-017 FR-17-24：AI 建模只读闭环，2026-10-22）
+
+- **`POST /api/model-draft`**：自然语言 → 模型草案，返回前必过结构 + 语义校验。`GET /api/model-draft` 回上下文摘要（数据库类型、已有模型名、约定说明、schema 是否截断），不回 schema 全文。未配置密钥 400 `ai-not-configured`；版本冲突 409；输出不合法 400 `schema-invalid`（带 `issues` 路径）；上游失败 502。
+- **校验器手写、零新增依赖**：`model-designer/draft-schema.ts` 覆盖命名（PascalCase / lowerCamelCase / 保留字）、类型白名单与 `enum_values`、`Decimal` 精度、默认值与可空、关系目标与 `on_delete`、索引列、UI 混库、增量操作白名单与必填参数、`revision = base + 1`、破坏性变更必须登记、策略扫描（禁供应商/地址/密钥）。
+- **防契约漂移的测试**：`docs-sync.test.ts` 把 docs/51 的商品示例直接交给校验器（示例不合法 = 文档与实现分叉），并检查规则编号 R1~R17 在文档与代码提示词中同时存在。
+- **重试只在格式与语义层**：首次解析/校验失败 → 回灌最多 10 条「路径 + 原因 + 码」并回放上次原始输出，再调 1 次；`E_POLICY` 与 `baseRevision` 不一致不重试（前者疑似提示注入，后者在调用前就挡住）。
+- **上下文不写死**：数据库类型读 datasource；框架约定按「≥50% 已有模型都有」推断（id / tenantId / 审计四件套 / deletedAt）；schema 超 18k 字符截断并标注；缺 schema 时显式声明「未读取」。
+- **Studio「AI 建模」页**：需求输入 → 只读草案（字段表、索引、关系、假设、待确认、提示、迁移风险、原始 JSON）。**没有保存到 schema 的按钮**——本轮只做「生成 + 看清」，写回留给编辑与 `prisma validate` 链路。
+- **验证**：新增单测 48 例（draft-schema 23 / 编排 9 / 上下文 8 / 文档同步 3 / 接口 5）；`@fw/cli` 全量 470 全绿；studio-web 构建通过（87.52KB JS / 10.31KB CSS）。
+- **边界**：草案不持久化（刷新即丢）；`revise` 后端可用但界面未暴露（无 diff/确认）；未抽独立 JSON Schema 文件；未写 schema、未生成代码。
+
+### Added（M17 / PRD-017：Model Designer Agent 内部提示词 v1.0，2026-10-22）
+
+- **新增提示词资产** [docs/51-ai-model-designer-agent.md](./docs/51-ai-model-designer-agent.md)：把「自然语言 → 可编辑数据模型草案」的规则固化成可直接复用的系统提示词，与 Code Review Agent 明确分权（前者提设计，后者找缺陷，互不复用提示词）。
+- **输入也是 JSON**：定义调用信封（`mode: create|revise|clarify`、`base_revision`、`requirement`、`context.database/schema/existing_models/conventions/generator/ui/draft`），缺上下文时模型只能声明假设，不得假装读过项目文件。
+- **输出逐字段字典**：顶层字段 + `models/fields/ui/relations/indexes/operations/questions/migration_risks/recommended_call_params/generation_profile` 全部给出「含义 / 类型 / 是否必填 / 约束与异常处理」，并附一份**经 `JSON.parse` 校验**的商品模块完整示例（含 SKU 软删除唯一性、库存可否为负两条待确认问题）。
+- **增量修改协议**：`revise` 模式只允许输出 `operations`（9 种操作），配 `base_revision` CAS；不匹配返回 409，杜绝「AI 整份重发覆盖用户已有修改」。破坏性由后端按操作类型推导，不采信模型自报。
+- **16 条异常与降级矩阵**：`E_JSON_PARSE` / `E_SCHEMA` 最多重试 1 次（回灌字段路径），语义类错误（`E_UNKNOWN_REF` / `E_DUP_MODEL` / `E_REVISION_CONFLICT` / `E_DESTRUCTIVE_UNAUTHORIZED`）一律不重试；格式/网络类才有重试。
+- **模型参数分两层**：`generation_profile`（分页、默认排序、权限码、种子条数、控件映射）由 AI 建议且开发人员可编辑；`recommended_call_params`（temperature / max_output_tokens）只作建议，编排层夹取范围（温度 ≤0.3、输出上限封顶），模型不得输出供应商、地址、密钥。
+- **自检 D1~D10**：名称合法、类型受支持、关系两端一致、默认值与可空不冲突、唯一/索引不重复、未重复建模型、UI 不混入库定义、unsupported 与 models 不矛盾、推断项有依据、破坏性已标记——前 8 条给出可机器复核方式。
+- **状态如实标注**：提示词与契约**已定稿，尚未接入调用代码**；接入顺序（只读生成 → 增量 diff → Schema 写回）与现有 `review/provider.ts`、`studio/schema-api.ts` 的复用点写在文档第 10 节。
+
+### Added（M17 / PRD-017 S4：AI 代码审查，2026-10-22）
+
+- **`fw review [模型...]`**：只审 `fw.gen.json` 记录的产物 + `app.module.ts` / `seed.ts` 两个接线文件（不扫全仓库：范围可控，也不会把业务配置与密钥发出去）。结论按 `[P0|P1|P2] 文件:行 — 问题 → 建议` 输出，提示词写的是本项目真实红线：多租户 `tenantId` 过滤、权限码、`BizError`（禁裸抛）、审计事件、分页上限。
+- **OpenAI 兼容、不引 SDK**：只调 `POST {baseURL}/chat/completions`，DeepSeek / 通义 / 自建网关 / Ollama 换环境变量即可。配置键：`FW_AI_API_KEY`（必填，兼容 `OPENAI_API_KEY`）、`FW_AI_MODEL`（必填）、`FW_AI_BASE_URL`（可选）；命令行 `--ai-model` / `--base-url` 覆盖。**密钥只从环境变量读**，不写项目文件、不进清单、不回显（401 只提示检查变量名）。
+- **`--dry` 不联网也不需要密钥**：先看清「哪些代码会出境」再决定是否发；配置齐全时额外显示目标地址与模型名。单文件 / 总量超限**跳过并说明原因**，不截断半截代码（半截文件会让模型下错结论）。
+- **Studio「AI 检查」**：`GET /api/review` 只回 `{ configured, baseUrl, model }`；`POST /api/review { models? }` 复用 `JobManager` 起 CLI 子进程，日志与生成共用同一面板。未配置时直接 400 `ai-not-configured`（不起注定失败的任务），前端按钮禁用并写明缺哪个变量；模型名沿用与生成相同的注入防线（`Product; rm -rf /` → 400）。
+- **审查只读**：不写盘、不改 schema、不缓存结论（代码一改就过期）。
+- **审查范围受控，老清单也能审**：优先用 `fw.gen.json` 的产物指纹；S4 之前生成的清单没有指纹，则按生成器约定回退到后端六文件 + 种子（否则真实项目第一次审查只剩两个接线文件）。
+- **验证**：探针工程 `fw review --dry` → 12 个文件 / 22KB、零联网；真实仓库 `apps/example-api` → 9 个文件 / 61KB（含 `seed.ts`）；新增单测 39 例（config 7 / collect 9 / prompt 4 / provider 5 / 编排 6 / 参数分派 3 / Studio 接口 5）；`@fw/studio-web` 构建 81.58KB JS。
+- **边界**：不做自动修复与行号跳转；审查质量取决于供应商模型，提示词只约束格式与红线。
+
+### Added（M17 / PRD-017 S4：生成物指纹保护，2026-10-22）
+
+- **写入时机**：`fw.gen.json` 为每个产物记录全文 sha256，**文件写完即记**，不等后处理成功。`verify` 失败时清单随文件一起回滚（还原成生成前的逐字节原文）；`migrate` / `seed` 失败保留文件与指纹——否则一次 `prisma generate` 环境问题就会留下「文件在、指纹没了」，漂移检测永远只能回答「不知道」。
+- **指纹只增不减**：新增 `mergeArtifactHashes`，只替换本次确实写过的路径。`--only=backend/frontend/seed` 局部重跑不再把其余产物指纹抹掉；被跳过的文件沿用旧指纹（不拿用户改后的内容冒充生成基线）；`--only=frontend` 只刷新已有模型、不新增条目（清单同时是接线事实源，凭空加条目会让 `check:gen-sync` 谎报已接线）。
+- **生成前就能看见**：`fw gen crud` 在任何写入前按状态提示——`modified`「你改过，本次会跳过（`--force` 会覆盖并丢弃修改）」、`missing`「已被删除，会重新创建」、老清单「还没有指纹，无法判断」；dry-run 预览逐文件标注「你改过这份产物」。把两种状态合并成一句「会跳过」会让用户误以为删掉的产物不会回来，故分开。
+- **接口与界面**：`GET /api/gen/drift` → `{ ok, tracked, models: [{ model, files: [{ path, status }], affected }] }`（清单损坏按无指纹处理，不 500）；生成页把「已修改 / 已删除」分组展示，仅存在已修改文件时出现 `--force` 勾选（覆盖即丢改动）。
+- **路径基准（本地起服务时抓到的真缺陷）**：清单内产物路径曾按「生成时的 cwd」记录——从 `apps/<app>` 目录执行生成、Studio 却以仓库根解析，漂移会把所有产物误报成 `missing`。已统一改为**相对后端应用根**（清单所在目录，前端用 `../admin-web/...`），从仓库根或应用目录执行结果一致；`GET /api/gen/drift` 同口径解析。代码见 `relativeArtifactPath`。
+- **真实取证**：对仓库真实 `apps/example-api`（老清单无指纹）执行 `gen crud DemoItem --dry` → 输出「还没有产物指纹…本次无法判断」且零落盘；Studio 真实 HTTP `GET /api/gen/drift` → `200 / tracked=false / DemoItem:0`（不把未知当安全）。
+- **测试**：`@fw/cli` 361 → **383 全绿**（gen 167 / studio 103；新增 13 例：合并语义 3、编排 9、预览 1）；`check:headers` / `check:gen-sync` / `check:studio-separation` / `check:no-raw-throw` 通过；`@fw/studio-web` 构建通过（80.59KB JS / 7.93KB CSS）。
+- **边界**：只追踪生成产物（模块 / 前端 views / api / 种子），`app.module.ts`、`seed.ts` 的标记块由生成器全量重建不记指纹；全文 sha256 意味着换行符差异也判为改动（宁多报）；老清单需跑一次生成才建立基线。无新增错误码、配置键与迁移。
+
+### Added（M17 / PRD-017 铁律 6：Studio 与后台平台边界门禁，2026-10-22）
+
+- **边界定义**：TY Studio 是**开发者本机工具**（改模型/生成/部署，`127.0.0.1:4310`，永不部署）；`apps/admin-web` + 应用服务是**产品**（业务用户、RBAC、随应用部署）。两者受众、运行位置、鉴权模型、数据来源、写操作、产物六维分离，写入 PRD-017 §6。
+- **代码核实**：当前零耦合——`packages/cli/src/studio/**` 无 `apps/**` 引用，`apps/admin-web/**` 无 studio 引用（只有注释提到目录名）。
+- **门禁固化** `scripts/check-studio-separation.mjs`（`check:studio-separation`，已接入 CI）四条规则：R1 Studio 不依赖 `apps/**`；R2 后台前端不引用 `@fw/studio` / `fw studio` / `/api/schema/*`；R3 `deploy/**` 不得出现 Studio；R4 端口 4310 不得出现在 deploy 或后台代码。反向验证：造 3 个违规文件 → 4 处越界全部报红。
+- **允许的复用**：设计语言与 CSS 变量可以共享；**不允许**共享运行时（路由、鉴权 store、构建产物）。`fw verify` 借 admin-web 跑浏览器用例属于「验证产品」，产品侧不知道 Studio 存在。
+- **文档**：PRD-017 升级为六条铁律，新增 §6 边界章节与 AC-17-10；README 快速开始明确两条入口的分工。
+
+### Added（M17 / PRD-017 S3：生成页与任务执行器，2026-10-22）
+
+- **Studio 第一次真正执行 CLI，执行面被收进一个组件**：新增 `JobManager`（`studio/jobs.ts`）——唯一允许调用 CLI 的通道。**同一时刻只允许一个写任务**（schema 写入与生成都改文件，并发会互相踩）；输出按行缓存上限 2000 行；失败摘要自动挑「像错误的那一行」并跳过 `warn`。
+- **命令由服务端拼装，前端无法提交命令行**：`buildGenArgs` 用 `^[A-Za-z][A-Za-z0-9_-]{0,63}$` 校验模型名——`A; rm -rf /`、`Pro duct`、`--dry` 这类输入一律 400；开关只在显式 `true` 时追加。执行用 `process.execPath` + CLI 入口，**不经 shell**，无注入面。
+- **接口**：`POST /api/gen { models, dry?, noMigrate?, noSeed?, allowDestructive? }` → 202 + jobId；`GET /api/jobs/:id` → 任务记录。采用**启动 + 轮询**（2.5 次/秒）而不是 SSE：本地工具足够，且不依赖代理与缓冲行为。
+- **界面**：顶部页签「数据模型 / 生成代码」。生成页左侧勾选模型 + 三个开关（不执行迁移 / 不写种子 / 允许破坏性），右侧实时日志自动滚到底；成功后自动重载 schema（可能新增了模型）。
+- **实测**：真实仓库 `POST /api/gen {models:['DemoItem'], dry:true}` → `job-1` → **84 行输出、`succeeded`、exit 0、未落盘**（dry-run 语义生效）。
+- **测试**：studio 88 → **101 例**（JobManager 6 + 生成接口与替身 CLI 端到端 7），`@fw/cli` **361 全绿**；`check:headers` 759、`check:studio-separation` 通过。
+- **缺口（如实记录）**：FR-17-14 的「生成物指纹保护」未做——手改过的产物重新生成时目前仍依赖 `fw gen crud` 自身的「默认跳过、`--force` 才覆盖」；界面仍无浏览器点击验收（本机 chromium 不可用）。指纹保护已由 S4 补齐（见上）。
+
+### Added（M17 / PRD-017 S3：关系配置，2026-10-22）
+
+- **多对一关系由服务端生成两端字段**：`buildRelationEdits` 生成子端外键（默认 `<to>Id`，默认可空）+ 关系字段（`@relation(fields: [...], references: [id])`）+ 父端反向数组（`<from>s <From>[]`）。**为什么不让界面拼**：Prisma 强制关系两端同时声明，只写子端直接 P1012 失败；两端写法分散在界面必然出现半成品。
+- **新接口** `POST /api/schema/relation { from, to, required? }` → 返回 `edits` + 预览（与 preview 同构）。预览响应同时**回显 edits**，apply 必须用同一份，否则确认令牌指纹不匹配。
+- **踩到并修掉一个非法 schema**：反向数组最初写成 `optional: true`，序列化成 `Product[]?`——Prisma 不允许可选列表。已固定为 `optional: false, isList: true`，并在测试里断言输出不含 `[]?`。
+- **diff 呈现修复**：关系一次改两个模型，原先「只裁首尾」的简化 diff 会把中间整段标成删+增（3 行真实变更显示成 30 行）。改用 `gen/writer` 的 LCS 实现后收敛到 9 行且只含真实新增。
+- **错误信息质量**：Prisma 在真错误前会打若干 `warn`（配置弃用）与环境提示，原先「失败原因」被噪声占据（如显示 `Environment variables loaded from ..\.env`）。执行器改为跳过噪声行、优先取带 `Error` / `P1xxx` 的行。
+- **界面**：字段面板新增「＋ 关系」，选目标模型 + 是否必填 → 生成并进入预览态；仅当无未保存修改时可用（否则并回草稿会覆盖用户输入）。预览一旦因草稿改动失效，界面提示重新预览，杜绝「看着旧 diff 点写入」。
+- **实证**：生成的关系经**真实 `prisma validate` 通过**；只写一端时真实校验**被拒绝**（两条都跑过）。真实 schema 上 `DemoItem → User` 预览：`risk=safe`、diff 9 行、仅含 3 行真实新增。
+- **测试**：studio 80 → **88 例**，`@fw/cli` **348 全绿**；`check:headers` 759、`check:studio-separation` 通过。
+
+### Added（M17 / PRD-017 S2：数据模型设计器界面，2026-10-22）
+
+- **新增 `packages/studio-web`**（Vue 3 + Vite，**不引 UI 库**）：产物 71KB JS / 4.8KB CSS。刻意不用 Element Plus——那会与后台平台共享运行时，违反铁律 6（Studio 与产品隔离）。
+- **三栏设计器**：模型列表（改动过的标黄点）/ 字段表格（字段名、类型可下拉可自填、可空、属性原文）/ 预览与写入面板（风险清单、结构问题、diff、确认勾选）。
+- **交互铁律：预览与写入分两步**。风险非 safe 时，写入按钮旁必须勾选「我已确认上述 N 项风险」，且确认令牌由预览签发——界面无法绕过令牌直接写盘。
+- **服务端托管前端产物**：`resolveStudioWebDist` 依次探测 workspace 布局、打包内副本、cwd 布局；**找不到产物时回退内置只读页**，保证 `fw studio` 在未构建前端时依然可用。静态资源受目录穿越保护（单测覆盖 `assets/../secret.txt` → 404）。
+- **最小 diff（关键体验修复）**：原先「加一个字段」会把整块模型重新对齐，diff 18 行，用户无法判断哪里真被改了。改为**未改动字段复用 schema 原始行**（`FieldDoc.raw`，语义一致才复用），实测同样操作 diff 降到 **2 行**（1 行上下文 + 1 行新增）。
+- **CI**：`@fw/studio-web run build` 纳入 base 作业构建列表，保证前端在干净环境能编译。
+- **测试**：studio 75 → **80 例**（新增 4 例静态托管 + 2 例序列化行为），`@fw/cli` **340 全绿**；`check:headers` 759、`check:studio-separation` 通过。
+- **诚实缺口**：不支持删除模型（会连带丢表与生成物，需专门确认流程）、不支持关系配置；**界面未做浏览器点击验收**（本机 chromium 不可用），已验证的是构建、托管、资源类型与真实数据 preview 往返。
+
+### Added（M17 / PRD-017 S2：schema 写接口与危险变更拦截，2026-10-22）
+
+- **写接口契约**：`GET /api/schema`（模型视图）、`POST /api/schema/preview`（算新全文与 diff，不落盘）、`POST /api/schema/apply`（校验→自检→`prisma validate`→备份→原子写）。只有这两个接口接受 POST，其余仍只读；请求体上限 256KB。
+- **危险变更分级（schema 层）**：删模型 / 删字段 / 新增必填无默认值 → **blocked**（默认拒绝）；重命名 / 改类型 / 改必填 → **confirm**；新增可空字段、新建模型 → safe。分级不复用迁移那套 SQL 规则——schema 变更的风险点是「字段消失」而不是「DDL 语句」。
+- **一次性确认令牌**：风险非 safe 时由 preview 签发，与「当前 schema 全文 + 编辑指令」的 sha256 指纹绑定、**单次有效**、5 分钟过期。apply 时重算指纹——预览之后文件被任何人改过，令牌立即失效，杜绝「照着 A 预览、写到 B」；令牌不可重放。
+- **新建模型**：`ModelEdit.create` 支持向 schema 追加模型（此前未知模型一律报错，避免拼错名被当成新建）。
+- **修掉一个真 bug**：`validateSchema` 原先用 `pnpm exec prisma validate`，在 schema 所在子目录下 pnpm 解析不到 bin（Windows 报「'prisma' 不是内部或外部命令」），导致**所有写回被误判为校验失败**。改为向上查找 `node_modules/prisma/build/index.js` 后 `node` 直调，与 PATH 无关；找不到才退回 pnpm。这个 bug 只有真跑一次才暴露——单测注入的假执行器永远发现不了。
+- **真实链路取证**：把真实 schema 复制成 probe，走 preview → apply（真跑 `prisma validate`）：字段 8→9 写入成功、29 个模型全部保留、备份 23KB、真实 schema 未被改动。
+- **测试**：studio 46 → **75 例**（schema-api 22 / 服务端真实 HTTP 19 / 写回内核 25 / 体检 10）；HTTP 侧覆盖 409 无令牌拒绝、令牌放行、非法 JSON 400、GET 打 POST 接口 405。
+
+### Added（M17 / PRD-017 S1：`fw studio` 本地只读工作台，2026-10-22）
+
+- **一条命令打开工作台**：新增 `fw studio`（默认 `127.0.0.1:4310`，自动开浏览器，`--no-open` 只起服务）。页面展示项目形态、布局、模型清单（含「已生成」标记）、结构问题、生成清单、环境体检与迁移基线。
+- **边界是这轮的重点，不是页面**：服务只监听 `127.0.0.1`（host 不可配成外网）；每次启动生成一次性 token，`/api/*` 必须携带；校验 `Host` 与 `Origin`（防 DNS rebinding 与跨站读取）；**S1 只允许 GET**——没有任何写接口，页面即使被注入也改不了文件；无路径参数、无文件服务接口，因此不存在目录穿越面。页面带 CSP（`default-src 'none'`）。
+- **只读不等于复制规则**：`inspect` 直接读项目文件（布局复用 `resolveLayout`、待迁移复用 `assessNewMigrations`），不经 CLI 子进程、不重写任何业务判断；读失败一律降级为「不可用 + 原因」，不让整个体检 500。
+- **实施期修正（诚实性）**：迁移项最初把「共 15 个迁移」显示成「15 个待执行」——仓库没有 `deploy.manifest.json` 时根本没有比对基准。改为 pending 记 0 并显示「无部署基线」，不谎报。
+- **页面为什么暂时不用 Vue**：S1 只需只读展示，内置单文件 HTML 即可交付并验证边界；设计器需要表格/弹窗/diff，届时再引 `packages/studio-web`，避免在 API 契约未稳前预支前端工程成本（已写入 PRD §9 实施记录）。
+- **验证**：新增 `studio` 22 例（inspect 10 / 真实 HTTP 边界 11 / 基线 1），`@fw/cli` 285 → **306 全绿**；真实仓库取证：`apps/example-api` 识别为 monorepo、29 个模型、`DemoItem` 标记已生成、结构自检无问题；真机侧 curl 复核恶意 Host → 403、POST → 405、无 token → 401。无新增错误码、配置键与迁移。
+
+### Added（M17 / PRD-017 立项：TY Studio 本地可视化工作台 + schema 写回内核，2026-10-22）
+
+- **产品定位**：TY Studio 从「CLI 的网页面板」升级为**本地可视化开发工作台**，主路径为 项目 → 数据模型 → 业务生成 → 代码编辑 → 运行 → 部署。CLI 保留为唯一引擎，终端用户与可视化用户共用同一套实现。
+- **五条铁律写进 PRD**（复杂度与安全的总闸）：①文件是唯一权威、设计器只是视图；②读＝文件、写＝受控通道（不复制业务规则）；③schema 块级重写、未改块逐字节保留；④守门人是 `prisma validate`，危险变更按既有 `migration.ts` 分级，永不自动迁移；⑤本地服务只监听 127.0.0.1 + 一次性 token + 动作白名单 + 路径限定 + Origin 校验。
+- **schema 写回内核（S2 地基，已实现）**：新增 `packages/cli/src/studio/schema-doc.ts` —— 切块（model/enum/datasource/generator/other，记录行号范围）→ 只重建被编辑块 → 结构自检 → `prisma validate` → 备份 → 临时文件 + rename 原子替换。**字段属性保留原始文本、不做归一化**：现网 `gen/schema-parser.ts` 是词法级且面向生成代码的，归一会丢 `@relation(onDelete:)`、`@@index` 排序等信息，用它往返写回会毁 schema。
+- **为什么不用现成解析器写回**：`schema-parser.ts` 的 `FieldAttributes` 把属性压成布尔/字符串集合（`isId`/`unique`/`relationFields`），信息不可逆。这是本轮最重要的技术判断，已写入类头注释与 PRD §5。
+- **验证（可离线复现的硬证据）**：25 例单测，其中三条针对仓库真实 `apps/example-api/prisma/schema.prisma`（600 行、含注释与索引）：切分后拼接与原文字节相等；空编辑零变更；单点编辑后剩余块逐字节不变。另用**真实 `prisma validate`** 校验编辑产物并通过（探针文件已清理）。
+- **实施中修掉自己的一个致命 bug**：`serializeModel` 多输出一层 `{`，会让后续模型全部被吞进当前块——被「其余块逐字节不变」这条断言当场抓住。这类失效模式正是块级重写最危险的地方，测试先于 UI 落地是对的。
+- **文档**：新增 [PRD-017](./docs/prd/prd-017-ty-studio.md)（五条铁律 / FR-17-01~22 / 六切片 S1~S6 / AC-17-01~09），同步 PRD 索引与 README 路线图。无新增错误码、配置键与数据库迁移。
+
+
+
+### Added（M16 / PRD-016 S3：`fw verify` 黄金链路一条命令，2026-10-22）
+
+- **一条命令验完真实使用体验**：新增 `fw verify`，把「初始化 → 建模 → 生成 → 迁移 → 种子 → 构建 → 启动 → 浏览器 CRUD」串成九阶段，任一阶段失败即停并给出「断裂阶段 + 原因 + 下一条命令」，完整过程落 `verify-report.json`。`--target=ci`（仓库内建 `apps/auto-verify`，SQLite，无 Docker）与 `--target=real`（对已部署实例跑健康检查 + 同一份浏览器用例）共用一套断言。
+- **阶段顺序是有原因的**：基线 `db:seed` **必须早于** `fw gen crud`——模板的全量 seed 会清场，顺序颠倒会让刚生成的业务权限被清掉、菜单消失、浏览器用例必然失败。这条顺序在 `verify.test.ts` 里有断言锁死。
+- **S3 抓出 3 个真实缺陷（都会直接卡住用户，不是测试代码问题）**：
+  1. `fw new` 注册工作区成员时用「项目名」而非「相对仓库根路径」——在 `apps/` 等子目录执行时注册出匹配不到任何目录的 glob，生成的项目根本不会被 pnpm 链接。改为相对路径。
+  2. `resolveLayout` 不识别 admin 模板的 `server/` + `admin-web/` 兄弟布局，无 `apps/` 时把前端根当成后端根 → 前端产物会写进后端目录。改为识别兄弟 `admin-web`/`web`/`frontend`。
+  3. Windows 下 `execFile('pnpm')` 直接 ENOENT/EINVAL（`pnpm.cmd` 需经 shell），且失败信息只有 `Command failed`。新增 `pnpmBin()` 与「只对 `.cmd` 走 shell」策略，并让执行器失败时抛出 stderr 首行。
+- **浏览器用例（Playwright，仅 chromium）**：`apps/admin-web/playwright.config.ts` + `e2e/crud.spec.ts`，一条流程完成登录 → 新建 → 编辑 → 删除；选择器优先用可见文案（按钮/表单项标签），失败保留 trace 与截图。缺 Playwright 或浏览器二进制时阶段记为 **skipped 并给出安装命令**，绝不伪通过。
+- **CI 新增 `golden-path` 作业**：与 base 并行，独立 runner 上跑 `fw verify --target=ci`，失败上传 `verify-report.json` + trace + 进程日志作现场。
+- **健壮性**：sqlite 场景预创建库文件（Prisma 引擎在沙箱/网络盘上 `unable to open database file`）；seed 前显式 `prisma generate`（否则 `@prisma/client` 是空壳，报 `does not provide an export named 'PrismaClient'`）。
+- **测试**：`@fw/cli` 240 → **260 例全绿**，覆盖率 86.97% 语句 / 81.91% 分支（门禁 80%）；新增 `verify` 15 例、布局探测 2 例、`args` 补 verify 分派 3 例。`docs/50` 新增 §13 黄金链路用例 TC-GP-001~008。
+- **未验证（如实记录）**：本机**无 docker**（镜像从未真实构建）、**chromium 下载卡在 0%**（CDN 不可达），因此浏览器 CRUD 与 `--target=real` 均未真实执行；本机 `fw verify` 实跑到 migrate 阶段通过，seed 起受沙箱限制（Prisma 引擎静默不落库，与既有 `tsc/build` 同类问题）。CI `golden-path` 作业需推送后首跑确认。
+
+### Added（M16 / PRD-016 S2：`fw deploy` 单机 Compose 一条命令，2026-10-22）
+
+- **一条命令从代码到健康运行**：新增 `fw deploy`，阶段严格串行且失败即停——环境向导 → 预检（docker / compose / 编排文件）→ 计划（镜像标签 + 新增迁移数 + 迁移风险）→ 构建（`runtime` + `migrator` 双目标）→ 备份 → 迁移 → 启动 → 健康检查 → 写报告。失败只输出「哪一步 / 原因 / 下一条命令」，完整过程落 `deploy-report.json`（stage + next 字段）。
+- **首次 3 问、之后 0 问**：`fw deploy` 首次只问域名、数据库密码、Redis 密码（后两项留空自动生成 32 字节 base64url），`.env.prod` 权限 600、密钥永不回显；二次部署直接沿用。**实施期修正了 PRD 原定的提问内容**：单机 Compose 下连接串由编排内部派生（`DB_URL` 由 `POSTGRES_PASSWORD` 拼出），问「数据库连接串」没有意义。
+- **补上缺失的镜像**：此前 `deploy/docker-compose.prod.yml` 引用了不存在的 `registry.example.com/fw-app:0.1.0`，仓库里**没有任何 Dockerfile**，compose 根本起不来。新增 `deploy/Dockerfile` 多阶段构建：`deps`（只拷清单做依赖层缓存）→ `build`（按拓扑序编译 14 个框架包 + 应用 + 前端）→ `runtime`（非 root、带 HEALTHCHECK、`node dist/main.js`）与 `migrator`（保留 devDeps，因为 `prisma` 与 `@fw/cli` 都在 devDependencies，runtime 镜像跑不了迁移）。配套 `.dockerignore` 排除本地依赖、产物、`.db`、备份与密钥。
+- **编排修正**：`migrate` 服务改走 `migrator` 镜像并加 `profiles: tools`（不进 `up` 的常驻集合，由 `run --rm` 单独执行）；app/worker 副本数由 `APP_REPLICAS` / `WORKER_REPLICAS` 控制；接入本地 `build`；**移除 `deploy.update_config` / `deploy.restart_policy`**——这两个是 Swarm 专用字段，单机 `docker compose up` 不执行，文件里写的「start-first + failure_action: rollback」是假能力，回退改由 `fw deploy` 自己实现；`TENANT_ENABLED` 由 `true` 改为 `false`（真机验收已确认开启后要求请求带租户标识且审计 `tenant_id` 恒 0）。
+- **迁移安全（部署侧）**：迁移前 `pg_dump -Fc` 备份，用**文件头 `PGDMP` + 体积下限**双校验（经 shell 重定向落盘，二进制不过 JS），备份不可用直接中止；按份数保留；只评估「本次新增的迁移」（清单记录上次已应用集合，不连库比对）；破坏性迁移默认阻断，`--allow-destructive` 或 TTY 确认才继续；首次部署无历史基线，显式跳过闸门并告警。
+- **失败恢复的诚实边界**：健康检查失败自动换回上一镜像重启并复检，**数据库不回滚**（迁移不可逆），错误文案里直接写明备份文件名与排查命令。
+- **`--seed` 默认不执行**：`prisma/seed.ts` 自带清场语义，自动执行会清数据；首次部署只在计划输出里提示一次，绝不擅自 seed。
+- **`--plan` 无副作用**：不提问、不写 `.env.prod`、不构建不迁移；非 TTY 且未注入提问器时也不再等待 stdin（此前 `--plan` 会卡在向导上等输入）。
+- **测试**：`@fw/cli` 179 → **239 例全绿**，覆盖率 89.5% 语句 / 83.88% 分支（门禁 80%）；新增 `env-file` 16 / `backup-compose` 22 / `deploy` 19 例，`args` 补 deploy 分派 4 例。无新增错误码与数据库迁移。
+- **未验证项（重要）**：本机无 docker，`deploy/Dockerfile` 与编排**未经真实构建**，需在测试机首跑确认（S3 覆盖）；`fw deploy` 的 docker 调用全部经单测替身验证，真实执行路径未跑过。
+
+### Added（M16 / PRD-016 S1：`fw gen crud` 一条命令到底，2026-10-22）
+
+- **一条命令消除 4 处手工接线**：此前生成结束只打印「下一步」，要求用户自己跑迁移、编辑 `app.module.ts` 的 imports、编辑 `prisma/seed.ts` 的种子调用与权限码字面量、再手工跑前端 lint。现在 `fw gen crud <Model>` 依次完成：产物渲染 → **标记块自动接线** → `prisma generate` → **双端类型校验（后端 tsc + 前端 vue-tsc 并行）** → **建迁移并应用** → **定向权限种子**，用户只需重启并重新登录。
+- **接线机制（清单 + 标记块整块重写）**：新增 `fw.gen.json`（`gen/manifest.ts`，落在后端应用根，按 model 排序、逐字节可复现）作为唯一事实源；新增 `gen/wiring.ts` 由清单**全量重建** `app.module.ts` 的 `// <fw:gen:imports>` / `// <fw:gen:modules>` 与 `prisma/seed.ts` 的 `seed-imports` / `seed-calls` / `perm-codes` 五个块。刻意否决运行时动态加载（破坏 Nest DI 静态分析与 tsc 路径解析）与文本增量插入（`--force` 会重复插入）。`apps/example-api/prisma/seed.ts` 里手写的 `GENERATED_PERMISSION_CODES` 字面量改为块托管。
+- **标记块安全语义（`gen/markers.ts`）**：只认整行成对标记，缺失 / 重复 / 顺序颠倒一律报错，**绝不猜测位置**；重写幂等（相同正文重跑逐字节相同），CRLF 归一，缩进由调用方显式指定，只有显式传 `indent` 时才归一化。
+- **接线降级而非阻断**：目标文件缺失或未接入标记块时，`fw gen crud` 打印明确告警并**降级为不接线**，产物照常生成——否则任何存量项目第一次升级都会被卡住。结构歧义（标记重复/倒序）仍然报错。
+- **迁移安全**：新增 `gen/migration.ts` 做语句级风险分级（safe / confirm / blocked）——DROP TABLE、TRUNCATE、DROP COLUMN、新增非空列无默认值 → blocked；RENAME、改列类型 → confirm；注释里的关键字不参与判定。建迁移只用 `migrate dev --create-only`（**永不触发 Prisma 的 reset 语义**），应用走 `migrate deploy`；非 safe 需一次确认（TTY y/N）或 `--allow-destructive`，非 TTY 默认拒绝。
+- **顺序刻意不可调换**：先类型校验、后迁移。校验失败只回滚文件（此时数据库没动过）；迁移/种子失败保留文件只报错（代码与 schema 是对的，回滚反而制造不一致）。`PostGenError` 带 `stage` 标记让调用方区分。
+- **输出精简**：跳过项聚合为一行（原来逐文件刷屏）；失败信息只保留首行 + 下一条命令；下一步从 6 行缩到 2~3 行。
+- **新门禁 `check:gen-sync`**（`scripts/check-gen-sync.mjs`，已接入 CI）：清单 ↔ 产物 ↔ 接线三方比对，含反向抽查（接线块里出现清单外模块即报红）；已用反例验证会失败。
+- **标记块接入存量**：`apps/example-api`（app.module.ts / seed.ts）与 `templates/admin/server`（同两文件 + `fw.gen.json`）接入标记，模板项目开箱即用；`fw gen crud demo-item` 在 example-api 上实测输出「接线已是最新」，证明重写结果与既有手工接线逐字节一致。
+- **新增 flag**：`--no-migrate`、`--no-seed`、`--allow-destructive`、`--fast`（只校验后端）；`--no-verify` 语义改为跳过类型校验（迁移仍执行）。
+- **测试**：`@fw/cli` 140 → **179 例全绿**，覆盖率 89.17% 语句 / 83.28% 分支（门禁 80%）；新增 `markers` 13 / `wiring` 12 / `migration` 11 / `post-gen` 14 例，`gen` 与 `args` 断言随语义更新。无新增错误码、配置键与数据库迁移。
+
+### Added（M16 / PRD-016 立项：开发体验与部署一体化，2026-10-22）
+
+- **立项动机**：M6 的 `fw gen crud` 只做到「生成文件」，`gen.ts` 的下一步清单仍要求用户手工跑迁移、编辑 `app.module.ts`、编辑 `prisma/seed.ts`、跑前端 lint；M8 的 compose 编排引用了不存在的镜像（仓库无任何 Dockerfile）；M1–M15 的验收全靠人工执行数十条命令。本 PRD 的衡量标准是**用户要敲几条命令、回答几个问题**，不是实现了多少能力。
+- **目标态：三条命令、零到一次交互** —— `fw gen crud Product`（生成 + 接线 + 迁移 + 种子 + 前后端校验）、`fw deploy`（首次答 3 问，之后零输入）、`fw verify`（黄金链路一条命令，CI 与真机同命令不同 target）。
+- **硬约束写进 PRD**：默认正确、flag 只用于例外（每条命令必填参数 ≤ 1）；纵向切片交付不横切；交互只出现在「有副作用且无法自动判定」时且一次问完；失败输出 ≤ 3 行（哪一步 / 原因 / 下一条命令）；`fw help` 新增命令 ≤ 3 条。
+- **已定架构取向**：接线走「`fw.gen.json` 清单 + 标记块整块重写」（否决运行时动态加载与文本增量插入）；「全新测试项目」限定为仓库内生成的项目（脱离仓库需先发布 `@fw/*`，本轮不做）；部署本轮只做单机 Compose，裸机脚本仅薄包装透传；迁移默认出 SQL + 风险分级，破坏性需一次确认，永不自动 reset；部署失败镜像可回退、**数据库不自动回滚**。
+- **文档**：新增 [PRD-016](./docs/prd/prd-016-dev-experience-and-deploy.md)（含 S1/S2/S3 切片与 AC-16-01~10），同步 PRD 索引与本 README 路线图。无代码变更、无配置键、无错误码。
+
 ### Fixed（P2：运营面审计落错租户维度（SaaS + 租户管理面），平台审计按租户筛选查不到，2026-10-21）
 
 - **问题**：`AuditService.persist` 的取值顺序是 `payload.tenantId ?? 请求上下文 tenantId ?? 0`，而 `SaasOpsController` 与 `TenantAdminController` **整类** `@IgnoreTenant()`、运营请求通常不带 `x-tenant-id` —— 面向租户的事件**从未显式传 `tenantId`**，于是全部落到 `tenant_id=0`（真机取证那条拒绝审计就是 `tenant_id=0`，已复现）。平台审计的租户筛选走的正是 `tenant_id` 列（`where.tenantId`），运营按目标租户检索时这些记录**一条都出不来**：留痕写了，检索路径是断的。
