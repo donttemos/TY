@@ -108,6 +108,22 @@ describe('runGenCrud 边界与告警', () => {
     expect(logs.join('\n')).not.toContain('引入模块'); // M6 的手工接线提示已消失
   });
 
+  it('模型缺框架通用字段时写盘前就报错（否则接口一调就 9001）', async () => {
+    // 只有业务列、没有 deletedAt / 审计四件套：生成与 tsc 都能过，但 @fw/db 的仓储读操作会带
+    // deletedAt IS NULL、写操作会填 createdBy/updatedBy → Prisma 直接 Unknown argument
+    fs.writeFileSync(
+      path.join(tmpDir, 'prisma', 'schema.prisma'),
+      'model Sloppy {\n  id   String @id @default(uuid())\n  name String @unique\n}\n',
+      'utf8',
+    );
+    const { io } = makeIo();
+    await expect(runGenCrud({ models: ['Sloppy'] }, { ...makeDeps(), io })).rejects.toThrow(
+      /不符合框架通用约定.*deletedAt/,
+    );
+    // 闸门在写盘之前：不能留下半套产物
+    expect(fs.existsSync(path.join(tmpDir, 'src/modules/sloppy/sloppy.module.ts'))).toBe(false);
+  });
+
   it('schema 缺失时报错', async () => {
     fs.rmSync(path.join(tmpDir, 'prisma', 'schema.prisma'));
     const { io } = makeIo();

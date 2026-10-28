@@ -33,7 +33,7 @@ import { PostGenError, runPostGen, type PostGenOptions, type PostGenResult } fro
 import { buildPlan, resolveLayout, type GenScope, type RenderOptions } from './render.js';
 import { loadCodegenConfig } from './templates.js';
 import { parsePrismaSchema, type ParsedModel } from './schema-parser.js';
-import { kebabCase, pluralize } from './type-map.js';
+import { BASE_FIELDS, kebabCase, pluralize } from './type-map.js';
 import { buildWiringPlan, type WiringResult } from './wiring.js';
 import { isGitDirty, previewPlan, writePlan, type GenIo } from './writer.js';
 
@@ -238,6 +238,12 @@ export async function runGenCrud(options: GenCrudOptions, deps: GenDeps = {}): P
   };
   const { plan: renderedPlan, models: matchedModels } = buildPlan(renderOptions);
 
+  // 5.1 模型约定前置校验（PRD-016 FR-16-05 补充）：`@fw/db` 的 PrismaRepository 默认按
+  //     `deletedAt IS NULL` 过滤、写入时填审计字段，生成代码因此**假定**这些列存在。
+  //     缺列时生成与类型校验都过（Prisma Client 只认 schema 里有的字段），但一调接口就是 9001——
+  //     黄金链路首跑就栽在这上面。宁可在写盘之前拦住，也不要让用户去读堆栈。
+  assertModelConventions(matchedModels);
+
   // 5.5 接线（PRD-016 FR-16-02）：清单为事实源，框架文件里的标记块按清单全量重建。
   //     前端范围不改接线（前端菜单由种子写入、路由动态加载，无静态注册点），
   //     但已有模型的产物指纹仍要更新——否则 --only=frontend 重跑一次，前端指纹就永远停在旧值。
@@ -410,6 +416,29 @@ export async function runGenCrud(options: GenCrudOptions, deps: GenDeps = {}): P
     migrated: options.noMigrate !== true,
     seeded: options.noSeed !== true,
   });
+}
+
+/**
+ * 模型通用约定校验（PRD-016 FR-16-05 补充）
+ * @description `@fw/db` 的 PrismaRepository 对每个读操作都追加 `deletedAt IS NULL`，写操作填
+ *   createdAt/updatedAt/createdBy/updatedBy，按 `id` 主键取单条。缺这些列时生成与类型校验都能通过
+ *   （Prisma Client 只校验 schema 里存在的字段），但接口一被调用就 9001——错误发生在运行期、
+ *   离原因很远。这里在写盘前直接拒绝，并说清缺哪几个字段。
+ * @param models 本次要生成的模型
+ */
+function assertModelConventions(models: ParsedModel[]): void {
+  const problems: string[] = [];
+  for (const model of models) {
+    const present = new Set(model.fields.map((field) => field.name));
+    const missing = [...BASE_FIELDS].filter((field) => !present.has(field));
+    if (missing.length > 0) problems.push(`${model.name}（缺 ${missing.join(' / ')}）`);
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `模型不符合框架通用约定：${problems.join('；')}。@fw/db 默认按 deletedAt 过滤软删除、写入时填审计字段，` +
+        '缺列会在接口调用时 500（9001）——按模板约定补齐 id / deletedAt / createdAt / updatedAt / createdBy / updatedBy 后重试',
+    );
+  }
 }
 
 /**

@@ -384,7 +384,9 @@ export async function runVerify(options: VerifyOptions, deps: VerifyDeps = {}): 
     if (!fs.existsSync(schemaFile)) fail('model', `schema 不存在：${schemaFile}`, '确认模板完整性（templates/admin/server/prisma）');
     const schemaText = fs.readFileSync(schemaFile, 'utf8');
     if (!new RegExp(`model\\s+${model}\\b`).test(schemaText)) {
-      const snippet = `\n/// 验收用模型（fw verify 自动写入）\nmodel ${model} {\n  /// 名称\n  name  String @unique\n  /// 数量\n  qty   Int    @default(0)\n}\n`;
+      // 验收模型必须遵守项目通用约定（id + 软删除 + 审计四件套）：@fw/db 的仓储默认按
+      // deletedAt 过滤、写入时填审计字段，少一列生成能过、接口一调就 500——那验的不是真实路径
+      const snippet = `\n/// 验收用模型（fw verify 自动写入）\nmodel ${model} {\n  /// ID\n  id        String   @id @default(uuid())\n  /// 名称\n  name      String   @unique\n  /// 数量\n  qty       Int      @default(0)\n  /// 删除时间\n  deletedAt DateTime?\n  /// 创建时间\n  createdAt DateTime @default(now())\n  /// 更新时间\n  updatedAt DateTime @updatedAt\n  /// 创建人\n  createdBy String   @default("system")\n  /// 更新人\n  updatedBy String   @default("system")\n}\n`;
       fs.writeFileSync(schemaFile, `${schemaText.trimEnd()}\n${snippet}`, 'utf8');
       mark('model', 'ok', modelStart, `已写入 model ${model}`);
     } else {
