@@ -112,6 +112,8 @@ jobs:
           done
           pnpm --filter example-api run build
           pnpm --filter admin-web run build
+          # Studio 前端产物：fw studio 会托管它（缺失时回退内置页，但 CI 要保证它能编译）
+          pnpm --filter @fw/studio-web run build
 
       # 单测（SQLite 内存库，秒级反馈；turbo 管道在 Windows 沙箱不可用，CI 用 Linux 可恢复）
       # @fw/cli 的生成器测试自带临时工程与回滚断言（PRD-006 FR-07/08），不依赖真实数据库
@@ -266,6 +268,15 @@ jobs:
       - name: 前后端接口对撞门禁（C-06 API parity）
         run: node scripts/check-api-parity.mjs
 
+      # PRD-017 铁律 6：Studio（开发者本地工具）与后台平台（产品）互不依赖、Studio 不进 deploy/**
+      - name: Studio 与后台平台边界门禁（PRD-017）
+        run: node scripts/check-studio-separation.mjs
+
+      # PRD-016 FR-16-03：生成清单（fw.gen.json）↔ 产物 ↔ app.module/seed 接线三方一致。
+      # 缺此门禁时「清单说已接线、实际没接」的漂移只会在联调时暴露
+      - name: 生成清单与接线一致性门禁（PRD-016）
+        run: node scripts/check-gen-sync.mjs
+
       # 三方一致性门禁（框架包 ↔ example-api ↔ admin 模板生成结果）：路由面 / 权限码 / Prisma 模型 /
       # 框架依赖 / 配置键六轴对撞。模板是参考实现的裁剪子集，任何一侧单方面演进都会让另外两侧悄悄
       # 漂移——此前模板侧无门禁，漂移只在用户拿生成项目联调时才第一次暴露
@@ -282,6 +293,84 @@ jobs:
       # 「门禁通过」就不再等于「覆盖完整」。node:test 执行，毫秒级、无外部依赖。
       - name: 审计事件门禁反向测试（node:test）
         run: pnpm run check:audit-events:test
+
+
+  # ---------- M16 黄金链路：从干净检出跑到「浏览器完成增删改查」 ----------
+  # 这条作业验的是「真实使用体验」而不是单个命令：fw new → 建模 → fw gen crud → 迁移/种子 →
+  # 构建 → 起 API 与前端 → 浏览器 CRUD，全部由 `fw verify` 一条命令串起来。
+  # 与 base 作业并行（独立 runner），失败时上传报告与 trace，避免「CI 绿但用户跑不通」。
+  golden-path:
+    name: 黄金链路（生成 → 迁移 → 启动 → 浏览器 CRUD）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # 先构建框架包与 CLI：verify 内部要以 `node packages/cli/dist/index.js` 调用 fw new / fw gen crud
+      - name: 构建框架包与 CLI（verify 依赖其 dist）
+        run: |
+          for pkg in @fw/config @fw/logger @fw/core @fw/config-center @fw/db @fw/auth @fw/cache @fw/cli; do
+            pnpm --filter $pkg run build
+          done
+
+      # 浏览器二进制单独缓存：命中时数十秒，未命中约 1~2 分钟
+      - name: 缓存 Playwright 浏览器
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ hashFiles('apps/admin-web/package.json') }}
+      - name: 安装 chromium
+        run: pnpm --filter admin-web exec playwright install --with-deps chromium
+
+      # 一条命令跑完七阶段；失败时报告里直接给出断裂阶段与下一步
+      - name: 黄金链路验收（fw verify --target=ci）
+        env:
+          # 登录限流默认 ~10/min/IP，验收只登录一次；保留默认值以便顺带验证限流不误伤
+          PRISMA_TELEMETRY_DISABLED: '1'
+        run: node packages/cli/dist/index.js verify --target=ci
+
+      # verify 把「本机没装 Playwright」视为合法跳过（报告 skipped 但整体 success）。
+      # CI 里刚装过 chromium 还 skipped，只能是接线断了——必须判红，否则黄金链路会假绿，
+      # AC-16-07 也就成了「CI 绿但浏览器没跑过」的空证。
+      - name: 断言浏览器阶段真实执行（防假绿）
+        if: always()
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            if (!fs.existsSync("verify-report.json")) {
+              console.error("缺少 verify-report.json：验收未产生报告");
+              process.exit(1);
+            }
+            const report = JSON.parse(fs.readFileSync("verify-report.json", "utf8"));
+            const browser = (report.stages || []).find((s) => s.name === "browser");
+            console.log(`result=${report.result} browser=${browser ? browser.status : "缺失"} 明细=${browser ? browser.detail || "" : ""}`);
+            if (report.result !== "success") {
+              console.error("黄金链路未通过：" + JSON.stringify(report.error || {}));
+              process.exit(1);
+            }
+            if (!browser || browser.status !== "ok") {
+              console.error("浏览器阶段未真实执行（" + (browser ? browser.status : "缺失") + "）：" + (browser ? browser.detail || "" : ""));
+              process.exit(1);
+            }
+          '
+
+      - name: 上传验收报告与现场
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-path-report
+          path: |
+            verify-report.json
+            verify-artifacts/**
+            apps/auto-verify/server/.verify-process.log
+            apps/auto-verify/admin-web/.verify-process.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   # ---------- 三库集成矩阵（TC-ORM-001：同一套用例三库各跑一遍） ----------
   integration:
