@@ -60,9 +60,9 @@
 | `admin-web` 全量 + vue-tsc | **291/291** + 构建通过 |
 | `@fw/studio-web` 构建 | 通过（114.04 KB JS / 26.01 KB CSS） |
 | 静态门禁（8 道） | headers 805 文件 / no-raw-throw 326 文件 / helm 65 / api-parity / triway 八轴 / audit-events / gen-sync / studio-separation 全绿 |
-| CI `构建 / 单测(SQLite) / 静态检查` | success（见发版提交的 run） |
-| CI 三库集成矩阵（sqlite / postgres / mysql） | 三腿 success |
-| **CI `golden-path`** | **success**：run [40684860336](https://github.com/donttemos/TY/actions/runs/40684860336)，九阶段 `workspace → install → model → migrate → seed → generate → build → boot → browser` 全 `ok`，`browser=ok 浏览器用例通过`，跳过 0 阶段，耗时约 2 分钟 |
+| CI `构建 / 单测(SQLite) / 静态检查` | success（发版提交 run [40685988117](https://github.com/donttemos/TY/actions/runs/40685988117)） |
+| CI 三库集成矩阵（sqlite / postgres / mysql） | 三腿 success（同 run） |
+| **CI `golden-path`** | **success**（首绿）：run [40684860336](https://github.com/donttemos/TY/actions/runs/40684860336)，九阶段 `workspace → install → model → migrate → seed → generate → build → boot → browser` 全 `ok`，`browser=ok 浏览器用例通过`，跳过 0 阶段，耗时约 2 分钟；发版提交 `cf89e76` 的 golden-path 同样 success（run [40685988117](https://github.com/donttemos/TY/actions/runs/40685988117)，五作业全绿） |
 | 真机（cs.donttemo.top / 106.55.32.251） | 部署与健康校验见 §6（本版发布时执行） |
 
 ## 5. 黄金链路首绿：五处真实断裂（本版最有价值的记录）
