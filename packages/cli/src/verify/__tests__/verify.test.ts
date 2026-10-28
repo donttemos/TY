@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { VERIFY_REPORT_FILE, cleanupWorkspace, resolveBrowserCwd, runVerify, warmUpWeb, type BackgroundProcess, type VerifyDeps } from '../verify.js';
+import { VERIFY_REPORT_FILE, cleanupWorkspace, resolveBrowserCwd, runVerify, type BackgroundProcess, type VerifyDeps } from '../verify.js';
 import type { Exec } from '../../deploy/exec.js';
 
 let tmpDir: string;
@@ -192,46 +192,6 @@ describe('runVerify target=ci', () => {
     expect(report.result).toBe('success');
     expect(usedCwd).toBe(path.join(tmpDir, 'apps', 'admin-web'));
     expect(report.stages.find((stage) => stage.name === 'browser')?.status).toBe('ok');
-  });
-});
-
-describe('warmUpWeb（Vite 依赖预构建竞态）', () => {
-  it('先把 504 的模块等到 200 才返回（首页 200 不代表前端可用）', async () => {
-    const calls: string[] = [];
-    let failures = 2;
-    const flaky = (async (input: string | URL) => {
-      const url = String(input);
-      calls.push(url);
-      // 前两次模拟 504 Outdated Optimize Dep
-      if (failures > 0) {
-        failures -= 1;
-        return new Response('outdated', { status: 504 });
-      }
-      return new Response('ok', { status: 200 });
-    }) as unknown as typeof fetch;
-    const ok = await warmUpWeb('http://127.0.0.1:5173', 5_000, flaky, async () => undefined);
-    expect(ok).toBe(true);
-    expect(calls[0]).toBe('http://127.0.0.1:5173/src/main.ts');
-    expect(calls).toContain('http://127.0.0.1:5173/src/views/login/index.vue');
-  });
-
-  it('业务页模块 404 视为不存在（不把「该项目没有这个页面」当成没预热完）', async () => {
-    const calls: string[] = [];
-    const impl = (async (input: string | URL) => {
-      const url = String(input);
-      calls.push(url);
-      if (url.endsWith('/src/views/product/index.vue')) return new Response('not found', { status: 404 });
-      return new Response('ok', { status: 200 });
-    }) as unknown as typeof fetch;
-    const ok = await warmUpWeb('http://127.0.0.1:5173', 5_000, impl, async () => undefined, ['product']);
-    expect(ok).toBe(true);
-    expect(calls).toContain('http://127.0.0.1:5173/src/views/product/index.vue');
-  });
-
-  it('超时未就绪时返回 false（交给浏览器阶段拿真实现场，不伪通过）', async () => {
-    const always504 = (async () => new Response('outdated', { status: 504 })) as unknown as typeof fetch;
-    const ok = await warmUpWeb('http://127.0.0.1:5173', 1, always504, async () => undefined);
-    expect(ok).toBe(false);
   });
 });
 

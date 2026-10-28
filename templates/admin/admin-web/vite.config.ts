@@ -5,6 +5,8 @@
  * @author donttemo
  * @created 2026-10-13
  * @modified 2026-10-13 donttemo vite 8（rolldown）适配：manualChunks 由对象形式改为函数形式
+ * @modified 2026-10-28 donttemo 补 preview.proxy：`fw verify` 改为对构建产物起 preview 做浏览器验收
+ *   （dev server 的依赖预构建会在首屏返回 504 Outdated Optimize Dep，导致路由起不来）
  * @module admin-web
  */
 
@@ -29,6 +31,19 @@ export default defineConfig(() => ({
     port: 5173,
     host: true,
     // dev 代理：前端默认 VITE_API_BASE_URL=/api/v1（同源），经此转发到服务端；改指其他网关时改 .env.development
+    proxy: {
+      '/api': {
+        target: process.env.DEV_API_TARGET ?? 'http://localhost:3000',
+        changeOrigin: true,
+      },
+    },
+  },
+  // 预览代理与 dev 同口径：`fw verify` 用「构建产物 + preview」跑浏览器验收，
+  // 走的是用户真正会部署的那份产物（dev server 的依赖预构建会在首屏返回 504 Outdated Optimize Dep，
+  // 让浏览器拿到「模块加载失败」，那是 dev 期独有的假故障）
+  preview: {
+    port: 5173,
+    host: true,
     proxy: {
       '/api': {
         target: process.env.DEV_API_TARGET ?? 'http://localhost:3000',

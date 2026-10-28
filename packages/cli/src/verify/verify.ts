@@ -116,8 +116,6 @@ export interface VerifyOptions {
   password?: string;
   /** 健康检查超时 */
   healthTimeoutMs?: number;
-  /** 前端模块预热超时（默认 60s；Vite 依赖预构建完成前模块请求会 504） */
-  warmupTimeoutMs?: number;
 }
 
 /** 可注入依赖 */
@@ -424,19 +422,23 @@ export async function runVerify(options: VerifyOptions, deps: VerifyDeps = {}): 
       fail('generate', `生成失败：${firstLineOf(error)}`, '单独执行 fw gen crud 查看完整输出；接线问题看 fw.gen.json');
     }
 
-    // 7. 构建（后端跑 dist/main.js，前端跑 dev server）
+    // 7. 构建（后端 dist/main.js；前端产出 dist 静态资源——验收要跑用户真正会部署的那份产物）
     const buildStart = Date.now();
     try {
       await exec(pnpmBin(), ['run', 'build'], serverDir);
+      await exec(pnpmBin(), ['run', 'build'], webDir);
       mark('build', 'ok', buildStart);
     } catch (error) {
-      fail('build', `后端构建失败：${firstLineOf(error)}`, '在 server 目录执行 pnpm run build 查看类型错误');
+      fail('build', `构建失败：${firstLineOf(error)}`, '在 server / admin-web 目录分别执行 pnpm run build 查看类型错误');
     }
 
-    // 8. 起服务：API 3000 + 前端 dev server 5173（dev server 带 /api 代理，preview 不带）
+    // 8. 起服务：API 3000 + 前端 preview 5173（preview 走构建产物，且带 /api 代理）
+    //    刻意不用 dev server：Vite 的依赖预构建在首屏会返回 504 Outdated Optimize Dep，
+    //    浏览器拿到「模块加载失败 → 路由起不来」，表现成登录后弹回登录页——那是开发期独有的假故障，
+    //    验收要验的是产物，不是 dev 服务器的预热时序。
     const bootStart = Date.now();
     backgrounds.push(spawnBg('node', ['dist/main.js'], serverDir, { APP_PORT: '3000' }));
-    backgrounds.push(spawnBg(pnpmBin(), ['run', 'dev', '--port', '5173', '--strictPort'], webDir));
+    backgrounds.push(spawnBg(pnpmBin(), ['run', 'preview', '--port', '5173', '--strictPort'], webDir));
     const apiReady = await waitHealthy('http://127.0.0.1:3000/health', options.healthTimeoutMs ?? 90_000, fetchImpl, sleep);
     const webReady = await waitHealthy('http://127.0.0.1:5173/', options.healthTimeoutMs ?? 90_000, fetchImpl, sleep);
     if (!apiReady || !webReady) {
@@ -444,16 +446,6 @@ export async function runVerify(options: VerifyOptions, deps: VerifyDeps = {}): 
       fail('boot', `服务未就绪（api=${apiReady} web=${webReady}）`, `检查端口占用与日志：\n${tail.split('\n').slice(-6).join('\n')}`);
     }
     report.baseUrl = 'http://127.0.0.1:5173';
-    // 首页 200 不等于前端可用：Vite 冷启动的依赖预构建会让模块请求先返 504，
-    // 浏览器侧表现为路由起不来（首跑实测：登录接口全 200，页面却停在 /login）
-    const warm = await warmUpWeb(
-      report.baseUrl,
-      options.warmupTimeoutMs ?? 60_000,
-      fetchImpl,
-      sleep,
-      [model.toLowerCase()],
-    );
-    if (!warm) io.log('[verify] 前端预热未完成（入口模块仍不可取），继续执行浏览器阶段以便拿到真实现场');
     mark('boot', 'ok', bootStart);
 
     // 9. 浏览器 CRUD
@@ -498,52 +490,10 @@ function escapeRegExp(value: string): string {
 }
 
 /**
- * 等待前端「真的能加载模块」，而不只是返回了首页 HTML
- * @description Vite dev server 冷启动时依赖预构建还没完成：`/` 已经 200，但 `/src/**.vue` 这类
- *   模块请求会返回 504 Outdated Optimize Dep，浏览器侧表现为「动态导入失败 → 路由起不来」，
- *   用户看到的是停在登录页（或白屏），Playwright 只能记一条「还停在 /login」。
- *   因此先按顺序取入口与登录页模块，全部 200 再交给浏览器。
- * @param baseUrl 前端地址
- * @param timeoutMs 总超时
- * @param fetchImpl fetch 实现（可注入）
- * @param sleep 等待实现（可注入）
- * @returns 是否预热成功（失败不阻断，浏览器阶段会给出真实现场）
- */
-export async function warmUpWeb(
-  baseUrl: string,
-  timeoutMs: number,
-  fetchImpl: typeof fetch,
-  sleep: (ms: number) => Promise<void>,
-  extraModules: string[] = [],
-): Promise<boolean> {
-  // 入口 + 登录页是必取；业务页由调用方按模型追加（取不到 404 视为「该项目没有这个页面」，跳过）
-  const required = [`${baseUrl}/src/main.ts`, `${baseUrl}/src/views/login/index.vue`];
-  const optional = extraModules.map((name) => `${baseUrl}/src/views/${name}/index.vue`);
-  const deadline = Date.now() + timeoutMs;
-  let index = 0;
-  while (Date.now() < deadline) {
-    const target = index < required.length ? required[index] : optional[index - required.length];
-    if (!target) return true;
-    try {
-      const response = await fetchImpl(target);
-      // 可选模块 404：页面不存在，不必等；必取模块 404 说明模板结构与预期不符，同样不在这里死等
-      if (response.ok || response.status === 404) {
-        index += 1;
-        continue;
-      }
-    } catch {
-      // 还没起来
-    }
-    await sleep(500);
-  }
-  return false;
-}
-
-/**
  * 选择浏览器用例所在目录
  * @description 优先用生成项目自己的 Playwright 与 e2e 用例（用户 `fw new` 后可自测）；生成项目没装时
  *   回落到框架仓库的 `apps/admin-web`——用例是可见文案级的通用流程（登录 → 新建 → 编辑 → 删除），
- *   baseURL 仍指向生成项目的 dev server，因此验的还是生成物，而不是拿框架后台自证。
+ *   baseURL 仍指向生成项目自己的前端（构建产物 preview），因此验的还是生成物，而不是拿框架后台自证。
  *   不做回落时，生成项目里 `pnpm exec playwright` 找不到依赖，CI 会把「浏览器阶段」记为 skipped
  *   却整体判绿——那正是 AC-16-07 最不该出现的假通过。
  * @param projectRoot 仓库根
