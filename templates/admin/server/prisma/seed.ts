@@ -16,7 +16,9 @@ import 'reflect-metadata';
 
 import { PrismaClient } from '@prisma/client';
 import { PERM, ROLE, PasswordService } from '@fw/auth';
+// <fw:gen:seed-imports>
 import { seedDemoItemPermissions } from './seed/demo-item.seed.js';
+// </fw:gen:seed-imports>
 
 const prisma = new PrismaClient();
 const passwords = new PasswordService();
@@ -65,12 +67,14 @@ const FRAMEWORK_PERMISSIONS: PermissionSeed[] = [
   { code: 'file:create', name: '附件上传', type: 'api', module: 'file' },
 ];
 
-/** M6 生成器写入的权限点编码（与 prisma/seed/demo-item.seed.ts 的 PERMISSIONS 一一对应） */
+/** M6 生成器写入的权限点编码（由 fw gen crud 经清单重建，勿手改块内内容） */
 const GENERATED_PERMISSION_CODES: string[] = [
+  // <fw:gen:perm-codes>
   'demo-item:create',
   'demo-item:read',
   'demo-item:update',
   'demo-item:delete',
+  // </fw:gen:perm-codes>
 ];
 
 /** 普通用户角色默认持有的权限（刻意不含 role:read / user 写操作，用于验证越权拦截）
@@ -326,7 +330,9 @@ async function main(): Promise<void> {
   await seedDicts();
 
   // 6) 生成器产物：权限点 + 菜单（幂等 upsert；admin 显式授权后角色配置页可见）
+  // <fw:gen:seed-calls>
   await seedDemoItemPermissions();
+  // </fw:gen:seed-calls>
   for (const code of GENERATED_PERMISSION_CODES) {
     const permission = await prisma.permission.findUnique({ where: { code } });
     if (permission) {

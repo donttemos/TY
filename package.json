@@ -16,6 +16,8 @@
     "check:config": "fw check",
     "check:helm": "node scripts/check-helm-chart.mjs",
     "check:api-parity": "node scripts/check-api-parity.mjs",
+    "check:gen-sync": "node scripts/check-gen-sync.mjs",
+    "check:studio-separation": "node scripts/check-studio-separation.mjs",
     "check:no-raw-throw": "node scripts/check-no-raw-throw.mjs",
     "gen:error-codes": "node scripts/gen-error-codes-json.mjs",
     "check:triway-consistency": "node scripts/check-triway-consistency.mjs",

@@ -46,6 +46,9 @@ interface MockedDeps {
   rollback: ReturnType<typeof vi.fn>;
   seed: ReturnType<typeof vi.fn>;
   genCrud: ReturnType<typeof vi.fn>;
+  review: ReturnType<typeof vi.fn>;
+  deploy: ReturnType<typeof vi.fn>;
+  verify: ReturnType<typeof vi.fn>;
 }
 
 /** 构造替身依赖（所有命令默认成功） */
@@ -58,6 +61,9 @@ function makeDeps(): MockedDeps {
     rollback: vi.fn(async () => undefined),
     seed: vi.fn(async () => undefined),
     genCrud: vi.fn(async () => undefined),
+    review: vi.fn(async () => undefined),
+    deploy: vi.fn(async () => undefined),
+    verify: vi.fn(async () => undefined),
   };
 }
 
@@ -195,6 +201,10 @@ describe('dispatch gen crud（M6）', () => {
       dry: true,
       force: false,
       noVerify: false,
+      noMigrate: false,
+      noSeed: false,
+      allowDestructive: false,
+      fast: false,
     });
   });
 
@@ -234,6 +244,159 @@ describe('dispatch gen crud（M6）', () => {
     const { io, errors, exits } = makeIo();
     await run(['gen'], deps, io);
     expect(errors[0]).toContain('未知 gen 子命令');
+    expect(exits).toEqual([1]);
+  });
+});
+
+describe('dispatch deploy（M16）', () => {
+  it('默认无 flag：全部为 false，target 未指定', async () => {
+    const deps = makeDeps();
+    await run(['deploy'], deps, makeIo().io);
+    expect(deps.deploy).toHaveBeenCalledWith({
+      plan: false,
+      rollback: false,
+      target: undefined,
+      yes: false,
+      skipBackup: false,
+      seed: false,
+      allowDestructive: false,
+      keepBackups: undefined,
+      composeFile: undefined,
+      envFile: undefined,
+    });
+  });
+
+  it('布尔 flag 与键值选项一并透传', async () => {
+    const deps = makeDeps();
+    await run(
+      [
+        'deploy',
+        '--plan',
+        '--rollback',
+        '--yes',
+        '--skip-backup',
+        '--seed',
+        '--allow-destructive',
+        '--target=bare-metal',
+        '--keep-backups=7',
+        '--compose=deploy/x.yml',
+        '--env-file=.env.staging',
+      ],
+      deps,
+      makeIo().io,
+    );
+    expect(deps.deploy).toHaveBeenCalledWith({
+      plan: true,
+      rollback: true,
+      target: 'bare-metal',
+      yes: true,
+      skipBackup: true,
+      seed: true,
+      allowDestructive: true,
+      keepBackups: 7,
+      composeFile: 'deploy/x.yml',
+      envFile: '.env.staging',
+    });
+  });
+
+  it('--target 非法时报错退出', async () => {
+    const deps = makeDeps();
+    const { io, errors, exits } = makeIo();
+    await run(['deploy', '--target=k8s'], deps, io);
+    expect(errors[0]).toContain('--target 取值不合法');
+    expect(exits).toEqual([1]);
+    expect(deps.deploy).not.toHaveBeenCalled();
+  });
+
+  it('--keep-backups 非整数时报错退出', async () => {
+    const deps = makeDeps();
+    const { io, errors, exits } = makeIo();
+    await run(['deploy', '--keep-backups=0'], deps, io);
+    expect(errors[0]).toContain('--keep-backups 取值不合法');
+    expect(exits).toEqual([1]);
+  });
+});
+
+describe('dispatch verify（M16）', () => {
+  it('默认 target 未指定、其余 flag 为 false', async () => {
+    const deps = makeDeps();
+    await run(['verify'], deps, makeIo().io);
+    expect(deps.verify).toHaveBeenCalledWith({
+      target: undefined,
+      name: undefined,
+      model: undefined,
+      skipBrowser: false,
+      keep: false,
+      baseUrl: undefined,
+      username: undefined,
+      password: undefined,
+    });
+  });
+
+  it('键值选项与 flag 透传', async () => {
+    const deps = makeDeps();
+    await run(
+      ['verify', '--target=real', '--name=demo', '--model=Order', '--skip-browser', '--keep', '--url=http://x:8080', '--user=admin', '--pass=p'],
+      deps,
+      makeIo().io,
+    );
+    expect(deps.verify).toHaveBeenCalledWith({
+      target: 'real',
+      name: 'demo',
+      model: 'Order',
+      skipBrowser: true,
+      keep: true,
+      baseUrl: 'http://x:8080',
+      username: 'admin',
+      password: 'p',
+    });
+  });
+
+  it('--target 非法时报错退出', async () => {
+    const deps = makeDeps();
+    const { io, errors, exits } = makeIo();
+    await run(['verify', '--target=prod'], deps, io);
+    expect(errors[0]).toContain('--target 取值不合法');
+    expect(exits).toEqual([1]);
+    expect(deps.verify).not.toHaveBeenCalled();
+  });
+});
+
+describe('dispatch review（M17 FR-17-23）', () => {
+  it('模型、dry 与覆盖参数原样透传', async () => {
+    const deps = makeDeps();
+    const { io } = makeIo();
+    await run(
+      ['review', 'order', '--model=category', '--dry', '--ai-model=review-x', '--base-url=https://ai.local/v1', '--max-files=5', '--timeout=9000'],
+      deps,
+      io,
+    );
+    expect(deps.review).toHaveBeenCalledWith({
+      models: ['order', 'category'],
+      app: undefined,
+      schema: undefined,
+      dry: true,
+      aiModel: 'review-x',
+      baseUrl: 'https://ai.local/v1',
+      maxFiles: 5,
+      timeoutMs: 9000,
+    });
+  });
+
+  it('--max-files 非正整数时报错退出', async () => {
+    const deps = makeDeps();
+    const { io, errors, exits } = makeIo();
+    await run(['review', '--max-files=0'], deps, io);
+    expect(errors[0]).toContain('--max-files 取值不合法');
+    expect(exits).toEqual([1]);
+    expect(deps.review).not.toHaveBeenCalled();
+  });
+
+  it('--timeout 过小时报错退出（避免 1ms 必然超时）', async () => {
+    const deps = makeDeps();
+    const { io, errors, exits } = makeIo();
+    await run(['review', '--timeout=10'], deps, io);
+    expect(errors[0]).toContain('--timeout 取值不合法');
     expect(exits).toEqual([1]);
   });
 });

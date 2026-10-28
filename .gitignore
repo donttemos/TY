@@ -15,6 +15,8 @@ coverage/
 *.log
 *.sqlite
 *.db
+# 手工备份的 sqlite 库（改名后不再匹配 *.db，但同属本地数据）
+*.db.bak*
 
 # IDE 与系统文件
 .idea/
@@ -47,3 +49,23 @@ template-admin-smoke/uploads/
 
 # M14 浏览器验收产物：脚本可复跑生成，截图不入库（report.json 作为证据快照入库）
 apps/admin-web/e2e-artifacts/*.png
+
+# 部署状态与本地产物（fw deploy 生成，属环境相关，不入版本库）
+deploy.manifest.json
+deploy-report.json
+backups/
+.tmp-*
+
+# fw verify 产物
+verify-report.json
+verify-artifacts/
+apps/auto-verify/
+.verify-process.log
+apps/*/.verify-process.log
+apps/*/*/.verify-process.log
+
+# CI 轮询的临时状态（本机排查用，不入版本库）
+.ci-runs.json
+.ci-rerun.json
+.ci-status.json
+runs.json

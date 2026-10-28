@@ -19,13 +19,21 @@ datasource db {
 
 /// 演示条目（M2 通用约定字段全集）
 model DemoItem {
+  /// ID
   id        String   @id @default(uuid())
+  /// 标题
   title     String
+  /// 完成状态
   done      Boolean  @default(false)
+  /// 删除时间
   deletedAt DateTime?
+  /// 创建时间
   createdAt DateTime @default(now())
+  /// 更新时间
   updatedAt DateTime @updatedAt
+  /// 创建人
   createdBy String   @default("system")
+  /// 更新人
   updatedBy String   @default("system")
 }
 
@@ -34,21 +42,37 @@ model DemoItem {
 
 /// 用户（PRD-003 FR-01）
 model User {
+  /// ID
   id           String    @id @default(uuid())
+  /// 租户ID
   tenantId     BigInt    @default(0) @map("tenant_id")
+  /// 用户名
   username     String    @unique
+  /// 手机号
   phone        String?   @unique
+  /// 邮箱
   email        String?   @unique
+  /// 密码哈希
   passwordHash String    @map("password_hash")
+  /// 昵称
   nickname     String?
+  /// 头像
   avatar       String?
+  /// 状态
   status       Int       @default(1)
+  /// 最后登录时间
   lastLoginAt  DateTime? @map("last_login_at")
+  /// 最后登录IP
   lastLoginIp  String?   @map("last_login_ip")
+  /// 删除时间
   deletedAt    DateTime? @map("deleted_at")
+  /// 创建时间
   createdAt    DateTime  @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt    DateTime  @updatedAt @map("updated_at")
+  /// 创建人
   createdBy    String    @default("system") @map("created_by")
+  /// 更新人
   updatedBy    String    @default("system") @map("updated_by")
 
   @@index([tenantId], map: "idx_users_tenant")
@@ -58,18 +82,31 @@ model User {
 
 /// 角色（PRD-003 FR-04/FR-10）
 model Role {
+  /// ID
   id         String   @id @default(uuid())
+  /// 租户ID
   tenantId   BigInt   @default(0) @map("tenant_id")
+  /// 角色编码
   code       String
+  /// 角色名称
   name       String
+  /// 备注
   remark     String?
+  /// 是否系统内置
   isSystem   Int      @default(0) @map("is_system")
+  /// 数据范围
   dataScope  String   @default("self") @map("data_scope")
+  /// 排序
   sort       Int      @default(0)
+  /// 删除时间
   deletedAt  DateTime? @map("deleted_at")
+  /// 创建时间
   createdAt  DateTime @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt  DateTime @updatedAt @map("updated_at")
+  /// 创建人
   createdBy  String   @default("system") @map("created_by")
+  /// 更新人
   updatedBy  String   @default("system") @map("updated_by")
 
   @@unique([tenantId, code], map: "uk_roles_tenant_code")
@@ -79,16 +116,27 @@ model Role {
 
 /// 权限点（PRD-003 FR-04：编码 `资源:操作`，类型 menu/button/api）
 model Permission {
+  /// ID
   id         String   @id @default(uuid())
+  /// 权限编码
   code       String   @unique
+  /// 权限名称
   name       String
+  /// 权限类型
   type       String   @default("api")
+  /// 所属模块
   module     String?
+  /// 排序
   sort       Int      @default(0)
+  /// 删除时间
   deletedAt  DateTime? @map("deleted_at")
+  /// 创建时间
   createdAt  DateTime @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt  DateTime @updatedAt @map("updated_at")
+  /// 创建人
   createdBy  String   @default("system") @map("created_by")
+  /// 更新人
   updatedBy  String   @default("system") @map("updated_by")
 
   @@index([type], map: "idx_permissions_type")
@@ -98,7 +146,9 @@ model Permission {
 
 /// 用户-角色关联（无审计字段，故不经 Repository<T>）
 model UserRole {
+  /// 用户ID
   userId String @map("user_id")
+  /// 角色ID
   roleId String @map("role_id")
 
   @@id([userId, roleId])
@@ -109,7 +159,9 @@ model UserRole {
 
 /// 角色-权限关联（无审计字段，故不经 Repository<T>）
 model RolePermission {
+  /// 角色ID
   roleId       String @map("role_id")
+  /// 权限ID
   permissionId String @map("permission_id")
 
   @@id([roleId, permissionId])
@@ -118,19 +170,33 @@ model RolePermission {
 
 /// 菜单（PRD-003 FR-09：供后台动态路由）
 model Menu {
+  /// ID
   id             String   @id @default(uuid())
+  /// 父级ID
   parentId       String   @default("0") @map("parent_id")
+  /// 菜单名称
   name           String
+  /// 路由路径
   path           String?
+  /// 组件路径
   component      String?
+  /// 图标
   icon           String?
+  /// 权限编码
   permissionCode String?  @map("permission_code")
+  /// 是否可见
   visible        Int      @default(1)
+  /// 排序
   sort           Int      @default(0)
+  /// 删除时间
   deletedAt      DateTime? @map("deleted_at")
+  /// 创建时间
   createdAt      DateTime @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt      DateTime @updatedAt @map("updated_at")
+  /// 创建人
   createdBy      String   @default("system") @map("created_by")
+  /// 更新人
   updatedBy      String   @default("system") @map("updated_by")
 
   @@index([parentId], map: "idx_menus_parent")
@@ -140,17 +206,29 @@ model Menu {
 
 /// 组织部门（PRD-008 FR-05，数据字典 §3.7：树形，parentId='0' 为顶级）
 model Department {
+  /// ID
   id        String    @id @default(uuid())
+  /// 租户ID
   tenantId  BigInt    @default(0) @map("tenant_id")
+  /// 上级部门ID
   parentId  String    @default("0") @map("parent_id")
+  /// 部门编码
   code      String?
+  /// 部门名称
   name      String
+  /// 负责人ID
   leaderId  String?   @map("leader_id")
+  /// 排序
   sort      Int       @default(0)
+  /// 删除时间
   deletedAt DateTime? @map("deleted_at")
+  /// 创建时间
   createdAt DateTime  @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt DateTime  @updatedAt @map("updated_at")
+  /// 创建人
   createdBy String    @default("system") @map("created_by")
+  /// 更新人
   updatedBy String    @default("system") @map("updated_by")
 
   @@unique([tenantId, code], map: "uk_dept_tenant_code")
@@ -161,8 +239,11 @@ model Department {
 
 /// 用户-部门关联（PRD-008 FR-05，数据字典 §3.8：支持多部门，isPrimary 标主部门）
 model UserDepartment {
+  /// 用户ID
   userId       String @map("user_id")
+  /// 部门ID
   departmentId String @map("department_id")
+  /// 是否主部门
   isPrimary    Int    @default(0) @map("is_primary")
 
   @@id([userId, departmentId])
@@ -172,23 +253,41 @@ model UserDepartment {
 
 /// 刷新令牌（PRD-003 FR-02/FR-03：只存哈希 + 轮换族）
 model RefreshToken {
+  /// ID
   id        String    @id @default(uuid())
+  /// 用户ID
   userId    String    @map("user_id")
+  /// 令牌哈希
   tokenHash String    @unique @map("token_hash")
+  /// 令牌族ID
   familyId  String    @map("family_id")
+  /// 过期时间
   expireAt  DateTime  @map("expire_at")
+  /// 吊销时间
   revokedAt            DateTime? @map("revoked_at")
+  /// 登录IP
   loginIp              String?   @map("login_ip")
+  /// 用户代理
   userAgent            String?   @map("user_agent")
+  /// 替代令牌ID
   replacedById         String?   @map("replaced_by_id")
+  /// 替代密文
   replacementCipher    String?   @map("replacement_cipher")
+  /// 替代密钥ID
   replacementKeyId     String?   @map("replacement_key_id")
+  /// 替代过期时间
   replacementExpiresAt DateTime? @map("replacement_expires_at")
+  /// 轮换指纹
   rotatedFingerprint   String?   @map("rotated_fingerprint")
+  /// 删除时间
   deletedAt DateTime? @map("deleted_at")
+  /// 创建时间
   createdAt DateTime  @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt DateTime  @updatedAt @map("updated_at")
+  /// 创建人
   createdBy String    @default("system") @map("created_by")
+  /// 更新人
   updatedBy String    @default("system") @map("updated_by")
 
   @@index([userId], map: "idx_rt_user")
@@ -200,30 +299,53 @@ model RefreshToken {
 
 /// 审计日志（PRD-003 FR-08：仅创建，不更新不删除）
 model AuditLog {
+  /// ID
   id          String   @id @default(uuid())
+  /// 租户ID
   tenantId    BigInt   @default(0) @map("tenant_id")
+  /// 用户ID
   userId      String?  @map("user_id")
+  /// 所属模块
   module      String
+  /// 操作
   action      String
+  /// 事件类别
   category    String?  @map("category")
+  /// 事件
   event       String?  @map("event")
+  /// 结果
   result      String?  @map("result")
+  /// 令牌族ID
   familyId    String?  @map("family_id")
+  /// 令牌标识
   jti         String?  @map("jti")
+  /// 请求ID
   requestId   String?  @map("request_id")
+  /// 目标类型
   targetType  String?  @map("target_type")
+  /// 目标ID
   targetId    String?  @map("target_id")
+  /// 变更前值
   beforeValue Json?    @map("before_value")
+  /// 变更后值
   afterValue  Json?    @map("after_value")
+  /// IP地址
   ip          String?
+  /// 用户代理
   userAgent   String?  @map("user_agent")
+  /// 追踪ID
   traceId     String?  @map("trace_id")
+  /// 创建时间
   createdAt   DateTime @default(now()) @map("created_at")
   /// PRD-015（ADR-0032）：业务快照——会随业务数据漂移的事实，事件发生时固化
   summary     String?
+  /// 目标标签
   targetLabel String?  @map("target_label")
+  /// 操作者标签
   actorLabel  String?  @map("actor_label")
+  /// 原因
   reason      String?
+  /// 审计来源
   auditSource String?  @map("audit_source")
 
   @@index([tenantId], map: "idx_audit_tenant")
@@ -243,31 +365,55 @@ model AuditLog {
 /// 审计日志归档（PRD-010 E-10，数据字典 §3.17）：在线表按保留天数迁入的冷存副本，
 /// 主键与在线表一致（幂等 upsert 依据），另有 archivedAt 登记归档时刻；只增不改不删（冷数据）
 model AuditLogArchive {
+  /// ID
   id          String   @id
+  /// 租户ID
   tenantId    BigInt   @default(0) @map("tenant_id")
+  /// 用户ID
   userId      String?  @map("user_id")
+  /// 所属模块
   module      String
+  /// 操作
   action      String
+  /// 事件类别
   category    String?  @map("category")
+  /// 事件
   event       String?  @map("event")
+  /// 结果
   result      String?  @map("result")
+  /// 令牌族ID
   familyId    String?  @map("family_id")
+  /// 令牌标识
   jti         String?  @map("jti")
+  /// 请求ID
   requestId   String?  @map("request_id")
+  /// 目标类型
   targetType  String?  @map("target_type")
+  /// 目标ID
   targetId    String?  @map("target_id")
+  /// 变更前值
   beforeValue Json?    @map("before_value")
+  /// 变更后值
   afterValue  Json?    @map("after_value")
+  /// IP地址
   ip          String?
+  /// 用户代理
   userAgent   String?  @map("user_agent")
+  /// 追踪ID
   traceId     String?  @map("trace_id")
+  /// 创建时间
   createdAt   DateTime @map("created_at")
   /// PRD-015（ADR-0032 R8）：归档表与在线表同构——快照列必须同步，否则冷数据不可读
   summary     String?
+  /// 目标标签
   targetLabel String?  @map("target_label")
+  /// 操作者标签
   actorLabel  String?  @map("actor_label")
+  /// 原因
   reason      String?
+  /// 审计来源
   auditSource String?  @map("audit_source")
+  /// 归档时间
   archivedAt  DateTime @default(now()) @map("archived_at")
 
   @@index([userId], map: "idx_audit_archive_user")
@@ -283,18 +429,31 @@ model AuditLogArchive {
 
 /// 租户（PRD-008 FR-01/FR-02，数据字典 §3.10）
 model Tenant {
+  /// ID
   id        String    @id
+  /// 租户编码
   code      String    @unique
+  /// 租户名称
   name      String
+  /// 隔离方式
   isolation String    @default("shared")
+  /// 数据库地址密文
   dbUrlEnc  String?   @map("db_url_enc")
+  /// 套餐
   plan      String?
+  /// 状态
   status    Int       @default(1)
+  /// 到期时间
   expireAt  DateTime? @map("expire_at")
+  /// 删除时间
   deletedAt DateTime? @map("deleted_at")
+  /// 创建时间
   createdAt DateTime  @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt DateTime  @updatedAt @map("updated_at")
+  /// 创建人
   createdBy String    @default("system") @map("created_by")
+  /// 更新人
   updatedBy String    @default("system") @map("updated_by")
 
   @@map("tenants")
@@ -302,14 +461,23 @@ model Tenant {
 
 /// 字典分类（PRD-005 FR-07：字典项避免前端硬编码枚举；数据字典 §3.14）
 model DictCategory {
+  /// ID
   id        String    @id @default(uuid())
+  /// 分类编码
   code      String    @unique
+  /// 分类名称
   name      String
+  /// 备注
   remark    String?
+  /// 删除时间
   deletedAt DateTime? @map("deleted_at")
+  /// 创建时间
   createdAt DateTime  @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt DateTime  @updatedAt @map("updated_at")
+  /// 创建人
   createdBy String    @default("system") @map("created_by")
+  /// 更新人
   updatedBy String    @default("system") @map("updated_by")
 
   @@index([deletedAt], map: "idx_dict_cat_deleted")
@@ -318,16 +486,27 @@ model DictCategory {
 
 /// 字典项（PRD-005 FR-07：value 为程序值，label 为展示值，color 供标签取色）
 model DictItem {
+  /// ID
   id         String    @id @default(uuid())
+  /// 分类ID
   categoryId String    @map("category_id")
+  /// 显示名称
   label      String
+  /// 字典值
   value      String
+  /// 颜色
   color      String?
+  /// 排序
   sort       Int       @default(0)
+  /// 删除时间
   deletedAt  DateTime? @map("deleted_at")
+  /// 创建时间
   createdAt  DateTime  @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt  DateTime  @updatedAt @map("updated_at")
+  /// 创建人
   createdBy  String    @default("system") @map("created_by")
+  /// 更新人
   updatedBy  String    @default("system") @map("updated_by")
 
   @@unique([categoryId, value], map: "uk_dict_item_category_value")
@@ -340,20 +519,35 @@ model DictItem {
 /// 产物为文本内联（OQ-1 决议：≤20MB 内联起步，E-09 落地后可切对象存储）；MySQL 形态下
 /// artifact_content 建议手工调整为 LONGTEXT（sqlite/PG 的 text 无需处理）
 model JobRecord {
+  /// ID
   id                  String   @id
+  /// 任务类型
   type                String
+  /// 任务标题
   title               String
+  /// 状态
   status              String   @default("pending")
+  /// 进度
   progress            Int      @default(0)
+  /// 消息
   message             String?
+  /// 错误信息
   error               String?
+  /// 追踪ID
   traceId             String?  @map("trace_id")
+  /// 文件名
   fileName            String?  @map("file_name")
+  /// 产物内容
   artifactContent     String?  @map("artifact_content")
+  /// 产物类型
   artifactContentType String?  @map("artifact_content_type")
+  /// 归属人ID
   ownerId             String   @map("owner_id")
+  /// 参数
   params              String?
+  /// 创建时间
   createdAt           DateTime @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt           DateTime @updatedAt @map("updated_at")
 
   @@index([ownerId, createdAt], map: "idx_jobs_owner_created")
@@ -363,8 +557,11 @@ model JobRecord {
 
 /// 配置快照历史（M10 E-02：配置中心多实例语义持久层，数据字典 §3.16；保留最近 20 版，超出淘汰最旧）
 model ConfigSnapshot {
+  /// 版本号
   version   Int      @id
+  /// 覆盖配置
   overlay   String
+  /// 生效时间
   appliedAt DateTime @map("applied_at")
 
   @@map("config_snapshots")
@@ -374,18 +571,31 @@ model ConfigSnapshot {
 /// dedupe_key 唯一：事件面可能重复投递（多副本各起一条订阅、任务重试后再次终态），
 /// 幂等靠**唯一约束**而非应用层「先查后写」——并发插入时只有一个成功，其余按命中处理。
 model Notification {
+  /// ID
   id        String    @id @default(uuid())
+  /// 租户ID
   tenantId  BigInt    @default(0) @map("tenant_id")
+  /// 用户ID
   userId    String    @map("user_id")
+  /// 通知类型
   kind      String
+  /// 通知级别
   level     String    @default("info")
+  /// 标题
   title     String
+  /// 内容
   content   String?
+  /// 关联类型
   refType   String?   @map("ref_type")
+  /// 关联ID
   refId     String?   @map("ref_id")
+  /// 追踪ID
   traceId   String?   @map("trace_id")
+  /// 去重键
   dedupeKey String    @unique @map("dedupe_key")
+  /// 阅读时间
   readAt    DateTime? @map("read_at")
+  /// 创建时间
   createdAt DateTime  @default(now()) @map("created_at")
 
   @@index([userId, createdAt], map: "idx_notifications_user_created")
@@ -397,15 +607,25 @@ model Notification {
 /// 文件内容经 StoragePort 落盘/落对象存储（key = stored_name，<yyyyMM>/<uuid><ext>，不透传用户输入）；
 /// 本表只存元数据与归属，软删后下载面视为不存在（不泄露存在性）。
 model UploadFile {
+  /// ID
   id           String    @id @default(uuid())
+  /// 归属人ID
   ownerId      String?   @map("owner_id")
+  /// 原文件名
   originalName String    @map("original_name")
+  /// 存储文件名
   storedName   String    @map("stored_name")
+  /// 文件类型
   mimeType     String    @map("mime_type")
+  /// 文件大小
   size         Int
+  /// 删除时间
   deletedAt    DateTime? @map("deleted_at")
+  /// 创建时间
   createdAt    DateTime  @default(now()) @map("created_at")
+  /// 创建人
   createdBy    String    @default("system") @map("created_by")
+  /// 更新人
   updatedBy    String    @default("system") @map("updated_by")
 
   @@index([ownerId], map: "idx_upload_owner")
@@ -419,14 +639,23 @@ model UploadFile {
 
 /// 套餐定义（ADR-0029：code 唯一；权益描述层数据，不承载配额值）
 model Plan {
+  /// ID
   id          String    @id @default(uuid())
+  /// 套餐编码
   code        String    @unique
+  /// 套餐名称
   name        String
+  /// 描述
   description String?
+  /// 删除时间
   deletedAt   DateTime? @map("deleted_at")
+  /// 创建时间
   createdAt   DateTime  @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt   DateTime  @updatedAt @map("updated_at")
+  /// 创建人
   createdBy   String    @default("system") @map("created_by")
+  /// 更新人
   updatedBy   String    @default("system") @map("updated_by")
 
   @@map("plans")
@@ -434,15 +663,25 @@ model Plan {
 
 /// 套餐版本（ADR-0029：发布后不可变；订阅绑定版本而非最新定义）
 model PlanVersion {
+  /// ID
   id          String    @id @default(uuid())
+  /// 套餐ID
   planId      String    @map("plan_id")
+  /// 版本号
   version     Int
+  /// 状态
   status      String    @default("published")
+  /// 备注
   remark      String?
+  /// 发布时间
   publishedAt DateTime? @map("published_at")
+  /// 创建时间
   createdAt   DateTime  @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt   DateTime  @updatedAt @map("updated_at")
+  /// 创建人
   createdBy   String    @default("system") @map("created_by")
+  /// 更新人
   updatedBy   String    @default("system") @map("updated_by")
 
   @@unique([planId, version], map: "uk_plan_versions_plan_version")
@@ -452,16 +691,27 @@ model PlanVersion {
 
 /// 配额字典（指标维度定义；execution 为默认执行方式，可被 plan_quotas.execution 覆盖）
 model QuotaDefinition {
+  /// ID
   id          String   @id @default(uuid())
+  /// 配额键
   key         String   @unique
+  /// 配额名称
   name        String
+  /// 单位
   unit        String
+  /// 窗口类型
   windowType  String   @default("day") @map("window_type")
+  /// 执行方式
   execution   String   @default("hard")
+  /// 描述
   description String?
+  /// 创建时间
   createdAt   DateTime @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt   DateTime @updatedAt @map("updated_at")
+  /// 创建人
   createdBy   String   @default("system") @map("created_by")
+  /// 更新人
   updatedBy   String   @default("system") @map("updated_by")
 
   @@map("quota_definitions")
@@ -469,14 +719,23 @@ model QuotaDefinition {
 
 /// 套餐版本配额默认项（ADR-0029：生效值 = tenant_quotas.override_value ?? 本表 limit_value）
 model PlanQuota {
+  /// ID
   id            String   @id @default(uuid())
+  /// 套餐版本ID
   planVersionId String   @map("plan_version_id")
+  /// 配额键
   quotaKey      String   @map("quota_key")
+  /// 限额值
   limitValue    BigInt   @map("limit_value")
+  /// 执行方式
   execution     String?
+  /// 创建时间
   createdAt     DateTime @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt     DateTime @updatedAt @map("updated_at")
+  /// 创建人
   createdBy     String   @default("system") @map("created_by")
+  /// 更新人
   updatedBy     String   @default("system") @map("updated_by")
 
   @@unique([planVersionId, quotaKey], map: "uk_plan_quotas_version_key")
@@ -487,20 +746,35 @@ model PlanQuota {
 /// 租户订阅（ADR-0029：一租户至多一个生效订阅——active_marker 非空时 = tenantId，
 /// 三库唯一索引对 NULL 不去重，无需 partial index 即可表达，triway 零方言分叉）
 model TenantSubscription {
+  /// ID
   id            String    @id @default(uuid())
+  /// 租户ID
   tenantId      String    @map("tenant_id")
+  /// 套餐ID
   planId        String    @map("plan_id")
+  /// 套餐版本ID
   planVersionId String    @map("plan_version_id")
+  /// 状态
   status        String    @default("active")
+  /// 生效标记
   activeMarker  String?   @unique @map("active_marker")
+  /// 生效时间
   effectiveAt   DateTime  @default(now()) @map("effective_at")
+  /// 到期时间
   expireAt      DateTime? @map("expire_at")
+  /// 关闭时间
   closedAt      DateTime? @map("closed_at")
+  /// 原因
   reason        String?
+  /// 删除时间
   deletedAt     DateTime? @map("deleted_at")
+  /// 创建时间
   createdAt     DateTime  @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt     DateTime  @updatedAt @map("updated_at")
+  /// 创建人
   createdBy     String    @default("system") @map("created_by")
+  /// 更新人
   updatedBy     String    @default("system") @map("updated_by")
 
   @@index([tenantId], map: "idx_tenant_subscriptions_tenant")
@@ -511,15 +785,25 @@ model TenantSubscription {
 
 /// 租户配额覆盖（生效值 = override_value ?? 套餐默认；source 标记 plan_snapshot/manual）
 model TenantQuota {
+  /// ID
   id            String   @id @default(uuid())
+  /// 租户ID
   tenantId      String   @map("tenant_id")
+  /// 配额键
   quotaKey      String   @map("quota_key")
+  /// 覆盖值
   overrideValue BigInt   @map("override_value")
+  /// 执行方式
   execution     String?
+  /// 来源
   source        String   @default("manual")
+  /// 创建时间
   createdAt     DateTime @default(now()) @map("created_at")
+  /// 更新时间
   updatedAt     DateTime @updatedAt @map("updated_at")
+  /// 创建人
   createdBy     String   @default("system") @map("created_by")
+  /// 更新人
   updatedBy     String   @default("system") @map("updated_by")
 
   @@unique([tenantId, quotaKey], map: "uk_tenant_quotas_tenant_key")
@@ -530,15 +814,25 @@ model TenantQuota {
 /// 用量窗口行（ADR-0030：硬限额原子扣减的事实行——
 /// 扣减 = UPDATE ... SET used = used + qty WHERE used + qty <= limit_value，affected=0 即超限）
 model TenantQuotaWindow {
+  /// ID
   id          String    @id @default(uuid())
+  /// 租户ID
   tenantId    String    @map("tenant_id")
+  /// 配额键
   quotaKey    String    @map("quota_key")
+  /// 窗口类型
   windowType  String    @map("window_type")
+  /// 窗口开始时间
   windowStart DateTime  @map("window_start")
+  /// 已用量
   used        BigInt    @default(0)
+  /// 限额值
   limitValue  BigInt    @map("limit_value")
+  /// 执行方式
   execution   String    @default("hard")
+  /// 预警时间
   warnedAt    DateTime? @map("warned_at")
+  /// 更新时间
   updatedAt   DateTime  @updatedAt @map("updated_at")
 
   @@unique([tenantId, quotaKey, windowType, windowStart], map: "uk_tenant_quota_windows_window")
@@ -548,13 +842,21 @@ model TenantQuotaWindow {
 
 /// 原始用量事件（幂等键唯一约束：重复投递不重复计量；本表为事实源，rollup 可由此重建）
 model UsageEvent {
+  /// ID
   id             String   @id @default(uuid())
+  /// 租户ID
   tenantId       String   @map("tenant_id")
+  /// 配额键
   quotaKey       String   @map("quota_key")
+  /// 用量
   quantity       BigInt
+  /// 发生时间
   occurredAt     DateTime @map("occurred_at")
+  /// 来源
   source         String   @default("api")
+  /// 幂等键
   idempotencyKey String   @unique @map("idempotency_key")
+  /// 创建时间
   createdAt      DateTime @default(now()) @map("created_at")
 
   @@index([tenantId, quotaKey, occurredAt], map: "idx_usage_events_tenant_metric_time")
@@ -563,13 +865,21 @@ model UsageEvent {
 
 /// 用量窗口汇总（usage_rollups：可随时从 usage_events 重算重建；缓存不作事实来源）
 model UsageRollup {
+  /// ID
   id            String   @id @default(uuid())
+  /// 租户ID
   tenantId      String   @map("tenant_id")
+  /// 配额键
   quotaKey      String   @map("quota_key")
+  /// 窗口类型
   windowType    String   @map("window_type")
+  /// 窗口开始时间
   windowStart   DateTime @map("window_start")
+  /// 总用量
   totalQuantity BigInt   @map("total_quantity")
+  /// 事件数
   eventCount    Int      @default(0) @map("event_count")
+  /// 更新时间
   updatedAt     DateTime @updatedAt @map("updated_at")
 
   @@unique([tenantId, quotaKey, windowType, windowStart], map: "uk_usage_rollups_window")
@@ -579,18 +889,31 @@ model UsageRollup {
 
 /// 租户生命周期日志（ADR-0031：只增不改不删；迁移唯一权威的留痕面，审计字段随 M12 契约）
 model TenantLifecycleLog {
+  /// ID
   id         String   @id @default(uuid())
+  /// 租户ID
   tenantId   String   @map("tenant_id")
+  /// 原状态
   fromStatus String?  @map("from_status")
+  /// 新状态
   toStatus   String
+  /// 操作
   action     String
+  /// 操作者类型
   actorType  String   @default("user") @map("actor_type")
+  /// 操作者ID
   actorId    String?  @map("actor_id")
+  /// 原因
   reason     String?
+  /// IP地址
   ip         String?
+  /// 用户代理
   userAgent  String?  @map("user_agent")
+  /// 追踪ID
   traceId    String?  @map("trace_id")
+  /// 请求ID
   requestId  String?  @map("request_id")
+  /// 创建时间
   createdAt  DateTime @default(now()) @map("created_at")
 
   @@index([tenantId, createdAt], map: "idx_tenant_lifecycle_tenant_time")

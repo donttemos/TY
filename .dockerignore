@@ -1,0 +1,43 @@
+# @file 镜像构建排除清单
+# @description 只保留构建必需的源码与清单：本地依赖、产物、数据库文件、密钥与备份一律不进镜像。
+#   注意：prisma/ 必须保留（schema + migrations 要在镜像内生成 Client / 执行迁移），
+#   但其中的 dev.db* 与备份文件必须排除。
+# @author donttemo
+# @created 2026-10-22
+# @module deploy
+
+node_modules
+**/node_modules
+
+# 构建产物（镜像内重新编译，避免带入宿主平台产物）
+dist
+**/dist
+.turbo
+**/.turbo
+coverage
+**/coverage
+
+# 版本库与 IDE
+.git
+.github
+.vscode
+.idea
+
+# 本地数据库与备份（严禁进镜像）
+**/*.db
+**/*.db-journal
+**/*.db.bak-*
+backups
+
+# 密钥与环境文件
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# 部署本地产物
+deploy.manifest.json
+deploy-report.json
+.tmp-*

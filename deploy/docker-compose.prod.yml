@@ -1,12 +1,19 @@
 # @file docker-compose.prod.yml
-# @description 中档部署编排（T-M8-07 / PRD-008 FR-09 / docs/60-deployment-ops.md §5）
+# @description 单机生产编排（PRD-016 S2 / docs/60-deployment-ops.md §5 / docs/61 裸机方案为另一渠道）
 # @author donttemo
 # @created 2026-10-14
+# @modified 2026-10-22 donttemo M16/PRD-016：接入本地构建（runtime + migrator 双目标）、副本数可配、
+#   迁移改走 migrator 镜像（runtime 无 prisma CLI）、移除 Swarm 专用字段（update_config/restart_policy
+#   在单机 compose 下不执行，会造成「以为会自动回滚」的假象——回滚由 fw deploy 自己实现）
 # @module deploy
 #
-# 用法：docker compose --env-file .env.prod -f deploy/docker-compose.prod.yml up -d
+# 用法（推荐）：fw deploy            # 首次问答后零输入，自动完成构建/备份/迁移/启动/健康
+# 手工等价：docker compose --env-file .env.prod -f deploy/docker-compose.prod.yml up -d --build
 # 组件：nginx（静态 + 反代）| app×N（无状态）| worker（队列消费者）| postgres | redis
 # 原则：应用无状态；会话/令牌走 JWT 或 Redis；定时任务靠 Redis 分布式锁单点执行。
+#
+# 必填变量（由 fw deploy 写入 .env.prod，或手工提供）：POSTGRES_PASSWORD / REDIS_PASSWORD /
+# JWT_SECRET / APP_DOMAIN；可选：APP_IMAGE / APP_REPLICAS / WORKER_REPLICAS / PRISMA_SCHEMA。
 
 name: fw-prod
 
@@ -35,24 +42,30 @@ x-app-env: &app-env
   AUTH_STRATEGY: jwt
   JWT_SECRET: ${JWT_SECRET:?JWT_SECRET 必须设置}
   AUTH_ALLOW_REGISTER: "false"
-  # 多租户与追踪
-  TENANT_ENABLED: "true"
-  TENANT_ORDER: "subdomain,header,jwt"
-  TENANT_BASE_DOMAIN: ${TENANT_BASE_DOMAIN:-example.com}
-  TENANT_DB_KEY: ${TENANT_DB_KEY:-}
-  OTEL_ENABLED: "true"
+  # 多租户：单机 compose 默认关闭（TENANT_ENABLED=true 时要求请求带租户标识，
+  # 且审计写入会出现 tenant_id 恒 0 的口径问题，见 docs/64 真机验收记录）
+  TENANT_ENABLED: "false"
+  TENANT_BASE_DOMAIN: ${APP_DOMAIN:-example.com}
+  # Prisma schema：必须与 DB_DRIVER 匹配（postgres → prisma/pg/schema.prisma）
+  # 迁移与种子都读这个值，改错会导致「迁移跑在 sqlite 迁移目录、服务连 postgres」的错配
+  PRISMA_SCHEMA: ${PRISMA_SCHEMA:-prisma/pg/schema.prisma}
+  # 可观测：单机默认关闭外部导出（没有 collector 时开启会持续超时重试）
+  OTEL_ENABLED: "false"
   OTEL_SERVICE_NAME: "fw-prod-api"
-  OTEL_EXPORTER_URL: ${OTEL_EXPORTER_URL:-http://otel-collector:4318/v1/traces}
-  OTEL_SAMPLE_RATIO: "0.1"
-  OTEL_SAMPLE_ERRORS: "true"
-  # 配置中心（M9）：file 适配为单实例语义，compose 多容器部署默认关闭（多实例请实现 Nacos adapter）
+  # 配置中心：file 适配为单实例语义，compose 多容器部署默认关闭（多实例请实现 Nacos adapter）
   CONFIG_CENTER_ENABLED: "false"
   CONFIG_CENTER_DRIVER: file
-  CONFIG_CENTER_FILE: ./config/runtime.json
   CONFIG_CENTER_POLL_SECONDS: "5"
 
 x-app-image: &app-image
-  image: ${APP_IMAGE:-registry.example.com/fw-app:0.1.0}
+  image: ${APP_IMAGE:-fw-app:local}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile
+    target: runtime
+    args:
+      # 构建期就要生成对应 provider 的 Prisma Client，改这里必须与上面的 PRISMA_SCHEMA 同步
+      PRISMA_SCHEMA: ${PRISMA_SCHEMA:-prisma/pg/schema.prisma}
   restart: unless-stopped
 
 services:
@@ -85,15 +98,23 @@ services:
       retries: 10
     networks: [fw-net]
 
-  # 迁移：一次性执行，由应用镜像的 db:migrate 驱动（迁移锁保证单实例）
+  # 迁移：一次性容器，走 migrator 目标（runtime 镜像不含 prisma CLI，跑不了迁移）
+  # 不放进 up 的常驻集合：由 fw deploy 用 `docker compose run --rm migrate` 单独执行
   migrate:
-    <<: *app-image
+    image: ${APP_IMAGE:-fw-app:local}-migrator
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: migrator
+      args:
+        PRISMA_SCHEMA: ${PRISMA_SCHEMA:-prisma/pg/schema.prisma}
     environment:
       <<: *app-env
-    command: ["pnpm", "db:migrate"]
+    command: ["sh", "-c", "pnpm exec prisma migrate deploy --schema ${PRISMA_SCHEMA:-prisma/pg/schema.prisma}"]
     depends_on:
       postgres:
         condition: service_healthy
+    profiles: ["tools"]
     restart: "no"
     networks: [fw-net]
 
@@ -101,20 +122,15 @@ services:
     <<: *app-image
     environment:
       <<: *app-env
-    # 迁移完成后再起应用
-    command: ["sh", "-c", "node dist/main.js"]
+    command: ["node", "dist/main.js"]
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
+    # 副本数由 .env.prod 的 APP_REPLICAS 控制（单机默认 1；2C4G 不建议超过 2）
     deploy:
-      replicas: 3
-      update_config:
-        order: start-first
-        failure_action: rollback
-      restart_policy:
-        condition: on-failure
+      replicas: ${APP_REPLICAS:-1}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
@@ -131,18 +147,19 @@ services:
     environment:
       <<: *app-env
       TRANSPORT_ROLE: handler
-    command: ["sh", "-c", "node dist/main.js"]
+    command: ["node", "dist/main.js"]
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     deploy:
-      replicas: 2
+      replicas: ${WORKER_REPLICAS:-1}
     expose:
       - "3000"
     networks: [fw-net]
 
+  # 反向代理：证书需预先放到 deploy/nginx/certs/（首次无证书时先注释 443 段）
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped

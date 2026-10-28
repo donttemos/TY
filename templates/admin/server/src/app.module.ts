@@ -22,7 +22,9 @@ import { loadEnv } from '@fw/config';
 import { FwCoreModule } from '@fw/core';
 import { AppAuthModule } from './modules/auth/app-auth.module.js';
 import { TemplateDbModule, dbReadinessProbe } from './modules/db/db.module.js';
+// <fw:gen:imports>
 import { DemoItemModule } from './modules/demo-item/demo-item.module.js';
+// </fw:gen:imports>
 import { UploadModule } from './modules/upload/upload.module.js';
 
 /** 缓存就绪探针：与 CacheModule.forRoot 共用同一实例 */
@@ -70,7 +72,9 @@ function parseWhitelist(raw: string): string[] {
     // 登录 + RBAC + 用户/角色/菜单/字典/审计管理端点（@fw/auth 装配 + ADMIN_STORE）
     AppAuthModule,
     // 示例 CRUD（fw gen crud 产物形态，带权限点守卫）
+    // <fw:gen:modules>
     DemoItemModule,
+    // </fw:gen:modules>
     // 附件上传（PRD-010 E-09 收编：文件内容经 @fw/storage 端口，STORAGE_DRIVER=local/s3 一改即切；
     // StorageModule 由 UploadModule 内部 forRoot 装配）
     UploadModule,

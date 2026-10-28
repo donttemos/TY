@@ -1,0 +1,207 @@
+/*
+ * @file studio-web 全局样式
+ * @description 与后台平台**不共用**任何样式变量或组件库：Studio 是独立工具，视觉自成一套，
+ *   避免出现「改后台主题把开发工具搞坏」这类耦合。
+ * @author donttemo
+ * @created 2026-10-22
+ * @module studio-web
+ */
+
+:root {
+  color-scheme: light;
+  --bg: #faf9f6;
+  --surface: #ffffff;
+  --border: #e3e1da;
+  --border-strong: #d3d1c7;
+  --text: #2c2c2a;
+  --text-muted: #5f5e5a;
+  --text-faint: #888780;
+  --accent: #185fa5;
+  --accent-soft: #e6f1fb;
+  --ok: #639922;
+  --warn: #ba7517;
+  --danger: #e24b4a;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* 间距与形状：统一用这几个值，避免各页各写一套 padding */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --shadow-1: 0 1px 2px rgb(20 20 19 / 4%);
+  --shadow-2: 0 8px 24px rgb(20 20 19 / 8%);
+  --line-soft: #efeee9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font: inherit;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  border: 0.5px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
+  white-space: nowrap;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--text-faint);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 2px rgb(24 95 165 / 24%);
+}
+
+button.primary:hover:not(:disabled) {
+  background: #14508c;
+  border-color: #14508c;
+}
+
+button.danger {
+  color: var(--danger);
+  border-color: #f0c4c4;
+}
+
+input,
+select {
+  font: inherit;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  border: 0.5px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  min-width: 0;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+/* 复选框不能继承输入框高度，否则会被拉成 28px 高 */
+input[type='checkbox'],
+input[type='radio'] {
+  height: auto;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+textarea {
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  border: 0.5px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  resize: vertical;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+code,
+pre {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* 页面内通用的小零件：三页共用，避免每页重复定义 */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--bg);
+  border: 0.5px solid var(--border);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.pill.ok {
+  background: #eef6e4;
+  border-color: #cfe3b4;
+  color: #40671a;
+}
+.pill.warn {
+  background: #faeeda;
+  border-color: #f0d8a8;
+  color: #854f0b;
+}
+.pill.danger {
+  background: #fcebeb;
+  border-color: #f0c4c4;
+  color: #a32d2d;
+}
+.pill.accent {
+  background: var(--accent-soft);
+  border-color: #c6dff6;
+  color: var(--accent);
+}
+.num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.kicker {
+  margin: 0 0 var(--sp-2);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+button.ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+button.ghost:hover:not(:disabled) {
+  background: var(--bg);
+  color: var(--text);
+}
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 0.5px solid var(--border);
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

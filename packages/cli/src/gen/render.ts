@@ -32,6 +32,12 @@ export interface PlanFile {
   content: string;
   /** 产物类型 */
   kind: 'backend' | 'frontend' | 'seed';
+  /**
+   * 写入方式（PRD-016 FR-16-02）：
+   *   - create（默认）：新建文件，已存在默认跳过、--force 才覆盖；
+   *   - patch：重写既有文件的标记块，**不需要 --force**，文件必须已存在，内容相同则不算变更。
+   */
+  mode?: 'create' | 'patch';
 }
 
 /** 生成范围 */
@@ -196,8 +202,14 @@ export function resolveLayout(options: RenderOptions): AppLayout {
     const picked = candidates.includes('admin-web') ? 'admin-web' : candidates[0];
     webRoot = picked ? path.join(appsDir, picked) : path.join(appsDir, 'admin-web');
   } else {
-    // 无 apps 目录（单项目形态）：前端源码就在项目根 src/ 下
-    webRoot = root;
+    // 无 apps 目录：两种形态
+    //   ① 单项目（前端源码就在 root/src 下）；
+    //   ② fw new --template=admin 产出的「后端 server/ + 前端 admin-web/」兄弟目录
+    //      （此时 cwd 通常是 server/，前端在 ../admin-web）——不识别会把前端产物写进后端根。
+    const sibling = ['admin-web', 'web', 'frontend']
+      .map((name) => path.resolve(root, '..', name))
+      .find((dir) => fs.existsSync(path.join(dir, 'src', 'components', 'CrudTable', 'index.vue')));
+    webRoot = sibling ?? root;
   }
 
   return {

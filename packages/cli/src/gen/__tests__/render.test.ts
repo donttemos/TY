@@ -250,3 +250,30 @@ describe('范围与匹配', () => {
     expect(layout.schemaFile).toBe(schemaFile);
   });
 });
+
+describe('resolveLayout 布局探测', () => {
+  it('fw new --template=admin 的 server/admin-web 兄弟目录：前端根识别为 ../admin-web', () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-cli-layout-'));
+    const server = path.join(project, 'server');
+    const web = path.join(project, 'admin-web');
+    fs.mkdirSync(path.join(server, 'prisma'), { recursive: true });
+    fs.mkdirSync(path.join(server, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(web, 'src', 'components', 'CrudTable'), { recursive: true });
+    fs.writeFileSync(path.join(web, 'src', 'components', 'CrudTable', 'index.vue'), '<template />', 'utf8');
+    fs.writeFileSync(path.join(server, 'prisma', 'schema.prisma'), 'model A { id String @id }', 'utf8');
+
+    const layout = resolveLayout({ models: [], projectRoot: server, author: '', created: '', since: '' });
+    expect(layout.backendRoot).toBe(server);
+    expect(layout.webRoot).toBe(web);
+    fs.rmSync(project, { recursive: true, force: true });
+  });
+
+  it('单项目形态（无 apps、无兄弟前端）：前端根回落为项目根', () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-cli-layout2-'));
+    fs.mkdirSync(path.join(project, 'prisma'), { recursive: true });
+    fs.writeFileSync(path.join(project, 'prisma', 'schema.prisma'), 'model A { id String @id }', 'utf8');
+    const layout = resolveLayout({ models: [], projectRoot: project, author: '', created: '', since: '' });
+    expect(layout.webRoot).toBe(project);
+    fs.rmSync(project, { recursive: true, force: true });
+  });
+});

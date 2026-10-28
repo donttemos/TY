@@ -7,15 +7,21 @@
  * @modified 2026-10-13 donttemo db:* 三个命令改为 await 分派（命令实现已异步化）
  * @modified 2026-10-13 donttemo 分派逻辑抽到 args.ts（可注入依赖与 IO，便于单测覆盖全部分支）
  * @modified 2026-10-13 donttemo 接入 M6 gen crud（CRUD 代码生成器，编排见 gen/gen.ts）
+ * @modified 2026-10-22 donttemo 接入 M17 review（AI 审查生成物，编排见 review/review.ts）
  * @module cli
  * @since v0.1.0
  */
 import { dispatch } from './args.js';
 import { runCheck } from './commands/check.js';
+import { runDeployCommand } from './commands/deploy.js';
 import { runMigrate, runRollback, runSeed } from './commands/db.js';
 import { runNew } from './commands/new.js';
 import { runPnpmScript } from './commands/run.js';
 import { runGenCrud } from './gen/gen.js';
+import { runReview } from './review/review.js';
+import { aiConfigFilePath, effectiveAiEnv, readAiConfigFile } from './ai/ai-config-store.js';
+import { runVerifyCommand } from './commands/verify.js';
+import { runStudioCommand } from './commands/studio.js';
 
 /** 分派主函数：注入真实实现与进程 IO */
 async function main(): Promise<void> {
@@ -29,6 +35,15 @@ async function main(): Promise<void> {
       rollback: runRollback,
       seed: runSeed,
       genCrud: runGenCrud,
+      // 命令实现只关心副作用：审查结论已由 runReview 直接打印
+      // 生效配置与 Studio 同口径：页面保存的 AI 路由优先于环境变量
+      review: async (options) => {
+        const env = effectiveAiEnv(process.env, readAiConfigFile(aiConfigFilePath()).config);
+        await runReview(options, { env });
+      },
+      deploy: runDeployCommand,
+      verify: runVerifyCommand,
+      studio: runStudioCommand,
     },
     {
       log: (message) => console.log(message),

@@ -58,7 +58,9 @@ import 'reflect-metadata';
 import { PrismaClient } from '@prisma/client';
 import { PERM, ROLE, PasswordService } from '@fw/auth';
 import { QUEUE_PERM_LIST, QUEUE_PERM_MANAGE } from '@fw/queue';
+// <fw:gen:seed-imports>
 import { seedDemoItemPermissions } from './seed/demo-item.seed.js';
+// </fw:gen:seed-imports>
 import { encryptDbUrl } from '../src/modules/tenant/db-url-crypto.js';
 
 /**
@@ -156,12 +158,14 @@ const BUSINESS_PERMISSIONS: PermissionSeed[] = [
   { code: 'order:refund', name: '订单退款', type: 'button', module: 'order' },
 ];
 
-/** M6 生成器写入的权限点编码（与 prisma/seed/demo-item.seed.ts 的 PERMISSIONS 一一对应） */
+/** M6 生成器写入的权限点编码（由 fw gen crud 经清单重建，勿手改块内内容） */
 const GENERATED_PERMISSION_CODES: string[] = [
+  // <fw:gen:perm-codes>
   'demo-item:create',
   'demo-item:read',
   'demo-item:update',
   'demo-item:delete',
+  // </fw:gen:perm-codes>
 ];
 
 /** 普通用户角色默认持有的权限（刻意不含 role:read / audit:read / user:assign-role，用于验证越权拦截）
@@ -589,7 +593,9 @@ async function main(): Promise<void> {
   await seedDicts();
 
   // 6) M6 生成器产物：权限点 + 菜单（幂等 upsert；truncate 之后执行，admin 显式授权后后台角色配置页可见）
+  // <fw:gen:seed-calls>
   await seedDemoItemPermissions();
+  // </fw:gen:seed-calls>
   for (const code of GENERATED_PERMISSION_CODES) {
     const permission = await prisma.permission.findUnique({ where: { code } });
     if (permission) {

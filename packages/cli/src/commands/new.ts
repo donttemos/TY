@@ -6,6 +6,8 @@
  * @author donttemo
  * @created 2026-10-09
  * @modified 2026-10-15 donttemo E-08：admin 模板交付——全栈工作区成员注册 + 定制后续步骤提示
+ * @modified 2026-10-22 donttemo PRD-016 S3：工作区成员注册改用「相对仓库根的路径」而非项目名——
+ *   在 apps/ 等子目录执行 fw new 时用项目名会注册出 apps 无关的 glob，生成的项目不会被 pnpm 链接
  * @module cli
  * @since v0.1.0
  */
@@ -104,7 +106,10 @@ function registerWorkspaceMembers(templatesRoot: string, target: string, name: s
   // 目录在仓库外（relative 以 .. 开头或为绝对路径）→ 不注册，由输出提示手工处理
   if (relative.startsWith('..') || path.isAbsolute(relative)) return [];
 
-  const globs = ADMIN_WORKSPACE_MEMBERS.map((member) => `${name}/${member}`);
+  // 必须用「相对仓库根的实际路径」而不是项目名：在 apps/ 子目录里执行 fw new 时，
+  // 项目名是 auto-verify、实际路径是 apps/auto-verify，用项目名会注册出匹配不到任何目录的 glob
+  const relativePosix = relative.split(path.sep).join('/');
+  const globs = ADMIN_WORKSPACE_MEMBERS.map((member) => `${relativePosix}/${member}`);
   const workspaceFile = path.join(repoRoot, 'pnpm-workspace.yaml');
   const content = fs.readFileSync(workspaceFile, 'utf8');
   const missing = globs.filter((glob) => !new RegExp(`^\\s*-\\s*"${glob}"\\s*$`, 'm').test(content));

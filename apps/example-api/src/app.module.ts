@@ -43,7 +43,9 @@ import { CacheDemoModule } from './modules/cache-demo/cache-demo.module.js';
 import { ClientErrorsModule } from './modules/client-errors/client-errors.module.js';
 import { ConfigCenterModule } from './modules/config-center/config-center.module.js';
 import { DemoModule, dbReadinessProbe } from './modules/demo/demo.module.js';
+// <fw:gen:imports>
 import { DemoItemModule } from './modules/demo-item/demo-item.module.js';
+// </fw:gen:imports>
 import { DemoQueueModule } from './modules/demo-queue/demo-queue.module.js';
 import { DemoTransportModule } from './modules/demo-transport/demo-transport.module.js';
 import { EventsModule } from './modules/events/events.module.js';
@@ -132,7 +134,9 @@ function parseWhitelist(raw: string): string[] {
     // M10 E-17：前端 RUM 错误上报（admin-web 实时用户监控的服务端接收面；@Public——
     // 登录页与未登录态异常同样上报；观测旁路不写业务库，主观测路径是 error 级结构化日志）
     ClientErrorsModule,
+    // <fw:gen:modules>
     DemoItemModule,
+    // </fw:gen:modules>
     DemoQueueModule,
     DemoTransportModule,
     // N-02/E-01：异步任务中心（@Global，审计导出与租户迁移共用；任务面端点 /api/v1/jobs；

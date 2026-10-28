@@ -86,6 +86,65 @@ describe('writePlan 覆盖策略', () => {
   });
 });
 
+describe('writePlan 标记块重写（PRD-016 FR-16-02）', () => {
+  const patchPlan = (files: { path: string; content: string }[]): PlanFile[] =>
+    files.map((f) => ({ ...f, kind: 'backend' as const, mode: 'patch' as const }));
+
+  it('标记块重写不需要 --force，直接落盘', () => {
+    fs.writeFileSync(path.join(tmpDir, 'app.module.ts'), 'old-wired', 'utf8');
+    const { io, logs } = makeIo();
+    const result = writePlan(patchPlan([{ path: 'app.module.ts', content: 'new-wired' }]), {
+      projectRoot: tmpDir,
+      io,
+    });
+    expect(fs.readFileSync(path.join(tmpDir, 'app.module.ts'), 'utf8')).toBe('new-wired');
+    expect(result.written).toEqual(['app.module.ts']);
+    expect(result.skipped).toEqual([]);
+    expect(logs.join('\n')).toContain('已接线');
+  });
+
+  it('内容相同记为 unchanged，不重复写入（幂等重跑）', () => {
+    fs.writeFileSync(path.join(tmpDir, 'seed.ts'), 'same', 'utf8');
+    const { io, logs } = makeIo();
+    const result = writePlan(patchPlan([{ path: 'seed.ts', content: 'same' }]), { projectRoot: tmpDir, io });
+    expect(result.written).toEqual([]);
+    expect(result.unchanged).toEqual(['seed.ts']);
+    expect(logs.join('\n')).toContain('无变更');
+  });
+
+  it('目标文件不存在时直接报错，不静默新建', () => {
+    const { io } = makeIo();
+    expect(() => writePlan(patchPlan([{ path: 'missing.ts', content: 'x' }]), { projectRoot: tmpDir, io })).toThrow(
+      /接线目标不存在.*missing\.ts/,
+    );
+    expect(fs.existsSync(path.join(tmpDir, 'missing.ts'))).toBe(false);
+  });
+
+  it('rollback 还原被改写文件的原文', () => {
+    fs.writeFileSync(path.join(tmpDir, 'app.module.ts'), 'original', 'utf8');
+    const { io } = makeIo();
+    const result = writePlan(patchPlan([{ path: 'app.module.ts', content: 'rewritten' }]), {
+      projectRoot: tmpDir,
+      io,
+    });
+    result.rollback();
+    expect(fs.readFileSync(path.join(tmpDir, 'app.module.ts'), 'utf8')).toBe('original');
+  });
+
+  it('校验失败回滚时，新建与接线一并还原（混合计划）', () => {
+    fs.writeFileSync(path.join(tmpDir, 'app.module.ts'), 'original', 'utf8');
+    const { io } = makeIo();
+    const mixed: PlanFile[] = [
+      { path: 'modules/product/product.module.ts', content: 'generated', kind: 'backend' },
+      { path: 'app.module.ts', content: 'rewritten', kind: 'backend', mode: 'patch' },
+    ];
+    const result = writePlan(mixed, { projectRoot: tmpDir, io });
+    result.rollback();
+    expect(fs.existsSync(path.join(tmpDir, 'modules/product/product.module.ts'))).toBe(false);
+    expect(fs.readFileSync(path.join(tmpDir, 'app.module.ts'), 'utf8')).toBe('original');
+  });
+});
+
 describe('previewPlan dry-run（TC-GEN-004）', () => {
   it('只打印不落盘，新建显示 +，已存在显示 diff', () => {
     fs.writeFileSync(path.join(tmpDir, 'a.ts'), 'old line', 'utf8');
@@ -103,6 +162,40 @@ describe('previewPlan dry-run（TC-GEN-004）', () => {
     expect(fs.readFileSync(path.join(tmpDir, 'a.ts'), 'utf8')).toBe('old line');
     expect(fs.existsSync(path.join(tmpDir, 'b.ts'))).toBe(false);
     expect(logs.length).toBeGreaterThan(0);
+  });
+
+  it('patch 文件标注「标记块重写，无需 --force」且不落盘', () => {
+    fs.writeFileSync(path.join(tmpDir, 'app.module.ts'), 'old', 'utf8');
+    const { io } = makeIo();
+    const text = previewPlan(
+      [{ path: 'app.module.ts', content: 'new', kind: 'backend', mode: 'patch' }],
+      { projectRoot: tmpDir, dry: true, io },
+    );
+    expect(text).toContain('标记块重写，无需 --force');
+    expect(fs.readFileSync(path.join(tmpDir, 'app.module.ts'), 'utf8')).toBe('old');
+  });
+
+  it('patch 目标缺失时在预览中给出明确告警', () => {
+    const { io } = makeIo();
+    const text = previewPlan([{ path: 'gone.ts', content: 'x', kind: 'backend', mode: 'patch' }], {
+      projectRoot: tmpDir,
+      dry: true,
+      io,
+    });
+    expect(text).toContain('但文件不存在——生成会失败');
+  });
+
+  it('用户改过的产物在预览里被点名（而不是只写「已存在」）', () => {
+    fs.writeFileSync(path.join(tmpDir, 'edited.ts'), 'mine', 'utf8');
+    const { io } = makeIo();
+    const text = previewPlan(plan([{ path: 'edited.ts', content: 'generated' }]), {
+      projectRoot: tmpDir,
+      dry: true,
+      modifiedPaths: new Set(['edited.ts']),
+      io,
+    });
+    expect(text).toContain('你改过这份产物');
+    expect(text).toContain('默认跳过');
   });
 });
 

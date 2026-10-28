@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "model": "DemoItem",
+      "kebab": "demo-item",
+      "modulePath": "src/modules/demo-item/demo-item.module.ts",
+      "moduleClass": "DemoItemModule",
+      "seedPath": "prisma/seed/demo-item.seed.ts",
+      "seedExport": "seedDemoItemPermissions",
+      "permissionCodes": [
+        "demo-item:create",
+        "demo-item:read",
+        "demo-item:update",
+        "demo-item:delete"
+      ],
+      "updatedAt": "2026-10-22"
+    }
+  ]
+}

@@ -26,7 +26,7 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'json-summary'],
       // 只统计「可在进程内单测」的源码；外部命令包装（db/run）与进程入口（index）由端到端演练覆盖
-      include: ['src/gen/**/*.ts', 'src/args.ts', 'src/commands/check.ts', 'src/commands/new.ts'],
+      include: ['src/gen/**/*.ts', 'src/deploy/**/*.ts', 'src/verify/**/*.ts', 'src/args.ts', 'src/commands/check.ts', 'src/commands/new.ts'],
       exclude: ['src/__tests__/**', 'src/**/*.d.ts'],
       thresholds: {
         lines: 80,

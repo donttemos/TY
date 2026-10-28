@@ -7,6 +7,8 @@
  *   - 写入前检查 git status，脏工作区给出告警（不阻断，生成物本就应随提交进版本库）。
  * @author donttemo
  * @created 2026-10-13
+ * @modified 2026-10-22 S4：预览标注「你改过的产物」——dry-run 时必须能看出哪些文件会被跳过，
+ *   而不是只看到一句「已存在」。
  * @module cli/gen
  */
 
@@ -32,16 +34,20 @@ export interface WritePlanOptions {
   dry?: boolean;
   /** 覆盖已存在文件 */
   force?: boolean;
+  /** 清单判定为「用户改过」的产物路径（预览时标注，不影响写入行为） */
+  modifiedPaths?: ReadonlySet<string>;
   /** 输出 */
   io?: GenIo;
 }
 
 /** 写入结果 */
 export interface WriteResult {
-  /** 本次写入（含覆盖）的文件 */
+  /** 本次写入（含覆盖与标记块重写）的文件 */
   written: string[];
   /** 已存在被跳过的文件（未传 --force） */
   skipped: string[];
+  /** 标记块重写但内容无变化的文件（幂等重跑，PRD-016 FR-16-03） */
+  unchanged: string[];
   /** 回滚本次写入（校验失败时调用） */
   rollback: () => void;
 }
@@ -63,9 +69,23 @@ export function previewPlan(plan: PlanFile[], options: WritePlanOptions): string
   const lines: string[] = ['[gen] dry-run 预览（未落盘）：'];
   for (const file of plan) {
     const abs = path.resolve(options.projectRoot, file.path);
+    if (file.mode === 'patch') {
+      if (!fs.existsSync(abs)) {
+        lines.push(`  ! ${file.path}（标记块重写，但文件不存在——生成会失败）`);
+        continue;
+      }
+      const before = fs.readFileSync(abs, 'utf8');
+      lines.push(`  ~ ${file.path}（标记块重写，无需 --force）`);
+      lines.push(indentBlock(diffText(before, file.content) || '（块内内容无变化）'));
+      continue;
+    }
     if (fs.existsSync(abs)) {
       const before = fs.readFileSync(abs, 'utf8');
-      lines.push(`  ~ ${file.path}（已存在，${options.force ? '将覆盖' : '默认跳过，--force 才覆盖'}）`);
+      const edited = options.modifiedPaths?.has(file.path) === true;
+      const note = edited ? '你改过这份产物，' : '';
+      lines.push(
+        `  ~ ${file.path}（已存在，${note}${options.force ? '将覆盖' : '默认跳过，--force 才覆盖'}）`,
+      );
       lines.push(indentBlock(diffText(before, file.content)));
     } else {
       lines.push(`  + ${file.path}（新建，${file.kind}）`);
@@ -86,6 +106,7 @@ export function writePlan(plan: PlanFile[], options: WritePlanOptions): WriteRes
   const io = options.io ?? consoleIo;
   const written: string[] = [];
   const skipped: string[] = [];
+  const unchanged: string[] = [];
   /** 回滚栈：新文件删文件，覆盖文件还原原文 */
   const undoStack: (() => void)[] = [];
   /** 本次新建的目录（回滚时逆序清理空目录，避免留下空 modules/<model> 壳） */
@@ -119,10 +140,29 @@ export function writePlan(plan: PlanFile[], options: WritePlanOptions): WriteRes
   try {
     for (const file of plan) {
       const abs = path.resolve(options.projectRoot, file.path);
+      // 标记块重写（PRD-016 FR-16-02）：框架文件由生成器托管，不需要 --force；
+      // 文件必须已存在——缺失说明项目没接入标记，宁可报错也不整文件覆盖。
+      if (file.mode === 'patch') {
+        if (!fs.existsSync(abs)) {
+          throw new Error(
+            `接线目标不存在：${file.path}（标记块重写要求文件已存在，请先确认项目布局或用 fw new 生成）`,
+          );
+        }
+        const before = fs.readFileSync(abs, 'utf8');
+        if (before === file.content) {
+          unchanged.push(file.path);
+          io.log(`[gen] 无变更：${file.path}（已接线）`);
+          continue;
+        }
+        fs.writeFileSync(abs, file.content, 'utf8');
+        written.push(file.path);
+        undoStack.push(() => fs.writeFileSync(abs, before, 'utf8'));
+        io.log(`[gen] 已接线：${file.path}`);
+        continue;
+      }
       if (fs.existsSync(abs)) {
         if (!options.force) {
           skipped.push(file.path);
-          io.log(`[gen] 跳过已存在文件：${file.path}（--force 才覆盖）`);
           continue;
         }
         const before = fs.readFileSync(abs, 'utf8');
@@ -146,7 +186,14 @@ export function writePlan(plan: PlanFile[], options: WritePlanOptions): WriteRes
     throw error;
   }
 
-  return { written, skipped, rollback };
+  // 跳过项聚合为一行：逐个打印会把「无需变更」的场景刷成十几行噪音（PRD-016 精简原则 4）
+  if (skipped.length > 0) {
+    const preview = skipped.slice(0, 3).join('、');
+    const more = skipped.length > 3 ? ` 等 ${skipped.length} 个` : '';
+    io.log(`[gen] 跳过已存在文件：${preview}${more}（--force 才覆盖）`);
+  }
+
+  return { written, skipped, unchanged, rollback };
 }
 
 /**
