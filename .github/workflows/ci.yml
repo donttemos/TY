@@ -607,13 +607,25 @@ jobs:
             --entrypoint node fw-app:ci -e '
             const { PrismaClient } = require("@prisma/client");
             const fs = require("fs"), path = require("path");
+            // pnpm 布局：引擎在 @prisma/client 真实位置上两级的 node_modules/.prisma/client，
+            // 从解析位置向上递归找（二次实测：固定候选少算一层会误报缺引擎）
+            function findEngineDir(start) {
+              let p = start;
+              for (let i = 0; i < 8 && p !== path.parse(p).root; i++) {
+                const cand = path.join(p, ".prisma", "client");
+                if (fs.existsSync(cand) && fs.readdirSync(cand).some((f) => f.startsWith("libquery_engine"))) return cand;
+                p = path.dirname(p);
+              }
+              return null;
+            }
             const base = path.dirname(require.resolve("@prisma/client"));
-            const candidates = [path.join(base, "..", ".prisma", "client"), base, "/repo/node_modules/.prisma/client"];
-            const engineDir = candidates.find((p) => fs.existsSync(p) && fs.readdirSync(p).some((f) => f.startsWith("libquery_engine")));
+            const engineDir = findEngineDir(base);
             if (!engineDir) {
-              console.error("缺 Prisma 查询引擎二进制（已探测: " + candidates.join(" , ") + "）：Alpine 上通常缺 libc6-compat/openssl 或 generate 未跑");
+              console.error("缺 Prisma 查询引擎二进制（自 " + base + " 向上未找到 .prisma/client）：Alpine 上通常缺 libc6-compat/openssl 或 generate 未跑");
               process.exit(1);
             }
+            // 空壳 @prisma/client（postinstall 占位、generate 未真实跑）在实例化时才抛
+            // "@prisma/client did not initialize yet"——实例化成功才是 client 真实存在的充分证明
             new PrismaClient({ datasourceUrl: "file:./docker-check-throwaway.db" });
             console.log("prisma-client=ok 引擎目录=" + engineDir);
           '
